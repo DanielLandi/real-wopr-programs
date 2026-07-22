@@ -7,6 +7,7 @@
   "self_resolving": true,
   "summary": "Heads-up standard gin rummy vs JOSHUA. Knock at 10 or less, gin and undercut pay 25. First to 100 wins the match.",
   "input_syntax": "DEAL | DRAW | TAKE | DISCARD <card> | KNOCK <card>",
+  "move_pattern": "^(DEAL|DRAW|TAKE|(DISCARD|KNOCK)\\s+[A23456789TJQK][CDHS])$",
   "notes": "Deal 10 each plus an upcard; the initial upcard-offer ritual is omitted (player simply moves first). Deck shuffled by a MINSTD LCG seeded from hand number + both match scores; stock and pile ride in STATE so draws are deterministic. Optimal deadwood via exhaustive meld-partition search; aces low. Layoffs are automatic and iterative for both sides (defender melds its own hand for minimum deadwood first, then lays off greedily - it does not re-meld to maximize layoffs; none against gin). Knock = deadwood difference; undercut = difference + 25 to the defender; gin = deadwood + 25. The card taken from the pile cannot be discarded the same turn. Hand is void (no score) when the stock is down to 2 cards as a side's turn would begin. No line/box bonuses. W.O.P.R. doctrine: takes the discard only if it immediately forms/extends a meld, knocks as soon as legal, otherwise sheds its highest-value deadwood card (ties: highest rank, then C<D<H<S). MOVE always requires INPUT (players=1; W.O.P.R. answers within the same frame). Rule violations refuse in-game; only malformed input errors.",
   "author": "core",
   "memory_budget_kb": 64

@@ -36,9 +36,11 @@ Each program is a directory with its **source at the top** and a `harness/` besi
 }
 ```
 
-`id`, `title`, and `binary` are required. Games add `players` and (optionally) an
-`input_syntax`; systems add their own fields. The engine reads the manifest to route and
-present the program.
+`id`, `title`, and `binary` are required. Games add `players`, an optional `input_syntax`,
+and a **`move_pattern`** — an anchored regex (compiled case-insensitively) that tells the
+engine which typed inputs are this game's moves vs. ordinary chat, so a game routes without
+any engine-side edit. Systems add their own fields. The engine reads the manifest to route
+and present the program.
 
 ## Wire protocols
 

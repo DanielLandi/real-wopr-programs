@@ -6,6 +6,7 @@
   "players": 1,
   "summary": "Text maze crawl through a 12x12 labyrinth with fog-of-war MAP. Interpretation: the film only names the game.",
   "input_syntax": "N|S|E|W (or NORTH|SOUTH|EAST|WEST), LOOK, MAP",
+  "move_pattern": "^(N|S|E|W|NORTH|SOUTH|EAST|WEST|LOOK|MAP)$",
   "notes": "NEW takes no arguments on the WOPR/1 wire, so every game deals the same seed-1983 maze. MOVE with INPUT omitted = engine walks one shortest-path step (self-play). No losing condition; reaching the exit is WIN with the move count.",
   "author": "core",
   "memory_budget_kb": 64

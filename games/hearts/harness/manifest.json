@@ -7,6 +7,7 @@
   "self_resolving": true,
   "summary": "Four-hand hearts: you are SOUTH; JOSHUA plays WEST, NORTH and EAST. Dodge the hearts (1 each) and the black queen (13). A hand ending with any total at 100 finishes the game; lowest total wins.",
   "input_syntax": "",
+  "move_pattern": "^[2-9TJQKA][CDSH]$",
   "notes": "Variant choices (casual, period-simple): no passing phase, so input stays card plays only; the holder of the two of clubs leads it to trick one; no points on the first trick; hearts cannot lead until broken (unless the hand is only hearts); any heart played breaks hearts, the queen of spades does not and may be led; shooting the moon gives 26 to each opponent; SOUTH wins only on a strict low - final ties go to the machine. Deal is a Fisher-Yates shuffle by a Lehmer LCG seeded from hand number + all four scores (deterministic; hands ride in STATE). W.O.P.R. seats answer within the same MOVE frame up to SOUTH's next turn, scoring hands and dealing the next along the way; MOVE always requires INPUT (players=1). Seat doctrine: lead lowest non-heart, duck with the highest losing card, cheapest win when forced, and when void dump the queen of spades then the highest heart.",
   "author": "core",
   "memory_budget_kb": 64

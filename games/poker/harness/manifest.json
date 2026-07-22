@@ -7,6 +7,7 @@
   "self_resolving": true,
   "summary": "Heads-up five-card draw vs JOSHUA. Fixed limit: ante 5, bet 10, no raises. Felt the machine to win.",
   "input_syntax": "DEAL | BET | CHECK | CALL | FOLD | DRAW <pos 1-5, up to 3> | STAND PAT",
+  "move_pattern": "^(DEAL|BET|CHECK|CALL|FOLD|STAND PAT|DRAW(\\s+[1-5]){1,3})$",
   "notes": "Two betting rounds (player acts first), draw of up to 3 cards. Deck shuffled by a MINSTD LCG seeded from hand number + chip counts; undealt deck rides in STATE so draws are deterministic. W.O.P.R. plays a fixed doctrine: opens jacks-or-better, calls any pair, pat on straight+, keeps pairs on the draw. MOVE always requires INPUT (players=1; W.O.P.R. answers within the same frame).",
   "author": "core",
   "memory_budget_kb": 64
