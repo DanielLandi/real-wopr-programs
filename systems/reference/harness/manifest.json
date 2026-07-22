@@ -1,0 +1,8 @@
+{
+  "id": "reference",
+  "title": "REFERENCE SYSTEM",
+  "language": "cobol",
+  "binary": "reference",
+  "number": "(311) 555-0101",
+  "timeout_s": 2
+}

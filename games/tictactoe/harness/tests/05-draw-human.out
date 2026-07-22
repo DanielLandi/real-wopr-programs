@@ -1,0 +1,13 @@
+WOPR/1 tictactoe OK
+STATE 2
+XOXXOOOXX
+TURN O
+DISPLAY 5
+ X | O | X
+-----------
+ X | O | O
+-----------
+ O | X | X
+STATUS DRAW
+RESULT STALEMATE
+END

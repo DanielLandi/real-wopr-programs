@@ -1,0 +1,51 @@
+WOPR/1 gtw OK
+STATE 18
+CLOCK 36
+DEFCON 1
+USARS 18
+SUARS 16
+USDST 1
+SUDST 2
+USDD 1
+SUDD 3
+USLN 6
+SULN 8
+SIDE 2
+NMIS 6
+M US 3 30 60
+M SU 5 30 60
+M SU 7 36 66
+M SU 8 36 66
+M US 5 36 66
+M US 6 36 66
+DISPLAY 28
+ZULU 00:36  DEFCON 1
+UNITED STATES  ARSENAL 18  CITIES LOST 1
+SOVIET UNION   ARSENAL 16  CITIES LOST 2
++------------------ WOPR TACTICAL ------------------+
+| NORTH AMERICA        ATLANTIC        EURASIA       |
+| US LN 06  >>>>>>>>>>>>>>>>>>>  SU LOST 02          |
+| SU LN 08  <<<<<<<<<<<<<<<<<<<  US LOST 01          |
++---------------------------------------------------+
++------------------------------- STRATEGIC MAP --------------------------------+
+|     ____________/'--\__         __                       M__/-\              |
+|   _/                   \     __/  |          _     X__--/      / __          |
+|  /   S........*     N   |   /    /          / \__--    X    .......N/---\    |
+|  |        C         X    \_/    /           \         K *...             \   |
+|  |'               N            /             |                       I    |  |
+|   \                           |            /^         S                   /  |
+|    \__    L                  /            |                          /---/   |
+|       \__      H            /              \              ___    __  \ V     |
+|          \__S    ___    ___ \               \_           /   \__/  /_/       |
+|              \  /    \_/   \ \                \__'-\    /                    |
+|               \/            \/                      \__/                     |
++------------------------------------------------------------------------------+
+          UNITED STATES                               SOVIET UNION
+TRK SEATTLE KIEV -122 48 31 50 0.20
+TRK NOVOSIBIRSK LASVEGAS 83 55 -115 36 0.20
+TRK SEVASTOPOL CHICAGO 34 45 -88 42 0.00
+TRK IRKUTSK NORFOLK 104 52 -76 37 0.00
+TRK LASVEGAS NOVOSIBIRSK -115 36 83 55 0.00
+TRK HOUSTON MURMANSK -95 30 33 69 0.00
+STATUS PLAYING
+END

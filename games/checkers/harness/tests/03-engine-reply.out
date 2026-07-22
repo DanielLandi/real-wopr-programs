@@ -1,0 +1,16 @@
+WOPR/1 checkers OK
+STATE 3
+bbbbbbbbbb.b..b..w..w.wwwwwwwwww
+TURN B
+QUIET 2
+DISPLAY 8
+::::   B::::   B::::   B::::   B
+   B::::   B::::   B::::   B::::
+::::   B::::   B::::  11::::   B
+  13::::  14::::   B::::  16::::
+::::  17::::   W::::  19::::  20
+   W::::  22::::   W::::   W::::
+::::   W::::   W::::   W::::   W
+   W::::   W::::   W::::   W::::
+STATUS PLAYING
+END

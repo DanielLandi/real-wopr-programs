@@ -1,0 +1,13 @@
+SYSTEM/1 airline OK
+STATE 0
+DISPLAY 8
+PANAMAC COMMANDS
+A<DATE><ORIG><DEST>  AVAILABILITY
+<N><CLASS><LINE>     SELL SEATS
+-SURNAME/FIRST       ADD NAME
+*R                   DISPLAY RECORD
+E                    END, GET LOCATOR
+I                    IGNORE
+SO                   SIGN OFF
+LINE UP
+END

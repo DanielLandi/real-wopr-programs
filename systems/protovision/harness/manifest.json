@@ -1,0 +1,8 @@
+{
+  "id": "protovision",
+  "title": "PROTOVISION",
+  "language": "6502-asm",
+  "binary": "protovision",
+  "number": "(408) 555-0163",
+  "timeout_s": 2
+}

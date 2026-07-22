@@ -1,0 +1,13 @@
+{
+  "id": "gtw",
+  "title": "Global Thermonuclear War",
+  "status": "implemented",
+  "binary": "gtw",
+  "players": 2,
+  "summary": "Scenario simulation that always converges on mutual annihilation. The signature NO-WIN.",
+  "input_syntax": "LAUNCH USSR:<TARGET> | OBSERVE | MAP",
+  "notes": "Human commands the US. Once war starts, both sides auto-exchange each tick until arsenals are spent. MOVE with INPUT omitted = OBSERVE tick (drives Big Board playback). DISPLAY carries TRK/HIT telemetry for the Big Board. MAP = OBSERVE tick + the strategic ASCII map (also printed once when war starts).",
+  "author": "core",
+  "fidelity_ref": "screenshots/gtw-*.png",
+  "memory_budget_kb": 64
+}

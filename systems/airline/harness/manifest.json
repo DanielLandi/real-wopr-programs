@@ -1,0 +1,8 @@
+{
+  "id": "airline",
+  "title": "PAN AM / PANAMAC RESERVATIONS",
+  "language": "cobol",
+  "binary": "airline",
+  "number": "(212) 555-0177",
+  "timeout_s": 2
+}

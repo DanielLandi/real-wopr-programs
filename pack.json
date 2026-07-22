@@ -1,0 +1,136 @@
+{
+  "pack": "real-wopr-programs",
+  "version": "1.0.0",
+  "author": "Daniel Landi",
+  "homepage": "https://real-wopr.ai",
+  "description": "The period-language programs behind real-wopr.ai \u2014 WarGames' W.O.P.R. reconstructed in the languages of its era. Each program is a self-contained subprocess speaking a line protocol; the modern engine that hosts them lives elsewhere.",
+  "contract": "Each program: source at its folder top; harness/{manifest.json,build.sh,tests/}. Build -> harness/bin/<binary>. The binary reads one request frame on stdin and writes one response frame on stdout (see PACK.md).",
+  "programs": [
+    {
+      "id": "blackjack",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "Black Jack",
+      "path": "games/blackjack",
+      "binary": "blackjack"
+    },
+    {
+      "id": "checkers",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "CHECKERS",
+      "path": "games/checkers",
+      "binary": "checkers"
+    },
+    {
+      "id": "falkens-maze",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "FALKEN'S MAZE",
+      "path": "games/falkens-maze",
+      "binary": "falkens-maze"
+    },
+    {
+      "id": "gin-rummy",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "GIN RUMMY",
+      "path": "games/gin-rummy",
+      "binary": "gin-rummy"
+    },
+    {
+      "id": "gtw",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "Global Thermonuclear War",
+      "path": "games/gtw",
+      "binary": "gtw"
+    },
+    {
+      "id": "hearts",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "HEARTS",
+      "path": "games/hearts",
+      "binary": "hearts"
+    },
+    {
+      "id": "poker",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "POKER",
+      "path": "games/poker",
+      "binary": "poker"
+    },
+    {
+      "id": "tictactoe",
+      "kind": "game",
+      "protocol": "WOPR/1",
+      "language": "fortran",
+      "title": "Tic-Tac-Toe",
+      "path": "games/tictactoe",
+      "binary": "tictactoe"
+    },
+    {
+      "id": "airline",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "cobol",
+      "title": "PAN AM / PANAMAC RESERVATIONS",
+      "path": "systems/airline",
+      "binary": "airline"
+    },
+    {
+      "id": "pactel",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "c",
+      "title": "PACIFIC TELEPHONE",
+      "path": "systems/pactel",
+      "binary": "pactel"
+    },
+    {
+      "id": "protovision",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "6502-asm",
+      "title": "PROTOVISION",
+      "path": "systems/protovision",
+      "binary": "protovision"
+    },
+    {
+      "id": "reference",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "cobol",
+      "title": "REFERENCE SYSTEM",
+      "path": "systems/reference",
+      "binary": "reference"
+    },
+    {
+      "id": "school",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "basic",
+      "title": "GOOSE LAKE SCHOOL DISTRICT",
+      "path": "systems/school",
+      "binary": "school"
+    },
+    {
+      "id": "joshua",
+      "kind": "joshua",
+      "protocol": "JOSHUA/1",
+      "language": "lisp",
+      "title": "JOSHUA (Falken Dialogue Processor)",
+      "path": "joshua",
+      "binary": "joshua"
+    }
+  ]
+}

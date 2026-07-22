@@ -1,0 +1,8 @@
+{
+  "id": "pactel",
+  "title": "PACIFIC TELEPHONE",
+  "language": "c",
+  "binary": "pactel",
+  "number": "(311) 555-0100",
+  "timeout_s": 2
+}

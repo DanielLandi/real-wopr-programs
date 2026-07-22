@@ -1,0 +1,10 @@
+{
+  "id": "joshua",
+  "title": "JOSHUA (Falken Dialogue Processor)",
+  "kind": "joshua",
+  "protocol": "JOSHUA/1",
+  "binary": "joshua",
+  "language": "lisp",
+  "summary": "The conversational engine behind the WOPR terminal — the film's Joshua persona. CLtL1-era Common Lisp, fully deterministic (it seeds its LCG from the dialogue HISTORY block; no hidden session state).",
+  "author": "core"
+}

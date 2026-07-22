@@ -1,0 +1,12 @@
+WOPR/1 tictactoe OK
+STATE 2
+X...O....
+TURN X
+DISPLAY 5
+ X | . | .
+-----------
+ . | O | .
+-----------
+ . | . | .
+STATUS PLAYING
+END

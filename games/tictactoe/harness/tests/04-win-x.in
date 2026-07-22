@@ -1,0 +1,6 @@
+WOPR/1 tictactoe MOVE
+STATE 2
+XX.OO....
+TURN X
+INPUT 3
+END

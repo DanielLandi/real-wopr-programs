@@ -1,0 +1,35 @@
+name: pack
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install period toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran sbcl gnucobol bwbasic cc65 gcc
+      - name: Build + golden-test every program
+        run: make test
+      - name: Package the pack
+        run: make pack
+      - name: Verify pack.json indexes every program
+        run: |
+          python3 - <<'PY'
+          import json, glob, os, sys
+          idx = {p["id"] for p in json.load(open("pack.json"))["programs"]}
+          on_disk = {
+              os.path.basename(os.path.dirname(os.path.dirname(m)))
+              for m in glob.glob("games/*/harness/manifest.json")
+                     + glob.glob("systems/*/harness/manifest.json")
+                     + glob.glob("joshua/harness/manifest.json")
+          }
+          missing = on_disk - idx
+          if missing:
+              print("pack.json is missing programs:", sorted(missing)); sys.exit(1)
+          print(f"pack.json indexes all {len(on_disk)} programs")
+          PY

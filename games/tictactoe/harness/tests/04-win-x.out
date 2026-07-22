@@ -1,0 +1,13 @@
+WOPR/1 tictactoe OK
+STATE 2
+XXXOO....
+TURN O
+DISPLAY 5
+ X | X | X
+-----------
+ O | O | .
+-----------
+ . | . | .
+STATUS WIN
+RESULT X WINS
+END

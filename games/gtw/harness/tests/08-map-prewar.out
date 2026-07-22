@@ -1,0 +1,34 @@
+WOPR/1 gtw OK
+STATE 12
+CLOCK 0
+DEFCON 5
+USARS 24
+SUARS 24
+USDST 0
+SUDST 0
+USDD 0
+SUDD 0
+USLN 0
+SULN 0
+SIDE 2
+NMIS 0
+DISPLAY 17
+ZULU 00:00  DEFCON 5
+UNITED STATES  ARSENAL 24  CITIES LOST 0
+SOVIET UNION   ARSENAL 24  CITIES LOST 0
++------------------------------- STRATEGIC MAP --------------------------------+
+|     ____________/'--\__         __                       M__/-\              |
+|   _/                   \     __/  |          _     L__--/      / __          |
+|  /   S              N   |   /    /          / \__--    M      /_/  N/---\    |
+|  |        C         W    \_/    /           \         K                  \   |
+|  |'               N            /             |                       I    |  |
+|   \                           |            /^         S                   /  |
+|    \__    L                  /            |                          /---/   |
+|       \__      H            /              \              ___    __  \ V     |
+|          \__S    ___    ___ \               \_           /   \__/  /_/       |
+|              \  /    \_/   \ \                \__'-\    /                    |
+|               \/            \/                      \__/                     |
++------------------------------------------------------------------------------+
+          UNITED STATES                               SOVIET UNION
+STATUS PLAYING
+END

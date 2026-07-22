@@ -1,0 +1,13 @@
+{
+  "id": "tictactoe",
+  "title": "Tic-Tac-Toe",
+  "status": "implemented",
+  "binary": "tictactoe",
+  "players": 2,
+  "summary": "Three in a row. Demonstrates the canonical NO-WIN outcome.",
+  "input_syntax": "cell 1-9, row-major",
+  "notes": "MOVE with INPUT omitted = engine plays current side (self-play / WOPR's turn)",
+  "author": "core",
+  "fidelity_ref": "screenshots/tictactoe-*.png",
+  "memory_budget_kb": 64
+}

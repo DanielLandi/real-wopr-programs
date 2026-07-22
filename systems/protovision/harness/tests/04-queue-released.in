@@ -1,0 +1,6 @@
+SYSTEM/1 protovision INPUT
+STATE 2
+CONN 1
+Q
+INPUT Q 1
+END
