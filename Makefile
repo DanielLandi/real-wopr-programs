@@ -2,8 +2,9 @@
 .PHONY: build test pack clean
 build:                 ## build every program (needs the per-language toolchains)
 	@tools/build.sh
-test: build            ## build then golden-test every program
+test: build            ## build then golden-test every program + behavior checks
 	@tools/test.sh
+	@tools/behavior.sh
 pack:                  ## produce dist/real-wopr-programs.woprpack
 	@tools/pack.sh
 clean:                 ## remove build output and packages
