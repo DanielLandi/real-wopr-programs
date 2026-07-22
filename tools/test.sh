@@ -5,9 +5,20 @@
 # The golden fixtures ARE the conformance suite (see PACK.md).
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# Optional args filter by category (games | systems | joshua); no args = all.
+cats=("$@"); [ ${#cats[@]} -eq 0 ] && cats=(games systems joshua)
+mans=()
+for c in "${cats[@]}"; do
+  case "$c" in
+    games)   mans+=(games/*/harness/manifest.json) ;;
+    systems) mans+=(systems/*/harness/manifest.json) ;;
+    joshua)  mans+=(joshua/harness/manifest.json) ;;
+    *) echo "unknown category: $c" >&2; exit 2 ;;
+  esac
+done
 pass=0; fail=0
 shopt -s nullglob
-for man in games/*/harness/manifest.json systems/*/harness/manifest.json joshua/harness/manifest.json; do
+for man in "${mans[@]}"; do
   hd="$(dirname "$man")"
   prog="$(basename "$(dirname "$hd")")"
   bin_name="$(sed -n 's/.*"binary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$man")"
