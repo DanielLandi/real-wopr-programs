@@ -4,10 +4,15 @@ The period-language programs behind **[real-wopr.ai](https://real-wopr.ai)** —
 technical reconstruction of the W.O.P.R. from *WarGames* (1983), with each program written
 in a language of its era.
 
-This repository holds the **programs only**: the games W.O.P.R. plays, the Joshua dialogue
-engine, and the systems you can dial from the terminal. The modern engine that hosts them —
-the bridge, the comms layer, the web surfaces — lives in a separate repository. You do not
-need it to read, change, build, or test a program here.
+This repository holds **both halves**, and keeps them visibly apart:
+
+- The **programs** — `games/`, `systems/`, `joshua/` — are period source. Fortran, COBOL,
+  BASIC, 6502 assembly, CLtL1-era Lisp. They are the reason to be here.
+- The **harness** — `emulator/` — is a modern Python/TypeScript runtime that hosts those
+  programs on a modern computer. It is openly modern and does not pretend otherwise.
+
+You do not need the harness to read, change, build, or test a program. You do need it to run
+the whole machine, and `git clone` gets you both.
 
 ## What's inside
 
@@ -20,6 +25,17 @@ need it to read, change, build, or test a program here.
 Every program is a self-contained subprocess: it reads one request frame on standard input
 and writes one response frame on standard output. Nothing talks over a network; nothing keeps
 state between calls.
+
+And beside them, the harness that runs them:
+
+| Folder | What it is | Language |
+|---|---|---|
+| `emulator/relay/` | The networks — era shaping (300 baud), dial FSM, switchboard | TypeScript |
+| `emulator/node/` | The host that runs programs as subprocesses and serves the API | Python |
+| `emulator/web/` | Browser surfaces — a proxy onto what the programs do | TypeScript/Next.js |
+| `emulator/devkit/` | A period line-mode IDE for editing and building programs | Python |
+
+See [`emulator/README.md`](./emulator/README.md) for how to run it.
 
 ## Layout
 

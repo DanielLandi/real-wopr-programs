@@ -1,8 +1,20 @@
 # Contributing
 
-These are the period-language programs behind [real-wopr.ai](https://real-wopr.ai). The
-guiding rule is fidelity to the era: a program stays within constructs its language plausibly
-had in the early 1980s, and it says so when it approximates.
+These are the period-language programs behind [real-wopr.ai](https://real-wopr.ai), plus the
+modern harness that runs them. The guiding rule is fidelity to the era: a program stays within
+constructs its language plausibly had in the early 1980s, and it says so when it approximates.
+
+## Which half are you changing?
+
+**A program** (`games/`, `systems/`, `joshua/`) — stay in period. Fortran within F77/F90
+constructs, Lisp within CLtL1-era forms, no modern conveniences. Golden fixtures are the test
+suite and must reproduce byte-exact. Document approximations rather than hiding them.
+
+**The harness** (`emulator/`) — write ordinary modern code. Python 3.11+, Node 23.6+. No
+period constraints apply; the harness is a modern emulator and says so.
+
+The line matters: the harness must never reach inside a program. It speaks `WOPR/1`,
+`SYSTEM/1` and `JOSHUA/1`, and treats every `STATE` block as opaque.
 
 ## The contract: golden fixtures
 
