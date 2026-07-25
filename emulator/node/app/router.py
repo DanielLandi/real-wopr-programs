@@ -5,6 +5,7 @@ to whatever the session is attached to: the game, Joshua, or NORAD ops."""
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +30,7 @@ CORE_BUSY_TEXT = "ALL WOPR PROCESSORS COMMITTED. STAND BY."
 ACCESS_CODE_PROMPT = "ACCESS CODE:"
 UNRECOGNIZED_DIRECTIVE = "UNRECOGNIZED DIRECTIVE"
 LOGON_LOCK_LIMIT = 3
+_SET_DEFCON = re.compile(r"^SET DEFCON ([1-5])$")
 
 @dataclass
 class RouteResult:
@@ -238,6 +240,36 @@ class Router:
             return await self._norad_ops(session_id, upper)
 
         return await self._converse(session_id, raw, await self._session_room(session_id))
+
+    async def _norad_ops(self, session_id: str, upper: str) -> RouteResult:
+        """The NORAD operator console. Joshua is not present here.
+
+        Phase 3 lifts this out into a program of its own; it is a mode with a
+        handler inside the router until then.
+        """
+        if upper in ("JOSHUA", "LOGON JOSHUA"):
+            self._attach[session_id] = Attachment(mode=JOSHUA)
+            self._authenticated.add(session_id)
+            self._joshua_history.setdefault(session_id, []).append(
+                {"role": "assistant", "content": BACKDOOR_GREETING})
+            return RouteResult(text=BACKDOOR_GREETING, route="bridge",
+                               detail={"backdoor": True})
+
+        room = await self._session_room(session_id)
+        active = await self._active_game(session_id, room)
+        if upper == "SITREP":
+            return await self._sitrep(session_id, active)
+        if upper == "TRACKS":
+            return await self._tracks(session_id, room)
+        if upper == "EVENTS":
+            return await self._events(session_id)
+        m = _SET_DEFCON.match(upper)
+        if m:
+            return await self._set_defcon(session_id, int(m.group(1)))
+
+        # NORAD staff not knowing the backdoor is the plot: without it they get
+        # the terse machine, never Joshua.
+        return RouteResult(text=UNRECOGNIZED_DIRECTIVE, route="bridge")
 
     # -- destinations ---------------------------------------------------------
 

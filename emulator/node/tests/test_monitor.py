@@ -296,3 +296,51 @@ def test_an_embedded_newline_cannot_inject_a_protocol_line():
         assert result.route == "core"
 
     asyncio.run(flow())
+
+
+def test_norad_operations_is_purely_norad():
+    # Joshua is not present at the NORAD console. Conversation there gets the
+    # terse machine, which is the plot: NORAD staff do not know the backdoor.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, "HELLO ARE YOU THERE")
+        assert result.text == "UNRECOGNIZED DIRECTIVE"
+
+    asyncio.run(flow())
+
+
+def test_the_backdoor_reaches_joshua_from_the_norad_console():
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, "JOSHUA")
+        assert "GREETINGS PROFESSOR FALKEN." in result.text
+        assert router.attachment(session.id).mode == JOSHUA
+
+    asyncio.run(flow())
+
+
+def test_operator_commands_answer_in_norad_mode():
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, "SITREP")
+        assert "SITREP CRYSTAL" in result.text
+
+    asyncio.run(flow())
