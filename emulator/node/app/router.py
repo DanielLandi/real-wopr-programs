@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from .attachment import Attachment, FRONT_DOOR, GAME, JOSHUA, NORAD_OPS, prompt_for
 from .games import Game, list_games_text
 from .gtwfeed import display_to_feed, tracks_text
 from .joshua import Joshua
@@ -68,6 +69,14 @@ class Router:
         self.operators = operators or {}
         self._pending_logon: dict[str, str] = {}   # session_id -> callsign
         self._logon_failures: dict[str, int] = {}
+        # What each session is connected to. In phase 2 this moves into the
+        # executive's own STATE block; it lives here for now, alongside the
+        # other per-session scratch.
+        self._attach: dict[str, Attachment] = {}
+
+    def attachment(self, session_id: str) -> Attachment:
+        """What this session is connected to. New sessions are at the front door."""
+        return self._attach.setdefault(session_id, Attachment(mode=FRONT_DOOR))
 
     def is_authenticated(self, session_id: str) -> bool:
         """True once the session has opened the JOSHUA backdoor. The WS layer
@@ -104,6 +113,7 @@ class Router:
         await self.store.set_operator(session_id, callsign, op.level)
         session = await self.store.get_session(session_id)
         defcon = session.defcon if session else 5
+        self._attach[session_id] = Attachment(mode=NORAD_OPS, parent=NORAD_OPS)
         return RouteResult(
             text=f"CLEARANCE ACCEPTED - {callsign} LEVEL {op.level}\nDEFCON {defcon}. READY.",
             route="bridge", detail={"logon": "accepted", "callsign": callsign})
@@ -126,32 +136,43 @@ class Router:
                                    {"input": logged, "route": result.route, **result.detail})
         return result
 
-    async def _dispatch(self, session_id: str, raw: str) -> RouteResult:
-        upper = raw.upper()
+    async def _front_door(self, session_id: str, raw: str, upper: str) -> RouteResult:
+        """Nothing reaches a program until the door opens.
 
-        # The film's front door: only the JOSHUA backdoor opens the machine.
-        # Everything else remains behind the LOGON rejection until then.
-        if upper == "JOSHUA" or upper == "LOGON JOSHUA":
+        The film's front door: only the JOSHUA backdoor, or a roster logon on a
+        NORAD terminal, gets past it. Reserved words do not work here — E01
+        requires LIST GAMES to be refused without leaking the catalog.
+        """
+        if upper in ("JOSHUA", "LOGON JOSHUA"):
+            self._attach[session_id] = Attachment(mode=JOSHUA)
             self._authenticated.add(session_id)
-            # The backdoor abandons any in-flight operator logon prompt with
-            # no failure increment — otherwise the next command gets silently
-            # swallowed as a wrong access-code attempt against a stale state.
+            # The backdoor abandons any in-flight operator logon prompt with no
+            # failure increment — otherwise the next command is swallowed as a
+            # wrong access-code attempt against a stale state.
             self._pending_logon.pop(session_id, None)
             self._joshua_history.setdefault(session_id, []).append(
                 {"role": "assistant", "content": BACKDOOR_GREETING})
             return RouteResult(text=BACKDOOR_GREETING, route="bridge",
                                detail={"backdoor": True})
-        # Operator logon step 2: a pending session's next input is the code.
         if session_id in self._pending_logon:
             return await self._logon_code(session_id, raw)
         if upper == "LOGON" or upper.startswith("LOGON "):
             return await self._logon(session_id, upper)
-        if upper == "HELP" or (upper.startswith("HELP ") and upper != "HELP GAMES"):
+        if upper == "HELP" or upper.startswith("HELP "):
             return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
+        return RouteResult(text=LOGON_REJECTION, route="bridge",
+                           detail={"authenticated": False})
+
+    async def _dispatch(self, session_id: str, raw: str) -> RouteResult:
+        upper = raw.upper()
+        att = self.attachment(session_id)
+
+        if att.mode == FRONT_DOOR:
+            return await self._front_door(session_id, raw, upper)
+
+        # Tasks 4-6 replace everything below with mode dispatch. Until then the
+        # old body runs for an attached session, and still needs this local.
         is_op = await self.is_operator(session_id)
-        if session_id not in self._authenticated and not is_op:
-            return RouteResult(text=LOGON_REJECTION, route="bridge",
-                               detail={"authenticated": False})
 
         # 1. In-game move: active PLAYING game AND input parses as its syntax.
         room = await self._session_room(session_id)
