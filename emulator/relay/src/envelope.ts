@@ -1,7 +1,7 @@
 // Message envelope (docs/comms-protocol.md §5). The shaper never inspects
 // `payload`; it only times and frames it.
 
-export type FrameKind = "input" | "output" | "control" | "handshake";
+export type FrameKind = "input" | "output" | "control" | "handshake" | "prompt";
 
 export interface Envelope {
   v: 1;
@@ -13,7 +13,7 @@ export interface Envelope {
   eom: boolean;
 }
 
-const KINDS: readonly FrameKind[] = ["input", "output", "control", "handshake"];
+const KINDS: readonly FrameKind[] = ["input", "output", "control", "handshake", "prompt"];
 
 export function encodeEnvelope(e: Envelope): string {
   return JSON.stringify(e);
