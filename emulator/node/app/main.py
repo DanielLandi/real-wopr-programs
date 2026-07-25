@@ -1,0 +1,375 @@
+"""API / Emulation Bridge — FastAPI entry point.
+
+REST for session lifecycle + catalog, WebSocket for the live link-shaped
+stream (api-contract.md). The WS endpoint is INTERNAL-ONLY in deployment:
+ingress never routes /ws/*, only the comms layer reaches it (deployment.md D3).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
+from .config import load_settings
+from .games import load_catalog
+from .gtwhub import GtwRoomHub
+from .joshua import ClaudeJoshua, LispJoshua, ScriptedJoshua
+from .operators import parse_roster
+from .rooms import RoomLocks
+from .router import Router
+from .runner import CoreRunner, RunnerConfig
+from .store import make_store, normalize_room_code
+from .systemrunner import SystemBusy, SystemFault, SystemRunner, SystemRunnerConfig, SystemTimeout
+from .systems import load_systems
+from .tokens import sign_session, verify_session
+
+log = logging.getLogger("wopr.bridge")
+
+DEFAULT_LINKS = {
+    "home-terminal": "dialup-300",
+    "norad-terminal": "leased-9600",
+    "norad-bigboard": "internal-bus",
+    "wopr-panel": "internal-bus",
+}
+
+
+# Module-level on purpose: with `from __future__ import annotations`, FastAPI
+# resolves annotation strings against module globals — local classes break it.
+class CreateSession(BaseModel):
+    surface: str
+    link_profile: str | None = None
+    room_code: str | None = None
+    system: str | None = None
+
+
+class CreateRoom(BaseModel):
+    room_code: str | None = None
+
+
+class DefconChange(BaseModel):
+    level: int = Field(ge=1, le=5)
+
+
+def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
+    """App factory; tests inject fakes for store/joshua/runner."""
+    settings = settings or load_settings()
+    store = store or make_store(settings.supabase_url, settings.supabase_service_role_key)
+    catalog = load_catalog(settings.games_dir)
+    runner = runner or CoreRunner(RunnerConfig(
+        bin_dir=settings.games_dir,
+        timeout_s=settings.core_timeout_s,
+        pool_size=settings.core_pool_size,
+        queue_size=settings.core_queue_size,
+    ))
+    if joshua is None:
+        scripted = ScriptedJoshua({g.id: g.title for g in catalog.values()
+                                   if g.status == "implemented"})
+        if settings.joshua_engine == "claude":
+            joshua = ClaudeJoshua(settings.joshua_model, settings.joshua_max_tokens,
+                                  settings.joshua_timeout_s)
+        elif settings.joshua_engine == "lisp":
+            # The Falken Dialogue Processor (joshua-lisp/) — period Lisp with
+            # anachronistic statistics; scripted engine backs it up.
+            joshua = LispJoshua(settings.joshua_lisp_bin, fallback=scripted)
+        else:
+            # Kill-switch / period mode (D5): the 1983-honest scripted engine.
+            joshua = scripted
+    locks = RoomLocks()
+    router = Router(runner, store, joshua, catalog,
+                    joshua_session_cap=settings.joshua_session_cap, locks=locks,
+                    operators=parse_roster(settings.wopr_operators))
+    gtw_hub = GtwRoomHub(store, runner, catalog, locks)
+    systems = load_systems(settings.systems_dir)
+    system_runner = SystemRunner(
+        SystemRunnerConfig(systems_dir=settings.systems_dir, timeout_s=settings.system_timeout_s),
+        systems,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+
+    app = FastAPI(title="real-wopr bridge", version="0.3.0", lifespan=lifespan)
+    app.state.router = router
+    app.state.store = store
+    app.state.settings = settings
+    app.state.room_locks = locks
+    app.state.gtw_hub = gtw_hub
+    app.state.systems = systems
+    app.state.system_runner = system_runner
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_origins),
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # -- REST (api-contract.md §2) --------------------------------------------
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok", "service": "api-bridge", "contract": "WOPR/1"}
+
+    @app.post("/api/session", status_code=201)
+    async def create_session(body: CreateSession):
+        if body.surface not in DEFAULT_LINKS:
+            raise HTTPException(400, "unknown surface")
+        link = body.link_profile or DEFAULT_LINKS[body.surface]
+        if body.system is not None:
+            if body.system not in systems:
+                raise HTTPException(400, "unknown system")
+            if body.room_code is not None:
+                # A system-bound session never enters the router/room paths;
+                # accepting both would silently manufacture an inert room.
+                # Checked before room creation so the refusal has no side
+                # effects (api-contract.md §2.2).
+                raise HTTPException(400, "system sessions do not join rooms")
+        code = None
+        if body.room_code is not None:
+            try:
+                code = normalize_room_code(body.room_code)
+            except ValueError:
+                raise HTTPException(400, "malformed room code")
+            if await store.get_room(code) is None:
+                await store.create_room(code)   # create_room stamps last_seen_at
+            else:
+                # One cheap write per join keeps the room's last_seen_at
+                # truthful for idle-room reaping — never per-tick (#44).
+                await store.touch_room(code)
+        session = await store.create_session(body.surface, link, user_id=None, room_code=code,
+                                             system_id=body.system)
+        return {
+            "session_id": session.id,
+            "token": sign_session(settings.session_secret, session.id),
+            "link_profile": session.link_profile,
+            "room_code": session.room_code,
+            "system": session.system_id,
+        }
+
+    @app.post("/api/room", status_code=201)
+    async def create_room(body: CreateRoom | None = None):
+        requested = body.room_code if body else None
+        if requested is not None:
+            try:
+                requested = normalize_room_code(requested)
+            except ValueError:
+                raise HTTPException(400, "malformed room code")
+            existing = await store.get_room(requested)
+            if existing is not None:  # idempotent: never recreate/reset a room
+                return {"room_code": existing.code}
+        room = await store.create_room(requested)
+        return {"room_code": room.code}
+
+    @app.get("/api/room/{room_code}")
+    async def get_room(room_code: str):
+        try:
+            code = normalize_room_code(room_code)
+        except ValueError:
+            raise HTTPException(400, "malformed room code")
+        room = await store.get_room(code)
+        if room is None:
+            raise HTTPException(404, "unknown room")
+        return {"room_code": room.code, "created_at": room.created_at,
+                "last_seen_at": room.last_seen_at}
+
+    @app.get("/api/session/{session_id}")
+    async def get_session(session_id: str):
+        session = await store.get_session(session_id)
+        if session is None:
+            raise HTTPException(404, "unknown session")
+        return {
+            "surface": session.surface,
+            "defcon": session.defcon,
+            "link_profile": session.link_profile,
+            "last_seen_at": session.last_seen_at,
+            "room_code": session.room_code,
+            "system": session.system_id,
+        }
+
+    @app.get("/api/games")
+    async def games():
+        return [
+            {"id": g.id, "title": g.title, "status": g.status,
+             "players": g.players, "summary": g.summary}
+            for g in catalog.values()
+        ]
+
+    @app.get("/api/games/{game_id}/state/{session_id}")
+    async def game_state(game_id: str, session_id: str):
+        if game_id not in catalog:
+            raise HTTPException(404, "unknown game")
+        active = await store.get_active_game(session_id)
+        if active is None or active.game_id != game_id:
+            raise HTTPException(404, "no active game state")
+        # Display block only — the STATE block never leaves the bridge/DB.
+        resp = await runner.run(game_id, "QUERY", active.state, None)
+        return {"game_id": game_id, "status": active.status,
+                "turn": active.turn, "display": resp.display}
+
+    @app.post("/api/session/{session_id}/defcon")
+    async def set_defcon(session_id: str, body: DefconChange):
+        session = await store.get_session(session_id)
+        if session is None:
+            raise HTTPException(404, "unknown session")
+        clearance = await store.get_clearance_level(session.user_id)
+        # level 1 is most privileged; you may only command AT OR ABOVE your floor
+        if body.level < clearance:
+            raise HTTPException(403, "clearance denied")
+        await store.set_defcon(session_id, body.level)
+        await store.log_event(session_id, "route", "system", {"defcon": body.level})
+        return {"defcon": body.level}
+
+    # -- WebSocket (api-contract.md §3) ----------------------------------------
+
+    @app.websocket("/ws/session/{session_id}")
+    async def ws_session(ws: WebSocket, session_id: str, token: str = Query(default="")):
+        # D3: only the comms layer may connect (header), with a valid session token.
+        if settings.internal_token and ws.headers.get("x-wopr-internal-token") != settings.internal_token:
+            await ws.close(code=4403)
+            return
+        session = await store.get_session(session_id)
+        if session is None or not verify_session(settings.session_secret, session_id, token):
+            await ws.close(code=4401)
+            return
+
+        await ws.accept()
+        pending: dict[str, str] = {}
+        seq = 0
+        observer_task: asyncio.Task | None = None
+
+        def envelope(kind: str, payload: str) -> str:
+            nonlocal seq
+            env = {"v": 1, "session": session_id, "seq": seq, "kind": kind,
+                   "link": session.link_profile, "payload": payload, "eom": True}
+            seq += 1
+            return json.dumps(env)
+
+        # The system speaks first (fidelity-notes.md §1): terminals get the
+        # film's LOGON: prompt as soon as the line is up. A system-bound
+        # session instead dials straight into that system's own greeting.
+        if session.system_id is not None:
+            system_timeout = systems[session.system_id].timeout_s
+            try:
+                resp = await system_runner.run(session.system_id, "CONNECT", None, None,
+                                               timeout_s=system_timeout)
+            except (SystemFault, SystemTimeout, SystemBusy) as exc:
+                log.warning("system %s CONNECT failed, dropping line: %r",
+                            session.system_id, exc)
+                await ws.send_text(envelope("output", "\nNO CARRIER\n"))
+                await ws.close()
+                return
+            await store.set_system_state(session_id, resp.state)
+            # Event-log parity with the router path: a system session must be
+            # visible in event history, not a silent stream of DISPLAY frames.
+            await store.log_event(session_id, "route", "system",
+                                  {"system": session.system_id, "event": "CONNECT",
+                                   "line": resp.line})
+            if resp.display != "":  # DISPLAY 0: nothing to paint
+                await ws.send_text(envelope("output", f"\n{resp.display}\n"))
+            if resp.line == "DROP":
+                await ws.send_text(envelope("output", "\nNO CARRIER\n"))
+                await ws.close()
+                return
+        elif (session.surface in ("home-terminal", "norad-terminal")
+              and not router.is_authenticated(session_id)
+              and not await router.is_operator(session_id)):
+            # A comms resync reconnects the same session: re-greeting a line
+            # that already opened the backdoor would flash a bogus LOGON:.
+            # A trunk host's per-exchange banner (BRIDGE_LOGON_BANNER) rides
+            # above LOGON:; unset on the main exchange, so it stays bare.
+            greeting = "\nLOGON:\n"
+            if settings.logon_banner:
+                greeting = f"\n{settings.logon_banner}\n{greeting}"
+            await ws.send_text(envelope("output", greeting))
+
+        try:
+            while True:
+                raw = await ws.receive_text()
+                try:
+                    frame = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                kind = frame.get("kind")
+                payload = frame.get("payload", "")
+                if kind not in ("input", "control"):
+                    continue
+                # Reassemble chunked messages (comms-protocol.md §5).
+                pending[kind] = pending.get(kind, "") + payload
+                if not frame.get("eom", True):
+                    continue
+                message, pending[kind] = pending[kind], ""
+
+                if kind == "control":
+                    if message == "HANGUP":
+                        await ws.close()
+                        return
+                    if message == "BREAK":
+                        await store.log_event(session_id, "input", "user", {"control": "BREAK"})
+                        await ws.send_text(envelope("output", "\n*** BREAK ***\n"))
+                    continue
+
+                # A system-bound session speaks only SYSTEM/1 with its own
+                # binary — it never reaches the bridge's own command surface
+                # (OBSERVE GTW) or the game/Joshua router below.
+                if session.system_id is not None:
+                    # Same input/route event pair the router writes per turn
+                    # (router.handle) — system turns are part of the history.
+                    await store.log_event(session_id, "input", "user", {"text": message})
+                    try:
+                        resp = await system_runner.run(
+                            session.system_id, "INPUT",
+                            await store.get_system_state(session_id), message,
+                            timeout_s=systems[session.system_id].timeout_s)
+                    except (SystemFault, SystemTimeout, SystemBusy) as exc:
+                        log.warning("system %s INPUT failed, dropping line: %r",
+                                    session.system_id, exc)
+                        await ws.send_text(envelope("output", "\nNO CARRIER\n"))
+                        await ws.close()
+                        return
+                    await store.set_system_state(session_id, resp.state)
+                    await store.log_event(session_id, "route", "system",
+                                          {"input": message, "route": "system",
+                                           "system": session.system_id,
+                                           "line": resp.line})
+                    if resp.display != "":  # DISPLAY 0: nothing to paint
+                        await ws.send_text(envelope("output", f"\n{resp.display}\n"))
+                    if resp.line == "DROP":
+                        await ws.send_text(envelope("output", "\nNO CARRIER\n"))
+                        await ws.close()
+                        return
+                    continue
+
+                if message.strip().upper() == "OBSERVE GTW":
+                    if session.link_profile not in ("internal-bus", "leased-9600"):
+                        # A 1-2 KB JSON line every 2.5 s would swamp a 300-baud link.
+                        await ws.send_text(envelope("output", "\nFEED NOT AVAILABLE ON THIS LINE\n"))
+                        continue
+                    if observer_task is None:
+                        async def relay() -> None:
+                            async for line in gtw_hub.subscribe(session.room_code):
+                                await ws.send_text(envelope("output", line))
+                        observer_task = asyncio.create_task(relay())
+                        await store.log_event(session_id, "route", "system",
+                                              {"input": message, "route": "bridge",
+                                               "observer": "gtw"})
+                    continue
+
+                result = await router.handle(session_id, message)
+                await ws.send_text(envelope("output", f"\n{result.text}\n"))
+        except WebSocketDisconnect:
+            return
+        finally:
+            if observer_task is not None:
+                observer_task.cancel()
+
+    return app
+
+
+app = create_app()
