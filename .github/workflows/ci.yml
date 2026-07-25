@@ -96,7 +96,10 @@ jobs:
         with:
           node-version: "24"
       - name: Install
-        run: cd emulator/cli && npm ci
+        # `wopr dial` imports the terminal's renderer, and both tsc and Node
+        # resolve that file's own imports from emulator/terminal — so the
+        # terminal has to be installed for the CLI to typecheck or run.
+        run: cd emulator/terminal && npm ci && cd ../cli && npm ci
       - name: Typecheck
         run: cd emulator/cli && npm run typecheck
       - name: Tests
