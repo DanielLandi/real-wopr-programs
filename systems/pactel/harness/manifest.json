@@ -4,5 +4,13 @@
   "language": "c",
   "binary": "pactel",
   "number": "(311) 555-0100",
-  "timeout_s": 2
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(311) 555-0100",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
 }

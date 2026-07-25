@@ -10,6 +10,18 @@
     "norad": { "kind": "leased", "baud": 9600, "addressing": "hostname", "public": false },
     "bus":   { "kind": "local",  "addressing": "name", "private": true }
   },
+  "nodesComment": "A WAITING ROOM, not a second home for topology. A node that is a program declares itself inline, in its own harness/manifest.json. This section holds only nodes with no period source yet — WOPR, whose routing decisions still live in the modern harness. When wopr/ exists as a program, this entry moves into its manifest and this section shrinks. The topology validator warns about every entry here on purpose.",
+  "nodes": {
+    "wopr": {
+      "title": "W.O.P.R.",
+      "networks": {
+        "pstn":  { "address": "(311) 486-0623", "protocol": "SYSTEM/1" },
+        "norad": { "address": "WOPR",           "protocol": "SYSTEM/1" }
+      },
+      "mounts": ["games/*", "joshua"],
+      "peers":  ["reference"]
+    }
+  },
   "programs": [
     {
       "id": "blackjack",

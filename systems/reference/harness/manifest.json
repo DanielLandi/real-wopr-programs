@@ -4,5 +4,17 @@
   "language": "cobol",
   "binary": "reference",
   "number": "(311) 555-0101",
-  "timeout_s": 2
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(311) 555-0101",
+        "protocol": "SYSTEM/1"
+      },
+      "norad": {
+        "address": "REFERENCE",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
 }

@@ -4,5 +4,13 @@
   "language": "cobol",
   "binary": "airline",
   "number": "(212) 555-0177",
-  "timeout_s": 2
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(212) 555-0177",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
 }
