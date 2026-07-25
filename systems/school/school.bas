@@ -2,9 +2,12 @@
 20 REM Menu-driven administrative datanet in plain line-numbered BASIC,
 30 REM run by the Bywater BASIC interpreter. Stateless per invocation:
 40 REM the session (auth flag, password tries, menu step, work-in-
-50 REM progress grade entry, and grade overrides) rides the opaque
+50 REM progress grade entry) rides the opaque
 60 REM STATE block, echoed back each turn per docs/systems.md. No wall
 70 REM clock and no rng, so same request bytes give the same response.
+72 REM The grades themselves are NOT here: they live in school-db, on the
+74 REM local bus. This program owns the roster and the schedule and asks
+76 REM the records store for anything about a grade (CALL/REPLY).
 82 DIM NM$(10)
 84 DIM CO(40)
 86 DIM CN$(40)
@@ -12,6 +15,7 @@
 90 DIM GS$(40)
 92 DIM GC$(40)
 94 DIM GG$(40)
+95 DIM RL$(40)
 96 GOSUB 8500
 100 REM ---- parse the SYSTEM/1 request from stdin ----
 110 LINE INPUT H$
@@ -32,9 +36,12 @@
 290 LINE INPUT L$
 300 GOSUB 6000
 310 NEXT I
-400 REM trailing line: INPUT <user line> (INPUT cmd) or END (CONNECT)
+400 REM trailing block: INPUT <line>, REPLY <peer> <status> <n>, or END
 410 LINE INPUT T$
 420 HI = 0
+422 RS$ = "-"
+424 NR = 0
+426 IF LEFT$(T$, 6) = "REPLY " THEN GOTO 530
 430 IF LEFT$(T$, 6) <> "INPUT " THEN GOTO 500
 440 IN$ = MID$(T$, 7)
 450 HI = 1
@@ -42,9 +49,29 @@
 470 IF E$ <> "END" THEN GOTO 7000
 480 GOTO 600
 500 IF T$ <> "END" THEN GOTO 7000
+510 GOTO 600
+530 REM the answer to the CALL made last turn
+532 R9$ = MID$(T$, 7)
+534 SP9 = INSTR(R9$, " ")
+536 IF SP9 = 0 THEN GOTO 7000
+538 R9$ = MID$(R9$, SP9 + 1)
+540 SP9 = INSTR(R9$, " ")
+542 IF SP9 = 0 THEN GOTO 7000
+544 RS$ = LEFT$(R9$, SP9 - 1)
+546 NR = VAL(MID$(R9$, SP9 + 1))
+548 IF NR <= 0 THEN GOTO 556
+549 REM bwBASIC 2.20's LINE INPUT wants a scalar: it rejects an array
+550 REM element ("String variable required"), so read then assign.
+551 FOR K = 1 TO NR
+552 LINE INPUT RX$
+553 RL$(K) = RX$
+554 NEXT K
+556 LINE INPUT E$
+558 IF E$ <> "END" THEN GOTO 7000
 600 REM ---- dispatch on command ----
 610 IF CMD$ = "CONNECT" THEN GOTO 3000
 620 IF CMD$ = "INPUT" THEN GOTO 3300
+625 IF CMD$ = "RESUME" THEN GOTO 3900
 630 GOTO 7000
 3000 REM CONNECT: greeting + password prompt, resting STATE
 3010 PRINT "SYSTEM/1 school OK"
@@ -101,6 +128,49 @@
 3740 IF ST$ = "GRCOURSE" THEN GOTO 4500
 3750 IF ST$ = "GRVALUE" THEN GOTO 4600
 3760 GOTO 7000
+3900 REM RESUME: school-db has answered the CALL made last turn
+3905 IF ST$ = "AWAITREC" THEN GOTO 3920
+3910 IF ST$ = "AWAITSET" THEN GOTO 3960
+3915 GOTO 7000
+3920 REM the record came back (or did not)
+3922 ST$ = "MENU"
+3924 FS = VAL(WP$)
+3926 WP$ = "-"
+3928 IF RS$ <> "OK" THEN GOTO 3950
+3930 PRINT "SYSTEM/1 school OK"
+3932 GOSUB 7500
+3934 DC = 1 + NR + 5
+3936 PRINT "DISPLAY " + MID$(STR$(DC), 2)
+3938 PRINT "STUDENT: " + NM$(FS) + "   GRADE 11"
+3940 FOR K = 1 TO NR
+3942 PRINT RL$(K)
+3944 NEXT K
+3946 GOSUB 7700
+3947 PRINT "LINE UP"
+3948 PRINT "END"
+3949 END
+3950 REM the records store did not answer. Say so; do not hang the line.
+3951 PRINT "SYSTEM/1 school OK"
+3952 GOSUB 7500
+3953 PRINT "DISPLAY 6"
+3954 PRINT "RECORDS UNAVAILABLE"
+3955 GOSUB 7700
+3956 PRINT "LINE UP"
+3957 PRINT "END"
+3958 END
+3960 REM the grade was recorded (or was not)
+3962 ST$ = "MENU"
+3964 WP$ = "-"
+3966 WC$ = "-"
+3968 IF RS$ <> "OK" THEN GOTO 3950
+3970 PRINT "SYSTEM/1 school OK"
+3972 GOSUB 7500
+3974 PRINT "DISPLAY 6"
+3976 PRINT "RECORD UPDATED."
+3978 GOSUB 7700
+3980 PRINT "LINE UP"
+3982 PRINT "END"
+3984 END
 4000 REM main-menu selection
 4010 IF IN$ = "1" THEN GOTO 4100
 4020 IF IN$ = "2" THEN GOTO 4300
@@ -116,21 +186,21 @@
 4160 PRINT "LINE UP"
 4170 PRINT "END"
 4180 END
-4200 REM show the record for the entered name (prefix match)
+4200 REM show the record for the entered name (prefix match). The grades are
+4202 REM not ours: ask school-db and resume when it answers.
 4210 US$ = IN$
 4220 GOSUB 6500
 4230 IF FS = 0 THEN GOTO 4280
-4240 ST$ = "MENU"
-4250 GOSUB 6700
-4252 PRINT "SYSTEM/1 school OK"
-4254 GOSUB 7500
-4256 DC = 1 + RC + 5
-4258 PRINT "DISPLAY " + MID$(STR$(DC), 2)
-4260 PRINT "STUDENT: " + NM$(FS) + "   GRADE 11"
-4262 GOSUB 6800
-4264 GOSUB 7700
-4266 PRINT "LINE UP"
-4268 PRINT "END"
+4240 ST$ = "AWAITREC"
+4242 WP$ = MID$(STR$(FS), 2)
+4244 PRINT "SYSTEM/1 school OK"
+4246 GOSUB 7500
+4248 PRINT "DISPLAY 1"
+4250 PRINT "SEARCHING..."
+4252 PRINT "CALL school-db 1"
+4254 PRINT "RECORD " + WP$
+4256 PRINT "LINE UP"
+4258 PRINT "END"
 4270 END
 4280 REM name not on file
 4282 ST$ = "MENU"
@@ -206,27 +276,16 @@
 4604 IF LEN(IN$) = 1 AND IN$ >= "A" AND IN$ <= "F" THEN GV = 1
 4606 IF GV = 1 THEN GOTO 4610
 4608 GOTO 4720
-4610 REM valid grade: commit the override into the GRD delta list
-4612 GF = 0
-4620 FOR GI = 1 TO NG
-4630 IF GS$(GI) = WP$ AND GC$(GI) = WC$ THEN GF = GI
-4640 NEXT GI
-4650 IF GF > 0 THEN GOTO 4680
-4660 NG = NG + 1
-4670 GF = NG
-4680 GS$(GF) = WP$
-4682 GC$(GF) = WC$
-4684 GG$(GF) = IN$
-4686 ST$ = "MENU"
-4688 WP$ = "-"
-4690 WC$ = "-"
-4692 PRINT "SYSTEM/1 school OK"
-4694 GOSUB 7500
-4696 PRINT "DISPLAY 6"
-4698 PRINT "RECORD UPDATED."
-4700 GOSUB 7700
-4702 PRINT "LINE UP"
-4704 PRINT "END"
+4610 REM valid grade: the store holds the grades, so ask it to record this
+4612 ST$ = "AWAITSET"
+4614 PRINT "SYSTEM/1 school OK"
+4616 GOSUB 7500
+4618 PRINT "DISPLAY 1"
+4620 PRINT "RECORDING..."
+4622 PRINT "CALL school-db 1"
+4624 PRINT "SET GRADE " + WP$ + " " + WC$ + " " + IN$
+4626 PRINT "LINE UP"
+4628 PRINT "END"
 4706 END
 4720 REM invalid grade: report and return to menu without mutating
 4722 ST$ = "MENU"
