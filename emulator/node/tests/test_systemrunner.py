@@ -218,7 +218,8 @@ def test_session_rejects_system_plus_room_code(system_client):
     assert system_client.get("/api/room/CCCCCC").status_code == 404
 
 
-async def _scripted_system_run(self, system_id, command, state, user_input, timeout_s=None):
+async def _scripted_system_run(self, system_id, command, state, user_input, timeout_s=None,
+                               reply=None):
     """Class-level SystemRunner.run replacement (no binary needed): a turn
     counter in STATE, 'NOP' answers DISPLAY 0, 'BYE' drops the line."""
     turn = int(state) + 1 if state else 1

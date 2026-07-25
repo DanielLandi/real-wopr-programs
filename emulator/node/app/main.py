@@ -20,6 +20,7 @@ from .config import load_settings
 from .games import load_catalog
 from .gtwhub import GtwRoomHub
 from .joshua import ClaudeJoshua, LispJoshua, ScriptedJoshua
+from .localcall import run_resolving_calls
 from .operators import parse_roster
 from .rooms import RoomLocks
 from .router import Router
@@ -257,8 +258,10 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
         if session.system_id is not None:
             system_timeout = systems[session.system_id].timeout_s
             try:
-                resp = await system_runner.run(session.system_id, "CONNECT", None, None,
-                                               timeout_s=system_timeout)
+                resp = await run_resolving_calls(
+                    system_runner, session.system_id, "CONNECT", None, None,
+                    runtime_dir=settings.systems_dir.parent / ".wopr",
+                    timeout_s=system_timeout)
             except (SystemFault, SystemTimeout, SystemBusy) as exc:
                 log.warning("system %s CONNECT failed, dropping line: %r",
                             session.system_id, exc)
@@ -323,9 +326,10 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
                     # (router.handle) — system turns are part of the history.
                     await store.log_event(session_id, "input", "user", {"text": message})
                     try:
-                        resp = await system_runner.run(
-                            session.system_id, "INPUT",
+                        resp = await run_resolving_calls(
+                            system_runner, session.system_id, "INPUT",
                             await store.get_system_state(session_id), message,
+                            runtime_dir=settings.systems_dir.parent / ".wopr",
                             timeout_s=systems[session.system_id].timeout_s)
                     except (SystemFault, SystemTimeout, SystemBusy) as exc:
                         log.warning("system %s INPUT failed, dropping line: %r",

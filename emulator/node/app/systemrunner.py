@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .systems import System
 from .systemwire import (
-    SystemResponse, SystemWireError, build_system_request, parse_system_response,
+    Reply, SystemResponse, SystemWireError, build_system_request, parse_system_response,
 )
 
 
@@ -60,7 +60,8 @@ class SystemRunner:
         return self.cfg.systems_dir / system_id / "harness" / "bin" / binname
 
     async def run(self, system_id: str, command: str, state: str | None,
-                  user_input: str | None, timeout_s: float | None = None) -> SystemResponse:
+                  user_input: str | None, timeout_s: float | None = None,
+                  reply: Reply | None = None) -> SystemResponse:
         if self._waiting >= self.cfg.queue_size:
             raise SystemBusy("system queue full")
         self._waiting += 1
@@ -73,15 +74,16 @@ class SystemRunner:
             self._waiting -= 1
         try:
             return await self._invoke(system_id, command, state, user_input,
-                                      timeout_s or self.cfg.timeout_s)
+                                      timeout_s or self.cfg.timeout_s, reply)
         finally:
             self._sem.release()
 
-    async def _invoke(self, system_id, command, state, user_input, timeout_s) -> SystemResponse:
+    async def _invoke(self, system_id, command, state, user_input, timeout_s,
+                      reply: Reply | None = None) -> SystemResponse:
         binary = self.binary_for(system_id)
         if not binary.exists():
             raise SystemFault(None, f"no binary for system {system_id!r} (run its build.sh)")
-        request = build_system_request(system_id, command, state, user_input)
+        request = build_system_request(system_id, command, state, user_input, reply=reply)
         # errors="replace" is symmetric with the stdout .decode below: a
         # non-ASCII user line becomes '?' rather than raising
         # UnicodeEncodeError up out of ws_session (the line stays up).

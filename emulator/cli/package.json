@@ -1,0 +1,22 @@
+{
+  "name": "@real-wopr/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "wopr — bring up the federation the pack declares, and dial it",
+  "type": "module",
+  "bin": {
+    "wopr": "src/main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"tests/*.test.ts\"",
+    "test:federation": "COMMS_MODE=fast node --test \"tests/integration/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=23.6"
+  }
+}
