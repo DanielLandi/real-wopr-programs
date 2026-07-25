@@ -1,0 +1,202 @@
+"""One node, one process.
+
+The node host is the harness side of a single `node` declaration. It dials its
+relays outbound, claims the lines the pack says it answers, and serves each call
+by driving its program subprocess-per-turn — the same SystemRunner the bridge
+uses, so a program behaves identically whether it is reached through a node or
+through the monolith.
+
+It refuses to start on a topology with validation errors. A mis-declared
+federation should fail where it is declared, not halfway through a call.
+
+Scope note: a node whose id is itself a program (school, airline, school-db …)
+serves that program directly, which is the common case and the whole of the
+school/school-db split. A *composite* host — one that only mounts others, like
+WOPR — needs the router, and that wiring lands with the WOPR executive
+(DanielLandi/real-wopr#112) rather than being faked here.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import websockets
+
+from .systemrunner import (
+    SystemBusy, SystemFault, SystemRunner, SystemRunnerConfig, SystemTimeout,
+)
+from .systems import System
+from .topology import NodeDecl, load_topology
+from .topology_validate import errors, validate
+
+log = logging.getLogger("wopr.nodehost")
+
+
+class NodeHostError(Exception):
+    """The node cannot serve what it was asked to serve."""
+
+
+@dataclass
+class Session:
+    """One live call: the opaque STATE this program has built up so far."""
+    call: int
+    state: str | None = None
+
+
+class NodeHost:
+    def __init__(self, decl: NodeDecl, pack_root: Path, relays: dict[str, str],
+                 system_runner: SystemRunner | None = None):
+        self.decl = decl
+        self.pack_root = Path(pack_root)
+        self.relays = relays
+        self.sessions: dict[int, Session] = {}
+        self._conns: list[websockets.ClientConnection] = []
+        self._tasks: list[asyncio.Task] = []
+        self._registered = asyncio.Event()
+
+        systems_dir = self.pack_root / "systems"
+        self.runner = system_runner or SystemRunner(
+            SystemRunnerConfig(systems_dir=systems_dir),
+            {decl.id: System(id=decl.id, title=decl.title, language="", binary=decl.id,
+                             number="", timeout_s=None)},
+        )
+
+    # ---- construction -------------------------------------------------------
+
+    @classmethod
+    def for_node(cls, node_id: str, pack_root: Path, relays: dict[str, str]) -> "NodeHost":
+        """Load the topology, refuse a broken one, and resolve this node."""
+        pack_root = Path(pack_root)
+        topo = load_topology(pack_root)
+
+        pack = json.loads((pack_root / "pack.json").read_text())
+        program_ids = {p["id"] for p in pack["programs"]}
+        program_paths = {p["id"]: p["path"] for p in pack["programs"]}
+        problems = errors(validate(topo, program_ids, program_paths))
+        if problems:
+            raise NodeHostError(
+                "topology has errors, refusing to start:\n  "
+                + "\n  ".join(f"{p.code}: {p.message}" for p in problems)
+            )
+
+        decl = topo.nodes.get(node_id)
+        if decl is None:
+            raise NodeHostError(f"{node_id!r} is not a declared node")
+        return cls(decl, pack_root, relays)
+
+    # ---- lifecycle ----------------------------------------------------------
+
+    async def start(self) -> None:
+        """Connect to every relay this node declares and claim its lines."""
+        for network in self.decl.networks:
+            url = self.relays.get(network)
+            if url is None:
+                raise NodeHostError(f"{self.decl.id}: no relay URL for network {network!r}")
+            conn = await websockets.connect(f"{url}/node")
+            self._conns.append(conn)
+            await conn.send(json.dumps({
+                "t": "REGISTER", "v": 1, "node": self.decl.id,
+                "claims": [{
+                    "network": network,
+                    "address": self.decl.networks[network].address,
+                    "protocol": self.decl.networks[network].protocol,
+                }],
+            }))
+            self._tasks.append(asyncio.create_task(self._serve(conn, network)))
+        await asyncio.wait_for(self._registered.wait(), timeout=10)
+
+    async def stop(self) -> None:
+        for t in self._tasks:
+            t.cancel()
+        for c in self._conns:
+            await c.close()
+        self._tasks.clear()
+        self._conns.clear()
+
+    async def run(self) -> None:
+        await self.start()
+        await asyncio.gather(*self._tasks)
+
+    # ---- serving ------------------------------------------------------------
+
+    async def _serve(self, conn, network: str) -> None:
+        try:
+            async for raw in conn:
+                try:
+                    f = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                await self._handle(conn, network, f)
+        except websockets.ConnectionClosed:
+            log.info("%s: relay for %s closed the link", self.decl.id, network)
+        except asyncio.CancelledError:
+            raise
+
+    async def _handle(self, conn, network: str, f: dict) -> None:
+        t = f.get("t")
+
+        if t == "REGISTERED":
+            log.info("%s: claimed its line on %s", self.decl.id, network)
+            self._registered.set()
+            return
+
+        if t == "REJECTED":
+            raise NodeHostError(
+                f"{self.decl.id}: relay refused the claim on {network}: {f.get('reason')}")
+
+        if t == "RING":
+            call = int(f["call"])
+            self.sessions[call] = Session(call=call)
+            await conn.send(json.dumps({"t": "ANSWER", "call": call}))
+            await self._turn(conn, call, "CONNECT", None)
+            return
+
+        if t == "FRAME":
+            call = int(f["call"])
+            if call in self.sessions:
+                await self._turn(conn, call, "INPUT", f.get("data", ""))
+            return
+
+        if t == "CLOSE":
+            self.sessions.pop(int(f["call"]), None)
+            return
+
+        if t == "PING":
+            await conn.send(json.dumps({"t": "PONG"}))
+            return
+
+    async def _turn(self, conn, call: int, command: str, user_input: str | None) -> None:
+        """One program invocation, and whatever it wants said back."""
+        session = self.sessions.get(call)
+        if session is None:
+            return
+
+        try:
+            resp = await self.runner.run(self.decl.id, command, session.state, user_input)
+        except SystemTimeout:
+            await self._drop(conn, call, "NO CARRIER")
+            return
+        except SystemBusy:
+            await self._say(conn, call, "SYSTEM BUSY - TRY AGAIN")
+            return
+        except SystemFault as exc:
+            log.warning("%s: %s", self.decl.id, exc)
+            await self._drop(conn, call, "NO CARRIER")
+            return
+
+        session.state = resp.state
+        if resp.display:
+            await self._say(conn, call, resp.display)
+        if resp.line == "DROP":
+            await self._drop(conn, call, "NO CARRIER")
+
+    async def _say(self, conn, call: int, text: str) -> None:
+        await conn.send(json.dumps({"t": "FRAME", "call": call, "data": text}))
+
+    async def _drop(self, conn, call: int, reason: str) -> None:
+        self.sessions.pop(call, None)
+        await conn.send(json.dumps({"t": "CLOSE", "call": call, "reason": reason}))

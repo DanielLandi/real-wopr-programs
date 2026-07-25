@@ -1,0 +1,182 @@
+"""Node host tests, against a fake relay.
+
+The node host dials its relay outbound and claims the lines it answers, then
+serves calls by driving its program subprocess-per-turn. These tests stand up a
+real WebSocket server playing the relay's part, so the host is exercised over an
+actual socket without needing the relay implementation.
+
+Sync tests wrapping asyncio.run(flow()) — the same shape test_runner.py and
+test_systemrunner.py use, so no new test dependency.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+import websockets
+
+from app.nodehost import NodeHost, NodeHostError
+from app.topology import load_topology
+
+PACK = Path(__file__).resolve().parent.parent.parent.parent
+
+
+class FakeRelay:
+    """Accepts one node, records its REGISTER, and lets a test drive calls."""
+
+    def __init__(self):
+        self.registered: dict | None = None
+        self.frames: list[dict] = []
+        self._ws = None
+        self._server = None
+        self._ready = asyncio.Event()
+
+    async def __aenter__(self):
+        async def handler(ws):
+            self._ws = ws
+            try:
+                async for raw in ws:
+                    f = json.loads(raw)
+                    if f["t"] == "REGISTER":
+                        self.registered = f
+                        await ws.send(json.dumps({"t": "REGISTERED", "node": f["node"]}))
+                        self._ready.set()
+                    else:
+                        self.frames.append(f)
+            except websockets.ConnectionClosed:
+                pass
+
+        self._server = await websockets.serve(handler, "127.0.0.1", 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc):
+        self._server.close()
+        await self._server.wait_closed()
+
+    @property
+    def url(self) -> str:
+        return f"ws://127.0.0.1:{self.port}"
+
+    async def wait_registered(self, timeout=5.0):
+        await asyncio.wait_for(self._ready.wait(), timeout)
+
+    async def send(self, frame: dict):
+        await self._ws.send(json.dumps(frame))
+
+    async def wait_frames(self, n: int, timeout=15.0):
+        async def _wait():
+            while len(self.frames) < n:
+                await asyncio.sleep(0.02)
+        await asyncio.wait_for(_wait(), timeout)
+        return self.frames
+
+    def display_text(self) -> str:
+        return "\n".join(f.get("data", "") for f in self.frames if f["t"] == "FRAME")
+
+
+def decl_for(node_id: str):
+    return load_topology(PACK).nodes[node_id]
+
+
+def test_the_host_claims_the_lines_its_declaration_names():
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+            assert relay.registered["node"] == "school"
+            claimed = {(c["network"], c["address"]) for c in relay.registered["claims"]}
+            assert ("pstn", "(206) 555-0142") in claimed
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_a_ring_is_answered_and_the_program_greets():
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+
+            assert any(f["t"] == "ANSWER" for f in relay.frames)
+            assert "GOOSE LAKE" in relay.display_text()
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_input_drives_the_program_and_its_display_comes_back():
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            # The school's password is PENCIL; a wrong one reprompts.
+            await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
+            await relay.wait_frames(1)
+            assert "INVALID PASSWORD" in relay.display_text()
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_the_program_can_end_the_call_itself():
+    """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE."""
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            for _ in range(3):
+                await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
+                await asyncio.sleep(0.5)
+
+            assert any(f["t"] == "CLOSE" for f in relay.frames), relay.frames
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_a_node_that_is_not_declared_refuses_to_start():
+    with pytest.raises(NodeHostError, match="not a declared node"):
+        NodeHost.for_node("ghost", PACK, {})
+
+
+def test_the_host_refuses_a_topology_with_errors(monkeypatch):
+    """A validation error means the federation is mis-declared; do not spawn."""
+    import app.nodehost as nh
+    from app.topology import Address
+
+    def broken(_root):
+        t = load_topology(PACK)
+        school = t.nodes["school"]
+        object.__setattr__(school, "networks", dict(
+            school.networks,
+            ghostnet=Address(network="ghostnet", address="X", protocol="SYSTEM/1"),
+        ))
+        return t
+
+    monkeypatch.setattr(nh, "load_topology", broken)
+    with pytest.raises(NodeHostError, match="unknown-network"):
+        NodeHost.for_node("school", PACK, {})
