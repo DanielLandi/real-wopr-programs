@@ -37,6 +37,9 @@ class RouteResult:
     text: str
     route: str  # core | bridge | joshua
     detail: dict[str, Any] = field(default_factory=dict)
+    # What the user's prompt should be after this turn. A status bar only
+    # exists on rich surfaces; a prompt works on a teletype too.
+    prompt: str = ">"
 
 
 class Router:
@@ -148,6 +151,12 @@ class Router:
         logged = "[REDACTED]" if session_id in self._pending_logon else raw
         await self.store.log_event(session_id, "input", "user", {"text": logged})
         result = await self._dispatch(session_id, raw)
+        # Computed after dispatch, not before: dispatch is what changes the
+        # attachment, so reading it earlier would report the mode the user
+        # was leaving, not the one the reply just landed them in.
+        att = self.attachment(session_id)
+        game = self.catalog.get(att.program) if att.program else None
+        result.prompt = prompt_for(att, abbrev=game.abbrev if game else "")
         await self.store.log_event(session_id, "route", "system",
                                    {"input": logged, "route": result.route, **result.detail})
         return result

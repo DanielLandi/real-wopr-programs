@@ -380,3 +380,43 @@ def test_the_side_choice_reaches_the_game_not_joshua():
         assert "SOVIET UNION" in result.text
 
     asyncio.run(flow())
+
+
+def test_the_front_door_and_joshua_keep_the_films_bare_prompt():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        assert (await router.handle(session.id, "HELP")).prompt == ">"
+        assert (await router.handle(session.id, "JOSHUA")).prompt == ">"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_prompt_names_the_attached_game():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        result = await router.handle(session.id, "NEW TICTACTOE")
+        assert result.prompt == "[TTT]>"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_prompt_returns_to_bare_on_detach():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        assert (await router.handle(session.id, "QUIT")).prompt == ">"
+
+    asyncio.run(flow())

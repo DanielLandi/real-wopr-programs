@@ -143,14 +143,17 @@ def test_ws_full_exchange_list_games_and_play(client):
         ws.send_text(ws_envelope(sid, "JOSHUA"))
         out = json.loads(ws.receive_text())
         assert "GREETINGS PROFESSOR FALKEN." in out["payload"]
+        json.loads(ws.receive_text())  # prompt frame, carried separately (#T8)
 
         ws.send_text(ws_envelope(sid, "LIST GAMES"))
         out = json.loads(ws.receive_text())
         assert out["kind"] == "output" and "GLOBAL THERMONUCLEAR WAR" in out["payload"]
+        json.loads(ws.receive_text())  # prompt frame
 
         ws.send_text(ws_envelope(sid, "NEW tictactoe"))
         out = json.loads(ws.receive_text())
         assert "TIC-TAC-TOE" in out["payload"]
+        json.loads(ws.receive_text())  # prompt frame
 
         ws.send_text(ws_envelope(sid, "5"))
         out = json.loads(ws.receive_text())
@@ -165,6 +168,7 @@ def test_ws_reassembles_chunked_input(client):
         json.loads(ws.receive_text())  # LOGON: greeting
         ws.send_text(ws_envelope(sid, "JOSHUA"))
         assert "GREETINGS PROFESSOR FALKEN." in json.loads(ws.receive_text())["payload"]
+        json.loads(ws.receive_text())  # prompt frame, carried separately (#T8)
         for i, (chunk, eom) in enumerate([("LIST ", False), ("GAMES", True)]):
             ws.send_text(json.dumps({"v": 1, "session": sid, "seq": i, "kind": "input",
                                      "link": "client", "payload": chunk, "eom": eom}))

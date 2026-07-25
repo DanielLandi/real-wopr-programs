@@ -382,6 +382,10 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
 
                 result = await router.handle(session_id, message)
                 await ws.send_text(envelope("output", f"\n{result.text}\n"))
+                # The mode the user is now in, carried as its own frame so it
+                # never lands inside the teletype text (the evals assert on
+                # that text, and E03 asserts what it ends with).
+                await ws.send_text(envelope("prompt", result.prompt))
         except WebSocketDisconnect:
             return
         finally:
