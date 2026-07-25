@@ -295,3 +295,41 @@ def test_a_store_with_no_number_is_not_in_the_dial_in_registry():
     assert "school-db" in {p.parent.name for p in SYS_DIR.glob("*/harness")}
     assert "school-db" not in systems
     assert "school" in systems
+
+
+def test_two_sessions_do_not_share_a_store(system_client):
+    """The monolith serves strangers on one box. If it shared a store, the
+    first visitor to change David's biology grade would change it for everyone
+    who dialled in afterwards — and the film's moment only works if each
+    visitor finds the F themselves."""
+    def grade_for(session_json):
+        sid, token = session_json["session_id"], session_json["token"]
+        with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+            ws.receive_text()                                    # PASSWORD:
+            ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
+            ws.receive_text()                                    # menu
+            ws.send_text('{"v":1,"kind":"input","payload":"1","eom":true}')
+            ws.receive_text()                                    # STUDENT NAME:
+            ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
+            return ws.receive_text()
+
+    first = system_client.post("/api/session",
+                               json={"surface": "home-terminal", "system": "school"}).json()
+    sid, token = first["session_id"], first["token"]
+    with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        ws.receive_text()
+        ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
+        ws.receive_text()
+        ws.send_text('{"v":1,"kind":"input","payload":"2","eom":true}')
+        ws.receive_text()
+        ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
+        ws.receive_text()
+        ws.send_text('{"v":1,"kind":"input","payload":"BIOLOGY 2","eom":true}')
+        ws.receive_text()
+        ws.send_text('{"v":1,"kind":"input","payload":"A","eom":true}')
+        assert "RECORD UPDATED." in ws.receive_text()
+
+    # A different visitor entirely.
+    second = system_client.post("/api/session",
+                                json={"surface": "home-terminal", "system": "school"}).json()
+    assert re.search(r"BIOLOGY 2\s+F", grade_for(second)), "the store leaked between sessions"
