@@ -10,10 +10,34 @@ from dataclasses import dataclass
 
 PROTO_SYSTEM = "SYSTEM/1"
 LINE_STATES = {"UP", "DROP"}
+REPLY_STATUSES = {"OK", "FAIL", "TIMEOUT"}
+
+# How many peer calls one user turn may chain before the host gives up. Bounds a
+# program that keeps asking; cycles are caught earlier, at topology validation.
+MAX_CALL_DEPTH = 4
 
 
 class SystemWireError(Exception):
     """A system produced something that is not a valid SYSTEM/1 response."""
+
+
+@dataclass(frozen=True)
+class Call:
+    """A program asking its host to reach a peer, mid-turn.
+
+    The payload is opaque to the harness — only the two programs understand it,
+    exactly as STATE is opaque. This is the CICS pseudo-conversational shape:
+    the program ends, and the monitor restarts it with the answer.
+    """
+    peer: str
+    payload: str        # newline-joined, no trailing newline
+
+
+@dataclass(frozen=True)
+class Reply:
+    peer: str
+    status: str         # OK | FAIL | TIMEOUT
+    payload: str        # newline-joined; empty for FAIL/TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -22,10 +46,11 @@ class SystemResponse:
     state: str      # opaque STATE block, newline-joined (no trailing newline)
     display: str    # human-facing teletype text
     line: str       # UP | DROP
+    call: Call | None = None
 
 
 def build_system_request(system_id: str, command: str, state: str | None,
-                         user_input: str | None) -> str:
+                         user_input: str | None, reply: Reply | None = None) -> str:
     lines = [f"{PROTO_SYSTEM} {system_id} {command}"]
     state_lines = state.split("\n") if state else []
     lines.append(f"STATE {len(state_lines)}")
@@ -37,6 +62,14 @@ def build_system_request(system_id: str, command: str, state: str | None,
         # the frame. Flatten embedded newlines to spaces.
         user_input = user_input.replace("\r", " ").replace("\n", " ")
         lines.append(f"INPUT {user_input}")
+    if reply is not None:
+        # The answer to the CALL the program made last turn. Counted like STATE
+        # so the program reads exactly as many lines as were sent.
+        if reply.status not in REPLY_STATUSES:
+            raise SystemWireError(f"unknown REPLY status {reply.status!r}")
+        payload_lines = reply.payload.split("\n") if reply.payload else []
+        lines.append(f"REPLY {reply.peer} {reply.status} {len(payload_lines)}")
+        lines.extend(payload_lines)
     lines.append("END")
     return "\n".join(lines) + "\n"
 
@@ -69,12 +102,30 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         raise SystemWireError("bad DISPLAY header")
     display = "\n".join(take() for _ in range(int(disp_hdr[1])))
 
-    line_hdr = take().split()
+    # Optional CALL block: the program is asking for a peer before it can
+    # finish this turn. Absent in every frame that does not use the extension,
+    # so an old-style response parses exactly as it always did.
+    call: Call | None = None
+    peeked = take()
+    if peeked.startswith("CALL "):
+        parts = peeked.split()
+        if len(parts) != 3 or not parts[2].isdigit():
+            raise SystemWireError("bad CALL header")
+        call = Call(peer=parts[1], payload="\n".join(take() for _ in range(int(parts[2]))))
+        peeked = take()
+
+    line_hdr = peeked.split()
     if len(line_hdr) != 2 or line_hdr[0] != "LINE" or line_hdr[1] not in LINE_STATES:
         raise SystemWireError("bad LINE status")
     line = line_hdr[1]
 
+    if call is not None and line != "UP":
+        # A CALL is a continuation: the program is going to be resumed, so the
+        # line cannot be going away underneath it.
+        raise SystemWireError("CALL requires LINE UP")
+
     if take().strip() != "END":
         raise SystemWireError("missing END")
 
-    return SystemResponse(system_id=system_id, state=state, display=display, line=line)
+    return SystemResponse(system_id=system_id, state=state, display=display,
+                          line=line, call=call)
