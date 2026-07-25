@@ -57,6 +57,21 @@ class DefconChange(BaseModel):
     level: int = Field(ge=1, le=5)
 
 
+def _session_store_dir(settings, session_id: str):
+    """Where a store's STATE lives for one dialled session.
+
+    A store is shared by design — that is what makes it a database, and in a
+    federation (one operator, one machine) sharing is exactly right. The
+    monolith is different: it serves many unrelated strangers on one box, and a
+    shared store means the first visitor to change David's biology grade
+    changes it for everyone who dials in afterwards. The film's moment only
+    works if each visitor finds the F themselves.
+
+    So here, and only here, a store is scoped to the session that dialled it.
+    """
+    return settings.systems_dir.parent / ".wopr" / "sessions" / str(session_id)
+
+
 def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
     """App factory; tests inject fakes for store/joshua/runner."""
     settings = settings or load_settings()
@@ -260,7 +275,7 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
             try:
                 resp = await run_resolving_calls(
                     system_runner, session.system_id, "CONNECT", None, None,
-                    runtime_dir=settings.systems_dir.parent / ".wopr",
+                    runtime_dir=_session_store_dir(settings, session_id),
                     timeout_s=system_timeout)
             except (SystemFault, SystemTimeout, SystemBusy) as exc:
                 log.warning("system %s CONNECT failed, dropping line: %r",
@@ -329,7 +344,7 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
                         resp = await run_resolving_calls(
                             system_runner, session.system_id, "INPUT",
                             await store.get_system_state(session_id), message,
-                            runtime_dir=settings.systems_dir.parent / ".wopr",
+                            runtime_dir=_session_store_dir(settings, session_id),
                             timeout_s=systems[session.system_id].timeout_s)
                     except (SystemFault, SystemTimeout, SystemBusy) as exc:
                         log.warning("system %s INPUT failed, dropping line: %r",
