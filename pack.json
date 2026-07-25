@@ -5,6 +5,11 @@
   "homepage": "https://real-wopr.ai",
   "description": "The period-language programs behind real-wopr.ai \u2014 WarGames' W.O.P.R. reconstructed in the languages of its era. Each program is a self-contained subprocess speaking a line protocol; the modern harness that hosts them is in emulator/.",
   "contract": "Each program: source at its folder top; harness/{manifest.json,build.sh,tests/}. Build -> harness/bin/<binary>. The binary reads one request frame on stdin and writes one response frame on stdout (see PACK.md).",
+  "networks": {
+    "pstn":  { "kind": "dialup", "baud": 300,  "addressing": "phone",    "public": true },
+    "norad": { "kind": "leased", "baud": 9600, "addressing": "hostname", "public": false },
+    "bus":   { "kind": "local",  "addressing": "name", "private": true }
+  },
   "programs": [
     {
       "id": "blackjack",
