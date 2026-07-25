@@ -1,28 +1,28 @@
-# Bridge image (deployment.md D2). The period programs are imported from the
-# public real-wopr-programs pack (tools/import-programs.sh) and built in the
-# 'programs' stage; the runtime stage is Python + the language runtimes, with
-# the built pack copied in. The programs' ONLY distribution channel into the
-# running exchange is this image (D7).
+# Node-host image (deployment.md D2). The 'programs' stage builds every period
+# program from source and runs its golden suite in-image; the runtime stage is
+# Python + the language runtimes, with the built pack copied in. The programs'
+# ONLY distribution channel into the running exchange is this image (D7).
 #
-# Build from the REPO ROOT:  docker build -f api-bridge/Dockerfile .
+# Build from the PACK ROOT:  docker build -f emulator/node/Dockerfile .
 
+# No import step — this repo *is* the pack, so the programs are built in place.
 FROM debian:bookworm-slim AS programs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates make gfortran sbcl gnucobol bwbasic cc65 gcc \
+      make gfortran sbcl gnucobol bwbasic cc65 gcc \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY packs.lock ./
 COPY tools ./tools
-# Clone the pinned pack (public — no credentials), build every program, and run
-# its golden suite in-image (the programs' conformance check moves here from the
-# old per-language stages).
-RUN tools/import-programs.sh && ( cd build/pack && tools/test.sh )
+COPY pack.json ./
+COPY games ./games
+COPY systems ./systems
+COPY joshua ./joshua
+RUN tools/build.sh && tools/test.sh
 
 FROM python:3.12-slim
 WORKDIR /app
 
-COPY api-bridge/pyproject.toml api-bridge/README.md ./
-COPY api-bridge/app ./app
+COPY emulator/node/pyproject.toml emulator/node/README.md ./
+COPY emulator/node/app ./app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libgfortran5 gnucobol bwbasic cc65 \
     && rm -rf /var/lib/apt/lists/*
@@ -32,7 +32,7 @@ RUN pip install --no-cache-dir ".[prod]"
 # in the pack layout (<cat>/<id>/harness/bin/<binary>). The system wrappers
 # (school, protovision) resolve their source relative to the binary, so the
 # whole pack tree is copied, not just the binaries.
-COPY --from=programs /src/build/pack /opt/wopr/pack
+COPY --from=programs /src /opt/wopr/pack
 
 # Smoke: each SYSTEM/1 system must actually run in the runtime image (proves the
 # language runtime + wrapper are present) — fails the build if not.
