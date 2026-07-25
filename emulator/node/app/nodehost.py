@@ -26,11 +26,13 @@ from pathlib import Path
 
 import websockets
 
+from .peercall import execute_call
 from .systemrunner import (
     SystemBusy, SystemFault, SystemRunner, SystemRunnerConfig, SystemTimeout,
 )
+from .systemwire import Reply
 from .systems import System
-from .topology import NodeDecl, load_topology
+from .topology import NodeDecl, Topology, load_topology
 from .topology_validate import errors, validate
 
 log = logging.getLogger("wopr.nodehost")
@@ -49,8 +51,10 @@ class Session:
 
 class NodeHost:
     def __init__(self, decl: NodeDecl, pack_root: Path, relays: dict[str, str],
-                 system_runner: SystemRunner | None = None):
+                 system_runner: SystemRunner | None = None,
+                 topology: Topology | None = None):
         self.decl = decl
+        self.topology = topology or load_topology(Path(pack_root))
         self.pack_root = Path(pack_root)
         self.relays = relays
         self.sessions: dict[int, Session] = {}
@@ -86,7 +90,7 @@ class NodeHost:
         decl = topo.nodes.get(node_id)
         if decl is None:
             raise NodeHostError(f"{node_id!r} is not a declared node")
-        return cls(decl, pack_root, relays)
+        return cls(decl, pack_root, relays, topology=topo)
 
     # ---- lifecycle ----------------------------------------------------------
 
@@ -170,29 +174,53 @@ class NodeHost:
             return
 
     async def _turn(self, conn, call: int, command: str, user_input: str | None) -> None:
-        """One program invocation, and whatever it wants said back."""
+        """One user turn — which may take several program invocations.
+
+        A response carrying a CALL is a continuation: the program has said what
+        it can so far, named a peer, and ended. We deliver its DISPLAY (so the
+        caller sees SEARCHING... while the call is in flight), fetch the answer,
+        and re-invoke it with RESUME. Repeat until it stops asking.
+        """
         session = self.sessions.get(call)
         if session is None:
             return
 
-        try:
-            resp = await self.runner.run(self.decl.id, command, session.state, user_input)
-        except SystemTimeout:
-            await self._drop(conn, call, "NO CARRIER")
-            return
-        except SystemBusy:
-            await self._say(conn, call, "SYSTEM BUSY - TRY AGAIN")
-            return
-        except SystemFault as exc:
-            log.warning("%s: %s", self.decl.id, exc)
-            await self._drop(conn, call, "NO CARRIER")
-            return
+        reply: Reply | None = None
+        depth = 0
 
-        session.state = resp.state
-        if resp.display:
-            await self._say(conn, call, resp.display)
-        if resp.line == "DROP":
-            await self._drop(conn, call, "NO CARRIER")
+        while True:
+            try:
+                resp = await self.runner.run(
+                    self.decl.id, command, session.state, user_input, reply=reply)
+            except SystemTimeout:
+                await self._drop(conn, call, "NO CARRIER")
+                return
+            except SystemBusy:
+                await self._say(conn, call, "SYSTEM BUSY - TRY AGAIN")
+                return
+            except SystemFault as exc:
+                log.warning("%s: %s", self.decl.id, exc)
+                await self._drop(conn, call, "NO CARRIER")
+                return
+
+            session.state = resp.state
+            if resp.display:
+                await self._say(conn, call, resp.display)
+
+            if resp.line == "DROP":
+                await self._drop(conn, call, "NO CARRIER")
+                return
+
+            if resp.call is None:
+                return
+
+            # It wants a peer. Fetch the answer and resume it.
+            reply = await execute_call(
+                resp.call, self.decl, self.topology, self.relays,
+                caller=self.decl.id, depth=depth,
+            )
+            depth += 1
+            command, user_input = "RESUME", None
 
     async def _say(self, conn, call: int, text: str) -> None:
         await conn.send(json.dumps({"t": "FRAME", "call": call, "data": text}))

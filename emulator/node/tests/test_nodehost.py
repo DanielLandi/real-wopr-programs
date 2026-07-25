@@ -19,6 +19,7 @@ import pytest
 import websockets
 
 from app.nodehost import NodeHost, NodeHostError
+from test_peercall import FakeDialTarget
 from app.topology import load_topology
 
 PACK = Path(__file__).resolve().parent.parent.parent.parent
@@ -36,6 +37,11 @@ class FakeRelay:
 
     async def __aenter__(self):
         async def handler(ws):
+            # The relay has two legs. /dial is where a peer call arrives; with
+            # nobody holding the line, it closes exactly as the real relay does.
+            if ws.request.path.startswith("/dial"):
+                await ws.close(1000, "NO ANSWER")
+                return
             self._ws = ws
             try:
                 async for raw in ws:
@@ -180,3 +186,86 @@ def test_the_host_refuses_a_topology_with_errors(monkeypatch):
     monkeypatch.setattr(nh, "load_topology", broken)
     with pytest.raises(NodeHostError, match="unknown-network"):
         NodeHost.for_node("school", PACK, {})
+
+
+def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer():
+    """The whole point: a CALL becomes a real dial to another process, and the
+    program is re-invoked with what came back."""
+    from app.systemwire import Call, SystemResponse
+
+    class CallingRunner:
+        """Turn 1 asks for a peer; turn 2 (RESUME) reports what it got."""
+        def __init__(self):
+            self.replies = []
+
+        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
+            if command == "CONNECT":
+                return SystemResponse(sid, "PHASE=MENU", "READY", "UP")
+            if reply is None:
+                return SystemResponse(
+                    sid, "PHASE=AWAIT", "SEARCHING...", "UP",
+                    call=Call(peer="school-db", payload="LOOKUP GRADE 1 BIOLOGY 2"))
+            self.replies.append(reply)
+            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
+            return SystemResponse(sid, "PHASE=MENU", body, "UP")
+
+    async def flow():
+        async with FakeRelay() as relay, FakeDialTarget(answer="GRADE F") as store:
+            runner = CallingRunner()
+            host = NodeHost(decl_for("school"), PACK,
+                            {"pstn": relay.url, "bus": store.url},
+                            system_runner=runner)
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            await relay.send({"t": "FRAME", "call": 1, "data": "GRADES"})
+            await relay.wait_frames(2)
+
+            text = relay.display_text()
+            assert "SEARCHING..." in text, text   # shown while the call is in flight
+            assert "GRADE F" in text, text        # and the peer's answer after it
+            assert runner.replies[0].status == "OK"
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_a_dead_peer_degrades_instead_of_hanging():
+    from app.systemwire import Call, SystemResponse
+
+    class CallingRunner:
+        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
+            if command == "CONNECT":
+                return SystemResponse(sid, "", "READY", "UP")
+            if reply is None:
+                return SystemResponse(sid, "", "SEARCHING...", "UP",
+                                      call=Call(peer="school-db", payload="LOOKUP"))
+            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
+            return SystemResponse(sid, "", body, "UP")
+
+    async def flow():
+        # The bus relay is up and school registers on it; there is simply no
+        # store holding SCHOOL-DB, so the dial gets NO ANSWER.
+        async with FakeRelay() as relay, FakeRelay() as bus:
+            host = NodeHost(decl_for("school"), PACK,
+                            {"pstn": relay.url, "bus": bus.url},
+                            system_runner=CallingRunner())
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            await relay.send({"t": "FRAME", "call": 1, "data": "GRADES"})
+            await relay.wait_frames(2)
+            assert "RECORDS UNAVAILABLE" in relay.display_text()
+            await host.stop()
+
+    asyncio.run(flow())
