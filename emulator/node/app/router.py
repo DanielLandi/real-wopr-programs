@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -17,6 +16,7 @@ from .rooms import RoomLocks, room_key
 from .runner import CoreBusy, CoreError, CoreRunner, CoreTimeout
 from .scenarios import montage_text
 from .store import GameState, Store
+from .wire import TERMINAL_STATUSES
 
 LOGON_REJECTION = "IDENTIFICATION NOT RECOGNIZED BY SYSTEM\n--CONNECTION TERMINATED--"
 BACKDOOR_GREETING = "GREETINGS PROFESSOR FALKEN."
@@ -29,21 +29,6 @@ ACCESS_CODE_PROMPT = "ACCESS CODE:"
 UNRECOGNIZED_DIRECTIVE = "UNRECOGNIZED DIRECTIVE"
 LOGON_LOCK_LIMIT = 3
 
-def build_move_patterns(catalog: dict[str, Game]) -> dict[str, re.Pattern[str]]:
-    """Compile each implemented game's `move_pattern` (declared in its manifest)
-    into an anchored, case-insensitive matcher. These decide core-vs-Joshua
-    routing only — the core is the authority on legality. A game is thus
-    self-describing: a pack's game routes with no engine-side edit. Input is
-    upper-cased before matching, so IGNORECASE is belt-and-suspenders."""
-    out: dict[str, re.Pattern[str]] = {}
-    for game_id, game in catalog.items():
-        if game.move_pattern:
-            out[game_id] = re.compile(game.move_pattern, re.IGNORECASE)
-    return out
-
-_SET_DEFCON = re.compile(r"^SET DEFCON ([1-5])$")
-
-
 @dataclass
 class RouteResult:
     text: str
@@ -52,11 +37,15 @@ class RouteResult:
 
 
 class Router:
-    # Words that always mean the monitor, in every mode. Kept to five: the
-    # objection this design answers is that *Joshua's* vocabulary should not
-    # pull you out of a game, and five words do not. LIST GAMES and NEW are
-    # required by the evals — E03 asserts the catalog in exact order on both
-    # Joshua engines, so Joshua cannot own that answer.
+    # Words that always mean the monitor, in every mode. Six literals, five
+    # distinct commands — HELP GAMES is an alias for LIST GAMES, not a sixth
+    # one. The objection this design answers is that *Joshua's* vocabulary
+    # should not pull you out of a game, and five commands do not. LIST GAMES
+    # and NEW are required by the evals — E03 asserts the catalog in exact
+    # order on both Joshua engines, so Joshua cannot own that answer. NEW is
+    # listed bare because that is the command being reserved, but it always
+    # takes an argument (NEW TICTACTOE); _reserved matches the "NEW " prefix,
+    # never the bare word alone.
     RESERVED = frozenset({"LIST GAMES", "HELP GAMES", "NEW", "QUIT", "STATUS", "HELP"})
 
     def __init__(self, runner: CoreRunner, store: Store, joshua: Joshua,
@@ -67,7 +56,6 @@ class Router:
         self.store = store
         self.joshua = joshua
         self.catalog = catalog
-        self.move_patterns = build_move_patterns(catalog)
         self.joshua_session_cap = joshua_session_cap
         self.locks = locks or RoomLocks()
         self._joshua_counts: dict[str, int] = {}
@@ -84,6 +72,18 @@ class Router:
     def attachment(self, session_id: str) -> Attachment:
         """What this session is connected to. New sessions are at the front door."""
         return self._attach.setdefault(session_id, Attachment(mode=FRONT_DOOR))
+
+    def _attach_game(self, session_id: str, game_id: str) -> None:
+        """Connect the terminal to a game. Everything typed now goes to it."""
+        current = self.attachment(session_id)
+        parent = current.parent if current.mode == GAME else current.mode
+        self._attach[session_id] = Attachment(mode=GAME, program=game_id,
+                                              parent=parent)
+
+    def _detach(self, session_id: str) -> None:
+        """Return to whatever attached the program — Joshua, or NORAD ops."""
+        att = self.attachment(session_id)
+        self._attach[session_id] = Attachment(mode=att.parent)
 
     def is_authenticated(self, session_id: str) -> bool:
         """True once the session has opened the JOSHUA backdoor. The WS layer
@@ -208,58 +208,24 @@ class Router:
         if reserved is not None:
             return reserved
 
-        # Tasks 5-6 replace everything below with mode dispatch. Until then the
-        # old body runs for an attached session, and still needs this local.
-        is_op = await self.is_operator(session_id)
+        # Attached to a game: everything typed is the game's, including lines
+        # Joshua would recognise. Routing is by attachment, not by inspecting
+        # the line, which is why no game declares a move pattern any more.
+        if att.mode == GAME:
+            room = await self._session_room(session_id)
+            async with self.locks.lock(room_key(room)):
+                fresh = await self._active_game(session_id, room)
+                if fresh is None or fresh.game_id != att.program:
+                    # The row vanished or changed under us (a hub tick, another
+                    # surface). Detach rather than move a game we are not on.
+                    self._detach(session_id)
+                    return RouteResult(text="NO GAME IN PROGRESS.", route="bridge")
+                return await self._core_move(session_id, fresh, upper)
 
-        # 1. In-game move: active PLAYING game AND input parses as its syntax.
-        room = await self._session_room(session_id)
-        active = await self._active_game(session_id, room)
-        if active is not None:
-            pattern = self.move_patterns.get(active.game_id)
-            if pattern is not None and pattern.match(upper):
-                # Serialize with the room's hub ticks; re-read inside the lock
-                # so we move the freshest state, not a pre-lock snapshot. If
-                # the game ended (or changed under us) while we waited, do NOT
-                # move — falling through to normal handling beats resurrecting
-                # a finished game from the stale snapshot.
-                async with self.locks.lock(room_key(room)):
-                    fresh = await self._active_game(session_id, room)
-                    if fresh is not None:
-                        fresh_pattern = self.move_patterns.get(fresh.game_id)
-                        if fresh_pattern is not None and fresh_pattern.match(upper):
-                            return await self._core_move(session_id, fresh, upper)
-                active = fresh
+        if att.mode == NORAD_OPS:
+            return await self._norad_ops(session_id, upper)
 
-        # 2. Game-control verbs, handled by the bridge directly.
-        if upper in ("LIST GAMES", "HELP GAMES"):
-            return RouteResult(text=list_games_text(self.catalog), route="bridge")
-        if upper.startswith("NEW "):
-            return await self._new_game(session_id, upper[4:].strip().lower(), room)
-        if upper == "QUIT":
-            return await self._quit(session_id, active, room)
-        if upper == "STATUS":
-            return await self._status(session_id, active)
-
-        # 2b. Operator tier (spec 2026-07-20): tactical commands for
-        # roster-authenticated norad-terminal sessions only.
-        if is_op:
-            if upper == "SITREP":
-                return await self._sitrep(session_id, active)
-            if upper == "TRACKS":
-                return await self._tracks(session_id, room)
-            if upper == "EVENTS":
-                return await self._events(session_id)
-            m = _SET_DEFCON.match(upper)
-            if m:
-                return await self._set_defcon(session_id, int(m.group(1)))
-
-        # 3. Conversation -> Joshua (which may return a start_game intent).
-        if is_op and session_id not in self._authenticated:
-            # Operators without the backdoor get the terse machine, not
-            # Joshua — NORAD staff not knowing the backdoor is the plot.
-            return RouteResult(text=UNRECOGNIZED_DIRECTIVE, route="bridge")
-        return await self._converse(session_id, raw, room)
+        return await self._converse(session_id, raw, await self._session_room(session_id))
 
     # -- destinations ---------------------------------------------------------
 
@@ -302,6 +268,8 @@ class Router:
             ), None)
             texts.append(follow.text)
             status = follow.detail.get("status", status)
+            if status in TERMINAL_STATUSES:
+                self._detach(session_id)
             return RouteResult(text="\n\n".join(texts), route="core",
                                detail={"game": game.game_id, "status": status})
 
@@ -313,6 +281,8 @@ class Router:
             texts.append(resp.result)
         if game.game_id == "gtw" and status == "NO-WIN":
             texts.append(CHESS_CODA)
+        if status in TERMINAL_STATUSES:
+            self._detach(session_id)
         return RouteResult(text="\n\n".join(texts), route="core",
                            detail={"game": game.game_id, "status": status})
 
@@ -341,6 +311,7 @@ class Router:
                     except CoreError as exc:
                         return RouteResult(text=f"ERROR: {exc}", route="core",
                                            detail={"error": str(exc)})
+                    self._attach_game(session_id, game_id)
                     return RouteResult(
                         text=f"SIMULATION ALREADY IN PROGRESS\n\n{resp.display}",
                         route="bridge", detail={"game": game_id, "attached": True})
@@ -359,6 +330,7 @@ class Router:
             ))
             await self.store.log_event(session_id, "core", "wopr", {"game": game_id, "event": "NEW"})
             hint = f"\n\n{game.title}. INPUT: {game.input_syntax.upper()}" if game.input_syntax else ""
+            self._attach_game(session_id, game_id)
             return RouteResult(text=resp.display + hint, route="bridge", detail={"game": game_id})
 
     async def _quit(self, session_id: str, active: GameState | None,
@@ -376,6 +348,7 @@ class Router:
                 return RouteResult(text="NO GAME IN PROGRESS.", route="bridge")
             fresh.status = "QUIT"
             await self.store.upsert_game(fresh)
+            self._detach(session_id)
             return RouteResult(text=f"{fresh.game_id.upper()} TERMINATED.", route="bridge")
 
     async def _status(self, session_id: str, active: GameState | None) -> RouteResult:

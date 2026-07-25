@@ -18,3 +18,14 @@ def test_catalog_carries_each_game_abbreviation():
 def test_a_placeholder_game_has_no_abbreviation():
     catalog = load_catalog(GAMES_DIR)
     assert catalog["chess"].abbrev == ""
+
+
+def test_no_game_declares_a_move_pattern_any_more():
+    # Attachment removed the need to classify a typed line, so the regex that
+    # did it is gone from the pack — not re-notated, removed.
+    import json
+    for game_id in ("gtw", "tictactoe", "checkers", "hearts", "poker",
+                    "blackjack", "gin-rummy", "falkens-maze"):
+        manifest = json.loads(
+            (GAMES_DIR / game_id / "harness" / "manifest.json").read_text())
+        assert "move_pattern" not in manifest, game_id

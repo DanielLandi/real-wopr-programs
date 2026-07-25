@@ -45,8 +45,6 @@ class Game:
     timeout_s: float | None = None  # optional manifest override, capped (deployment.md D2)
     self_resolving: bool = False  # engine resolves all non-human seats in the
     # human's MOVE; the bridge must never fire the inputless follow-up MOVE.
-    move_pattern: str = ""  # anchored regex (from the manifest) deciding which
-    # typed inputs are this game's moves vs. chat; empty => no in-game routing.
     abbrev: str = ""  # short label for the prompt ("TTT"); empty => use the id
 
 
@@ -66,7 +64,6 @@ def load_catalog(games_dir: Path) -> dict[str, Game]:
                 players=m.get("players", 2), summary=m.get("summary", ""),
                 input_syntax=m.get("input_syntax", ""), timeout_s=timeout,
                 self_resolving=bool(m.get("self_resolving", False)),
-                move_pattern=m.get("move_pattern", ""),
                 abbrev=m.get("abbrev", ""),
             )
         else:

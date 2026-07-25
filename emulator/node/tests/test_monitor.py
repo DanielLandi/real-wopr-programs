@@ -9,6 +9,8 @@ bare `async def test_...` would never execute."""
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from app.attachment import FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from app.games import load_catalog
 from app.joshua import ScriptedJoshua
@@ -125,9 +127,91 @@ def test_status_reports_the_current_mode():
 
 
 def test_no_game_may_claim_a_reserved_word():
-    # Move matching runs after reserved words, so a game declaring QUIT would
-    # be unreachable. Nothing in the pack does; this keeps it that way.
+    # Routing is by attachment now, so an abbrev can no longer shadow a
+    # reserved word the way a move pattern once could. What is left to guard:
+    # the prompt itself. A reserved word doubling as an abbrev would print a
+    # prompt like "[QUIT]>", which reads as an instruction rather than a game
+    # label. Nothing in the pack does this; this keeps it that way.
     catalog = load_catalog(GAMES_DIR)
     for game in catalog.values():
         for word in Router.RESERVED:
             assert game.abbrev.upper() != word
+
+
+needs_core = pytest.mark.skipif(
+    not (GAMES_DIR / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
+    reason="core not built (run make build)",
+)
+
+
+@needs_core
+def test_new_game_attaches_the_terminal_to_it():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        att = router.attachment(session.id)
+        assert att.mode == GAME
+        assert att.program == "tictactoe"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_conversation_during_a_game_never_reaches_joshua():
+    # The fidelity bug this phase fixes. Attached to a game, a Joshua-shaped
+    # line is the game's to reject.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        result = await router.handle(session.id, "SHALL WE PLAY A GAME?")
+        assert result.route == "core"
+        assert "SHALL WE PLAY A GAME?" not in result.text
+        assert router.attachment(session.id).mode == GAME
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_quit_detaches_back_to_joshua():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        await router.handle(session.id, "QUIT")
+        assert router.attachment(session.id).mode == JOSHUA
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_a_terminal_status_detaches_without_being_asked():
+    # A game owns its own ending: it stays PLAYING as long as it wants (so it
+    # can ask PLAY AGAIN?) and the monitor detaches when it finally reports a
+    # terminal status.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        for move in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            result = await router.handle(session.id, move)
+            if router.attachment(session.id).mode == JOSHUA:
+                break
+        else:
+            pytest.fail("tictactoe never reached a terminal status in nine moves")
+        assert router.attachment(session.id).mode == JOSHUA
+
+    asyncio.run(flow())
