@@ -143,17 +143,33 @@ def test_ws_full_exchange_list_games_and_play(client):
         ws.send_text(ws_envelope(sid, "JOSHUA"))
         out = json.loads(ws.receive_text())
         assert "GREETINGS PROFESSOR FALKEN." in out["payload"]
-        json.loads(ws.receive_text())  # prompt frame, carried separately (#T8)
+        # The prompt is its own frame, sent after the output frame for the
+        # same turn — Tasks 9 and 10 build on that ordering, and this is the
+        # only wire-level assertion of it in the suite (test_monitor.py only
+        # ever sees RouteResult.prompt, never the envelope). Checking out's
+        # kind above and prompt_frame's kind here, in receive order, pins it.
+        assert out["kind"] == "output"
+        prompt_frame = json.loads(ws.receive_text())
+        assert prompt_frame["kind"] == "prompt"
+        assert prompt_frame["payload"] == ">"  # attached to Joshua: bare prompt
 
         ws.send_text(ws_envelope(sid, "LIST GAMES"))
         out = json.loads(ws.receive_text())
         assert out["kind"] == "output" and "GLOBAL THERMONUCLEAR WAR" in out["payload"]
-        json.loads(ws.receive_text())  # prompt frame
+        prompt_frame = json.loads(ws.receive_text())
+        assert prompt_frame["kind"] == "prompt"
+        # LIST GAMES is a reserved word answered while still attached to
+        # Joshua (#T8) — the attachment, and so the prompt, is unchanged.
+        assert prompt_frame["payload"] == ">"
 
         ws.send_text(ws_envelope(sid, "NEW tictactoe"))
         out = json.loads(ws.receive_text())
         assert "TIC-TAC-TOE" in out["payload"]
-        json.loads(ws.receive_text())  # prompt frame
+        prompt_frame = json.loads(ws.receive_text())
+        assert prompt_frame["kind"] == "prompt"
+        # NEW tictactoe attaches the terminal to the game; tictactoe's
+        # manifest abbrev is TTT (games/tictactoe/harness/manifest.json).
+        assert prompt_frame["payload"] == "[TTT]>"
 
         ws.send_text(ws_envelope(sid, "5"))
         out = json.loads(ws.receive_text())
@@ -168,7 +184,11 @@ def test_ws_reassembles_chunked_input(client):
         json.loads(ws.receive_text())  # LOGON: greeting
         ws.send_text(ws_envelope(sid, "JOSHUA"))
         assert "GREETINGS PROFESSOR FALKEN." in json.loads(ws.receive_text())["payload"]
-        json.loads(ws.receive_text())  # prompt frame, carried separately (#T8)
+        prompt_frame = json.loads(ws.receive_text())
+        # The only wire-level check here that the mode reaches the client at
+        # all: test_monitor.py asserts RouteResult.prompt, never the frame.
+        assert prompt_frame["kind"] == "prompt"
+        assert prompt_frame["payload"] == ">"  # attached to Joshua: bare prompt
         for i, (chunk, eom) in enumerate([("LIST ", False), ("GAMES", True)]):
             ws.send_text(json.dumps({"v": 1, "session": sid, "seq": i, "kind": "input",
                                      "link": "client", "payload": chunk, "eom": eom}))
