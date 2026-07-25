@@ -131,6 +131,37 @@ test("the federation, end to end", async (t) => {
   second.hangUp();
 });
 
+  await t.test("a node answers on its second network too", async () => {
+    // The capability the film's plot rests on: one machine reachable from two
+    // networks at once. reference holds a phone number on pstn AND a hostname
+    // on norad, and the same program answers on both.
+    //
+    // WOPR is meant to be *the* dual-homed machine — a bedroom phone line on
+    // one side, the missiles on the other — but it has no period source yet,
+    // so it is skipped rather than faked (#112). reference proves the runtime
+    // can carry it.
+    const overPhone = await dial(relays.pstn, "(311) 555-0101");
+    const a = await until(overPhone, "REFERENCE SYSTEM READY");
+    overPhone.hangUp();
+
+    const overNorad = await dial(relays.norad, "REFERENCE");
+    const b = await until(overNorad, "REFERENCE SYSTEM READY");
+    overNorad.hangUp();
+
+    assert.match(flat(a), /REFERENCE SYSTEM READY/);
+    assert.match(flat(b), /REFERENCE SYSTEM READY/);
+  });
+
+  await t.test("the norad network is a different network, not an alias", async () => {
+    // A hostname is not reachable on the phone network, and a phone number is
+    // not reachable on norad. Two addresses, two networks, no crossover.
+    const wrongNet = await dial(relays.norad, "(311) 555-0101");
+    assert.equal(await wrongNet.closed, "NO ANSWER");
+
+    const alsoWrong = await dial(relays.pstn, "REFERENCE");
+    assert.equal(await alsoWrong.closed, "NO ANSWER");
+  });
+
   await t.test("SCHOOL-DB is not reachable by anyone but the school", async () => {
   // callable_by travels with the registration and the relay enforces it, so a
   // caller cannot vouch for itself.
