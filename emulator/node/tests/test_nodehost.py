@@ -288,3 +288,54 @@ def test_a_dead_peer_degrades_instead_of_hanging():
             await host.stop()
 
     asyncio.run(flow())
+
+
+def test_a_persistent_store_remembers_across_separate_calls(tmp_path):
+    """school-db is declared state: persistent — the whole point is that a
+    second caller sees what the first one wrote."""
+    async def flow():
+        async with FakeRelay() as bus:
+            host = NodeHost(decl_for("school-db"), PACK, {"bus": bus.url},
+                            runtime_dir=tmp_path)
+            await host.start()
+            await bus.wait_registered(("bus",))
+
+            await bus.send({"t": "RING", "call": 1, "from": "school",
+                            "network": "bus", "address": "SCHOOL-DB"}, network="bus")
+            await bus.wait_frames(2)
+            await bus.send({"t": "FRAME", "call": 1,
+                            "data": "SET GRADE 1 BIOLOGY 2 A"}, network="bus")
+            await bus.wait_frames(3)
+            bus.frames.clear()
+
+            # A second, separate call must see the override the first one set.
+            await bus.send({"t": "RING", "call": 2, "from": "school",
+                            "network": "bus", "address": "SCHOOL-DB"}, network="bus")
+            await bus.wait_frames(2)
+            bus.frames.clear()
+            await bus.send({"t": "FRAME", "call": 2,
+                            "data": "LOOKUP GRADE 1 BIOLOGY 2"}, network="bus")
+            await bus.wait_frames(1)
+
+            assert "GRADE A" in bus.display_text(), bus.display_text()
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_an_ephemeral_node_writes_no_store_file(tmp_path):
+    """The school is not a store; nothing should be persisted for it."""
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK,
+                            {"pstn": relay.url, "bus": relay.url}, runtime_dir=tmp_path)
+            assert host.store is None
+            await host.start()
+            await relay.wait_registered(("pstn", "bus"))
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            assert not (tmp_path / "state").exists()
+            await host.stop()
+
+    asyncio.run(flow())

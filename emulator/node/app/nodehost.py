@@ -27,6 +27,7 @@ from pathlib import Path
 import websockets
 
 from .peercall import execute_call
+from .storestate import StoreState
 from .systemrunner import (
     SystemBusy, SystemFault, SystemRunner, SystemRunnerConfig, SystemTimeout,
 )
@@ -52,7 +53,8 @@ class Session:
 class NodeHost:
     def __init__(self, decl: NodeDecl, pack_root: Path, relays: dict[str, str],
                  system_runner: SystemRunner | None = None,
-                 topology: Topology | None = None):
+                 topology: Topology | None = None,
+                 runtime_dir: Path | None = None):
         self.decl = decl
         self.topology = topology or load_topology(Path(pack_root))
         self.pack_root = Path(pack_root)
@@ -61,6 +63,13 @@ class NodeHost:
         self._conns: list[websockets.ClientConnection] = []
         self._tasks: list[asyncio.Task] = []
         self._registered = asyncio.Event()
+
+        # A store's STATE belongs to its host, not to whoever called it.
+        # Ephemeral nodes keep state per call, in the Session.
+        self.store = (
+            StoreState(runtime_dir or (self.pack_root / ".wopr"), decl.id)
+            if decl.state == "persistent" else None
+        )
 
         systems_dir = self.pack_root / "systems"
         self.runner = system_runner or SystemRunner(
@@ -189,9 +198,10 @@ class NodeHost:
         depth = 0
 
         while True:
+            state = self.store.load() if self.store else session.state
             try:
                 resp = await self.runner.run(
-                    self.decl.id, command, session.state, user_input, reply=reply)
+                    self.decl.id, command, state, user_input, reply=reply)
             except SystemTimeout:
                 await self._drop(conn, call, "NO CARRIER")
                 return
@@ -203,7 +213,10 @@ class NodeHost:
                 await self._drop(conn, call, "NO CARRIER")
                 return
 
-            session.state = resp.state
+            if self.store is not None:
+                self.store.save(resp.state)
+            else:
+                session.state = resp.state
             if resp.display:
                 await self._say(conn, call, resp.display)
 
