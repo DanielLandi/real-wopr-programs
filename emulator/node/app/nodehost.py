@@ -236,7 +236,10 @@ class NodeHost:
             command, user_input = "RESUME", None
 
     async def _say(self, conn, call: int, text: str) -> None:
-        await conn.send(json.dumps({"t": "FRAME", "call": call, "data": text}))
+        # Wrapped in newlines, the way the bridge has always framed a DISPLAY:
+        # without them a prompt runs straight into whatever is said next
+        # ("PASSWORD:WELCOME TO DISTRICT DATANET").
+        await conn.send(json.dumps({"t": "FRAME", "call": call, "data": f"\n{text}\n"}))
 
     async def _drop(self, conn, call: int, reason: str) -> None:
         self.sessions.pop(call, None)

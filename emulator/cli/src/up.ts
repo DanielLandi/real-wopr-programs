@@ -5,7 +5,25 @@
 // by side.
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { errorsOf, warningsOf, pythonFor, type Topology } from "./topology.ts";
+
+/** Where `wopr up` publishes the ports it picked, so `wopr dial` can find
+ * them. Ephemeral ports mean two federations can run side by side; this
+ * file is how the second command learns which one is which. */
+export function relaysFile(packRoot: string): string {
+  return `${packRoot}/.wopr/relays.json`;
+}
+
+export function readRelays(packRoot: string): Record<string, string> {
+  const path = relaysFile(packRoot);
+  if (!existsSync(path)) return {};
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
 
 export interface Supervised {
   relays: Map<string, { port: number; address: string; proc: ChildProcess }>;
@@ -84,6 +102,7 @@ export async function up(
   let stopping = false;
   const stop = async () => {
     stopping = true;
+    rmSync(relaysFile(packRoot), { force: true });
     for (const p of [...nodes.values(), ...[...relays.values()].map((r) => r.proc)]) {
       p.kill("SIGTERM");
     }
@@ -99,9 +118,14 @@ export async function up(
     }
 
     const relayEnv: Record<string, string> = {};
+    const published: Record<string, string> = {};
     for (const [name, r] of relays) {
-      relayEnv[`WOPR_RELAY_${name.toUpperCase()}`] = `ws://127.0.0.1:${r.port}`;
+      const url = `ws://127.0.0.1:${r.port}`;
+      relayEnv[`WOPR_RELAY_${name.toUpperCase()}`] = url;
+      published[name] = url;
     }
+    mkdirSync(`${packRoot}/.wopr`, { recursive: true });
+    writeFileSync(relaysFile(packRoot), JSON.stringify(published, null, 2) + "\n");
 
     for (const node of Object.values(topo.nodes)) {
       // A composite host mounts others and needs the router; the node host

@@ -102,6 +102,20 @@ jobs:
       - name: Tests
         run: cd emulator/cli && npm test
 
+  terminal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: cd emulator/terminal && npm ci
+      - name: Typecheck
+        run: cd emulator/terminal && npm run typecheck
+      - name: Tests
+        run: cd emulator/terminal && npm test
+
   web:
     runs-on: ubuntu-latest
     steps:

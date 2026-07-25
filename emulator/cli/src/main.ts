@@ -11,13 +11,17 @@ import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { loadTopology, errorsOf, pythonFor, TopologyError } from "./topology.ts";
 import { renderMap } from "./map.ts";
-import { up } from "./up.ts";
+import { up, readRelays } from "./up.ts";
+import { runTerminal } from "../../terminal/src/render-tty.ts";
 
 const USAGE = `wopr — the W.O.P.R. federation
 
   wopr up [--fresh]     start one relay per network and one process per node
   wopr map              print the topology; start nothing
   wopr node <id>        run a single node against relays already running
+  wopr dial <address>   dial a line on a running federation
+                        --network <name>  which network (default: pstn)
+                        --from <node>     who to claim to be (default: console)
 
   --pack <dir>          pack root (default: cwd)
 `;
@@ -35,6 +39,25 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const packRoot = packRootFrom(argv);
+
+  if (command === "dial") {
+    const address = argv[1];
+    if (!address) { process.stderr.write("wopr: dial what?\n"); return 2; }
+    const netIdx = argv.indexOf("--network");
+    const network = netIdx >= 0 ? argv[netIdx + 1] : "pstn";
+    const fromIdx = argv.indexOf("--from");
+    const from = fromIdx >= 0 ? argv[fromIdx + 1] : "console";
+
+    const relays = readRelays(packRoot);
+    const relay = relays[network];
+    if (!relay) {
+      process.stderr.write(
+        `wopr: no ${network} relay running (start one with \`wopr up\`)\n`);
+      return 2;
+    }
+    const reason = await runTerminal(relay, address, { from });
+    return reason === "NO ANSWER" ? 1 : 0;
+  }
 
   if (command === "node") {
     const id = argv[1];
