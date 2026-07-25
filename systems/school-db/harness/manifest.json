@@ -1,0 +1,20 @@
+{
+  "id": "school-db",
+  "title": "GOOSE LAKE STUDENT RECORDS",
+  "kind": "store",
+  "language": "basic",
+  "binary": "school-db",
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "bus": {
+        "address": "SCHOOL-DB",
+        "protocol": "SYSTEM/1"
+      }
+    },
+    "state": "persistent",
+    "callable_by": [
+      "school"
+    ]
+  }
+}

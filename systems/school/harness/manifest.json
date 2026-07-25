@@ -4,5 +4,20 @@
   "language": "basic",
   "binary": "school",
   "number": "(206) 555-0142",
-  "timeout_s": 2
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(206) 555-0142",
+        "protocol": "SYSTEM/1"
+      },
+      "bus": {
+        "address": "SCHOOL",
+        "protocol": "SYSTEM/1"
+      }
+    },
+    "peers": [
+      "school-db"
+    ]
+  }
 }

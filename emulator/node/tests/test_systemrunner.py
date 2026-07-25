@@ -286,3 +286,11 @@ def test_ws_system_session_dials_pactel_and_verifies_line(system_client):
         ws.send_text('{"v":1,"kind":"input","payload":"VERIFY","eom":true}')
         shown = ws.receive_text()
         assert "206 555 1234" in shown and "IDLE" in shown  # selected line persisted via STATE
+
+
+def test_a_store_with_no_number_is_not_in_the_dial_in_registry():
+    """school-db lives on the local bus; nothing should be able to dial it."""
+    systems = load_systems(SYS_DIR)
+    assert "school-db" in {p.parent.name for p in SYS_DIR.glob("*/harness")}
+    assert "school-db" not in systems
+    assert "school" in systems

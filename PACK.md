@@ -42,6 +42,38 @@ engine which typed inputs are this game's moves vs. ordinary chat, so a game rou
 any engine-side edit. Systems add their own fields. The engine reads the manifest to route
 and present the program.
 
+### `node` — becoming an endpoint
+
+A program that is not just something another program runs, but a machine you can *reach*,
+adds a `node` block. It says which networks the program answers on, what address it answers
+at, what it runs locally, and which peers it may call:
+
+```json
+"node": {
+  "networks": {
+    "pstn": { "address": "(206) 555-0142", "protocol": "SYSTEM/1" },
+    "bus":  { "address": "SCHOOL",         "protocol": "SYSTEM/1" }
+  },
+  "peers": ["school-db"],
+  "state": "ephemeral",
+  "callable_by": null
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `networks` | Which networks this answers on, and at what address. Networks are declared once in `pack.json`. |
+| `mounts` | Program ids or globs (`games/*`) this node runs locally, as subprocesses. |
+| `peers` | Node ids this may `CALL`. A node with no `peers` cannot make calls at all. |
+| `state` | `ephemeral` (default) or `persistent`. `persistent` makes the host own this program's `STATE` between calls — what a data store needs. |
+| `callable_by` | Node ids permitted to call this one. Omit for "anyone sharing a network". |
+
+**A program with no `node` block is not a node** — it is somebody's mount. The games are
+mounts: `GTW` is not something you dial, it is something W.O.P.R. runs for you.
+
+A node's declaration is checked before anything runs: unknown networks, duplicate addresses,
+unknown or unreachable peers, empty mount globs and cycles are all rejected.
+
 ## Wire protocols
 
 A program speaks exactly one line-oriented ASCII protocol, named in `pack.json`:
@@ -53,6 +85,40 @@ A program speaks exactly one line-oriented ASCII protocol, named in `pack.json`:
 
 The protocols are designed so a golden fixture pair (`NN.in` / `NN.out`) fully specifies a turn.
 They are documented in full in the engine's docs, linked from [real-wopr.ai](https://real-wopr.ai).
+
+### Asking another program for something
+
+A program may end a turn by asking its host to reach **one peer**, and will be re-invoked with
+the answer. `WOPR/1` and `SYSTEM/1` both carry it:
+
+```
+CALL <peer> <n>              <- last block of a response, before STATUS / LINE
+<n payload lines>
+
+REPLY <peer> <status> <n>    <- last block of the next request, before END
+<n payload lines>
+```
+
+- The payload is **opaque to the harness**, exactly as `STATE` is. Only the two programs
+  understand it.
+- At most one `CALL` per response. A program needing two answers asks twice — which keeps the
+  state machine explicit and the fixtures readable.
+- `<status>` is `OK`, `FAIL` or `TIMEOUT`. Programs **must** handle the failure cases: a
+  subsystem being down was an ordinary Tuesday in 1983, and the honest behaviour is a period
+  error message, not a hang.
+- The host bounds a turn at 4 chained calls; cycles are rejected earlier, when the topology is
+  validated.
+- A `CALL` may not accompany `LINE DROP` (SYSTEM/1) or a terminal `STATUS` (WOPR/1) — a
+  continuation needs something to resume into.
+
+This is the shape a 1983 transaction programmer actually wrote: the program ends, and the
+monitor restarts it with its saved context when the answer arrives. `STATE` is the COMMAREA. In
+bwBASIC it is a `PRINT "CALL ..."` and a branch on a phase tag; in COBOL a `DISPLAY` plus an
+`EVALUATE` on a field saved into the state block. `echo frame | ./binary` still works with
+nothing else running, and a golden fixture just carries a canned `REPLY`.
+
+`systems/school-db` is the worked example — the school district's records as a separate
+program, reached over the local bus rather than a phone line.
 
 ## pack.json
 

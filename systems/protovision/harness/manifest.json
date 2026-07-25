@@ -4,5 +4,13 @@
   "language": "6502-asm",
   "binary": "protovision",
   "number": "(408) 555-0163",
-  "timeout_s": 2
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(408) 555-0163",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
 }
