@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  build-test:
+  programs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,3 +33,80 @@ jobs:
               print("pack.json is missing programs:", sorted(missing)); sys.exit(1)
           print(f"pack.json indexes all {len(on_disk)} programs")
           PY
+
+  # --- emulator/ (the modern harness) ---------------------------------------
+  # These are the suites that used to run in the private engine repo, unchanged,
+  # at their new paths.
+
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install period toolchains (golden-path tests spawn the real programs)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran sbcl gnucobol bwbasic cc65 gcc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build every program
+        run: make build
+      - name: Install the node host
+        run: pip install -e "emulator/node[dev]"
+      - name: pytest
+        run: cd emulator/node && python -m pytest -q
+
+  devkit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install period toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran sbcl gnucobol bwbasic cc65 gcc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build every program
+        run: make build
+      - name: Install the node host (devkit runs on its interpreter)
+        run: pip install -e "emulator/node[dev]"
+      - name: pytest
+        run: cd emulator/devkit && python -m pytest -q
+
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: cd emulator/relay && npm ci
+      - name: Typecheck
+        run: cd emulator/relay && npm run typecheck
+      - name: Tests (throughput, parity, toggle, FSM, e2e proxy, switchboard)
+        run: cd emulator/relay && npm test
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install workspace
+        run: cd emulator/web && npm ci
+      - name: Tests
+        run: cd emulator/web && npm test
+      - name: Build static exports
+        run: cd emulator/web && npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build node image
+        run: docker build -f emulator/node/Dockerfile -t real-wopr-bridge:ci .
+      - name: Build relay image
+        run: docker build -t real-wopr-comms:ci emulator/relay

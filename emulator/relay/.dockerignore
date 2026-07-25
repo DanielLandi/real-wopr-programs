@@ -1,0 +1,5 @@
+# Build context for this folder's Dockerfile. npm ci runs inside the image.
+node_modules
+dist
+.env
+.env.*

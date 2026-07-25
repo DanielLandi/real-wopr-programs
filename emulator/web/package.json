@@ -1,0 +1,23 @@
+{
+  "name": "@real-wopr/surfaces",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Workspace root for the five surfaces + crt-kit (docs/surfaces.md)",
+  "workspaces": [
+    "crt-kit",
+    "home-terminal",
+    "norad-terminal",
+    "norad-bigboard",
+    "norad-warroom",
+    "wopr-panel"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:home": "npm run dev -w @real-wopr/home-terminal",
+    "dev:norad": "npm run dev -w @real-wopr/norad-terminal",
+    "dev:bigboard": "npm run dev -w @real-wopr/norad-bigboard",
+    "dev:panel": "npm run dev -w @real-wopr/wopr-panel",
+    "dev:warroom": "npm run dev -w @real-wopr/norad-warroom",
+    "test": "node --test crt-kit/tests/*.test.mjs home-terminal/app/*.test.mjs norad-terminal/app/*.test.mjs norad-bigboard/app/*.test.mjs norad-warroom/app/*.test.mjs"
+  }
+}

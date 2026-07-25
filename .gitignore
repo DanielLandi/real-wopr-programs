@@ -5,3 +5,18 @@
 *.prg
 # Packaged artifact.
 dist/
+
+# --- emulator/ (the modern harness) ---
+# Language toolchains.
+node_modules/
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+# Next.js build output for the web surfaces.
+.next/
+out/
+# Environments & secrets.
+.env
+.env.*
+!.env.example

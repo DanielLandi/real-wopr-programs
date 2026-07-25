@@ -1,0 +1,196 @@
+/* NORAD screen wall — dark command room holding four period monitors.
+   Phosphor tokens match crt-kit's green theme so embedded surfaces and
+   wall chrome read as one room. */
+
+:root {
+  --crt-fg: #33ff66;
+  --crt-dim: #1a8038;
+  --crt-bg: #020a04;
+  --room-bg: #05070a;
+  --bezel: #10151c;
+  --bezel-edge: #232d3a;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--room-bg);
+}
+
+.room {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  color: var(--crt-fg);
+  font-family: "VT323", "IBM Plex Mono", ui-monospace, "Menlo", "Courier New", monospace;
+  font-size: 1.1rem;
+}
+
+.room-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.6rem 1.2rem 0;
+  letter-spacing: 0.2em;
+  text-shadow: 0 0 6px var(--crt-fg);
+}
+
+.room-status {
+  color: var(--crt-dim);
+  text-shadow: none;
+}
+
+/* Named areas: Big Board primary, secondaries stacked beside it. A focused
+   tile leaves the flow (position: fixed) but the named areas keep every
+   other tile in place — no reflow behind the zoom. */
+.wall {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr;
+  grid-template-areas:
+    "bigboard panel"
+    "bigboard norad"
+    "bigboard tracks";
+  gap: 1rem;
+  padding: 1rem 1.2rem 1.2rem;
+  box-sizing: border-box;
+}
+
+.monitor-bigboard { grid-area: bigboard; }
+.monitor-panel { grid-area: panel; }
+.monitor-norad { grid-area: norad; }
+.monitor-tracks { grid-area: tracks; }
+
+.monitor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bezel);
+  border: 2px solid var(--bezel-edge);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem 0.6rem;
+  box-sizing: border-box;
+}
+
+.monitor-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--crt-dim);
+  letter-spacing: 0.25em;
+  font-size: 0.85em;
+  padding-bottom: 0.4rem;
+  user-select: none;
+}
+
+.screen {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--crt-bg);
+  border-radius: 4px;
+}
+
+.screen iframe {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border: 0;
+  transform-origin: center;
+  transition: transform 200ms ease-out;
+  background: var(--crt-bg);
+}
+
+.screen.offline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.offline-label {
+  color: var(--crt-dim);
+  letter-spacing: 0.4em;
+  opacity: 0.7;
+}
+
+/* Click-glass: captures the click-to-focus on unfocused monitors and blocks
+   accidental interaction with scaled-down surfaces. Removed when focused. */
+.glass {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.glass:hover {
+  box-shadow: inset 0 0 0 2px var(--crt-dim);
+}
+
+.monitor.focused {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  border-radius: 0;
+  border-width: 0;
+  padding: 0.5rem 0.6rem 0.6rem;
+}
+
+.monitor.dimmed {
+  opacity: 0.35;
+}
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.back {
+  background: transparent;
+  border: 1px solid var(--crt-dim);
+  color: var(--crt-fg);
+  font: inherit;
+  letter-spacing: 0.2em;
+  padding: 0.1em 0.8em;
+  cursor: pointer;
+}
+
+.back:hover {
+  background: var(--crt-dim);
+  color: var(--crt-bg);
+}
+
+/* Mobile: the wall collapses to a vertical column of the same mounted
+   monitors (Big Board first); tap-to-focus is the identical code path. */
+@media (max-width: 900px) {
+  .room {
+    height: auto;
+    min-height: 100vh;
+  }
+  .wall {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-template-areas:
+      "bigboard"
+      "panel"
+      "norad"
+      "tracks";
+  }
+  .monitor {
+    height: 40vh;
+  }
+  .monitor.focused {
+    height: auto;
+  }
+}
