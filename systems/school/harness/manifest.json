@@ -10,7 +10,14 @@
       "pstn": {
         "address": "(206) 555-0142",
         "protocol": "SYSTEM/1"
+      },
+      "bus": {
+        "address": "SCHOOL",
+        "protocol": "SYSTEM/1"
       }
-    }
+    },
+    "peers": [
+      "school-db"
+    ]
   }
 }
