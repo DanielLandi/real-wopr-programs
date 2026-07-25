@@ -158,7 +158,10 @@ class Router:
             return await self._logon_code(session_id, raw)
         if upper == "LOGON" or upper.startswith("LOGON "):
             return await self._logon(session_id, upper)
-        if upper == "HELP" or upper.startswith("HELP "):
+        # HELP GAMES is a catalog request, not a plea for help. At the front
+        # door it gets the rejection like LIST GAMES does — never the softer
+        # HELP NOT AVAILABLE, and never the catalog.
+        if upper == "HELP" or (upper.startswith("HELP ") and upper != "HELP GAMES"):
             return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
         return RouteResult(text=LOGON_REJECTION, route="bridge",
                            detail={"authenticated": False})
