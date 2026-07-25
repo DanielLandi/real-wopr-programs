@@ -3,6 +3,7 @@
   "title": "POKER",
   "status": "implemented",
   "binary": "poker",
+  "abbrev": "PKR",
   "players": 1,
   "self_resolving": true,
   "summary": "Heads-up five-card draw vs JOSHUA. Fixed limit: ante 5, bet 10, no raises. Felt the machine to win.",

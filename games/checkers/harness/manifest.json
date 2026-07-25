@@ -3,6 +3,7 @@
   "title": "CHECKERS",
   "status": "implemented",
   "binary": "checkers",
+  "abbrev": "CHK",
   "players": 2,
   "summary": "Standard American checkers on the 32 dark squares: forced captures, multi-jumps, kings. Depth-6 alpha-beta minimax over material + advancement - the same scheme Samuel's checkers program ran on 1950s IBM hardware, comfortably 1983-plausible.",
   "input_syntax": "11-15 quiet | 18X25 jump | 1X10X19 multi-jump (squares 1-32; empty squares show their number)",

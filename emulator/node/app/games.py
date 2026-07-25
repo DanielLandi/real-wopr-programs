@@ -47,6 +47,7 @@ class Game:
     # human's MOVE; the bridge must never fire the inputless follow-up MOVE.
     move_pattern: str = ""  # anchored regex (from the manifest) deciding which
     # typed inputs are this game's moves vs. chat; empty => no in-game routing.
+    abbrev: str = ""  # short label for the prompt ("TTT"); empty => use the id
 
 
 def load_catalog(games_dir: Path) -> dict[str, Game]:
@@ -66,6 +67,7 @@ def load_catalog(games_dir: Path) -> dict[str, Game]:
                 input_syntax=m.get("input_syntax", ""), timeout_s=timeout,
                 self_resolving=bool(m.get("self_resolving", False)),
                 move_pattern=m.get("move_pattern", ""),
+                abbrev=m.get("abbrev", ""),
             )
         else:
             catalog[game_id] = Game(

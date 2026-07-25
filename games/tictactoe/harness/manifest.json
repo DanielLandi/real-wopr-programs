@@ -3,6 +3,7 @@
   "title": "Tic-Tac-Toe",
   "status": "implemented",
   "binary": "tictactoe",
+  "abbrev": "TTT",
   "players": 2,
   "summary": "Three in a row. Demonstrates the canonical NO-WIN outcome.",
   "input_syntax": "cell 1-9, row-major",

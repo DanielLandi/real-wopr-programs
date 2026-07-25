@@ -3,6 +3,7 @@
   "title": "FALKEN'S MAZE",
   "status": "implemented",
   "binary": "falkens-maze",
+  "abbrev": "MAZE",
   "players": 1,
   "summary": "Text maze crawl through a 12x12 labyrinth with fog-of-war MAP. Interpretation: the film only names the game.",
   "input_syntax": "N|S|E|W (or NORTH|SOUTH|EAST|WEST), LOOK, MAP",

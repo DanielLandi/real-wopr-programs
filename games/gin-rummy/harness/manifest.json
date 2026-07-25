@@ -3,6 +3,7 @@
   "title": "GIN RUMMY",
   "status": "implemented",
   "binary": "gin-rummy",
+  "abbrev": "GIN",
   "players": 1,
   "self_resolving": true,
   "summary": "Heads-up standard gin rummy vs JOSHUA. Knock at 10 or less, gin and undercut pay 25. First to 100 wins the match.",

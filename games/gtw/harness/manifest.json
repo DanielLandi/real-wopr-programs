@@ -3,6 +3,7 @@
   "title": "Global Thermonuclear War",
   "status": "implemented",
   "binary": "gtw",
+  "abbrev": "GTW",
   "players": 2,
   "summary": "Scenario simulation that always converges on mutual annihilation. The signature NO-WIN.",
   "input_syntax": "LAUNCH USSR:<TARGET> | OBSERVE | MAP",
