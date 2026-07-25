@@ -29,9 +29,12 @@ class FakeRelay:
     """Accepts one node, records its REGISTER, and lets a test drive calls."""
 
     def __init__(self):
-        self.registered: dict | None = None
+        # A node opens ONE connection per network it declares, each with its own
+        # REGISTER. Keeping only the last one is a race the CI runner will win
+        # differently from a laptop, so collect them all and index by network.
+        self.registrations: list[dict] = []
         self.frames: list[dict] = []
-        self._ws = None
+        self._socks: dict[str, object] = {}
         self._server = None
         self._ready = asyncio.Event()
 
@@ -42,12 +45,13 @@ class FakeRelay:
             if ws.request.path.startswith("/dial"):
                 await ws.close(1000, "NO ANSWER")
                 return
-            self._ws = ws
             try:
                 async for raw in ws:
                     f = json.loads(raw)
                     if f["t"] == "REGISTER":
-                        self.registered = f
+                        self.registrations.append(f)
+                        for c in f["claims"]:
+                            self._socks[c["network"]] = ws
                         await ws.send(json.dumps({"t": "REGISTERED", "node": f["node"]}))
                         self._ready.set()
                     else:
@@ -67,11 +71,26 @@ class FakeRelay:
     def url(self) -> str:
         return f"ws://127.0.0.1:{self.port}"
 
-    async def wait_registered(self, timeout=5.0):
-        await asyncio.wait_for(self._ready.wait(), timeout)
+    async def wait_registered(self, networks=("pstn",), timeout=5.0):
+        """Wait until every named network has registered, not merely the first."""
+        async def _wait():
+            while not all(n in self._socks for n in networks):
+                await asyncio.sleep(0.02)
+        await asyncio.wait_for(_wait(), timeout)
 
-    async def send(self, frame: dict):
-        await self._ws.send(json.dumps(frame))
+    @property
+    def claims(self) -> set[tuple[str, str]]:
+        return {(c["network"], c["address"])
+                for r in self.registrations for c in r["claims"]}
+
+    @property
+    def node_names(self) -> set[str]:
+        return {r["node"] for r in self.registrations}
+
+    async def send(self, frame: dict, network: str = "pstn"):
+        """Send down the connection that registered `network` — a node has one
+        socket per network, and a RING must arrive on the right one."""
+        await self._socks[network].send(json.dumps(frame))
 
     async def wait_frames(self, n: int, timeout=15.0):
         async def _wait():
@@ -93,10 +112,10 @@ def test_the_host_claims_the_lines_its_declaration_names():
         async with FakeRelay() as relay:
             host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
             await host.start()
-            await relay.wait_registered()
-            assert relay.registered["node"] == "school"
-            claimed = {(c["network"], c["address"]) for c in relay.registered["claims"]}
-            assert ("pstn", "(206) 555-0142") in claimed
+            await relay.wait_registered(("pstn", "bus"))
+            assert relay.node_names == {"school"}
+            assert ("pstn", "(206) 555-0142") in relay.claims
+            assert ("bus", "SCHOOL") in relay.claims
             await host.stop()
 
     asyncio.run(flow())
