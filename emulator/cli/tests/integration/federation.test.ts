@@ -12,11 +12,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { rmSync } from "node:fs";
-import { loadTopology } from "../src/topology.ts";
-import { up, type Supervised } from "../src/up.ts";
-import { dial } from "../../terminal/src/protocol.ts";
+import { loadTopology } from "../../src/topology.ts";
+import { up, type Supervised } from "../../src/up.ts";
+import { dial } from "../../../terminal/src/protocol.ts";
 
-const PACK = resolve(import.meta.dirname, "../../..");
+const PACK = resolve(import.meta.dirname, "../../../..");
 const QUIET = (process.env.WOPR_TEST_VERBOSE
   ? process.stderr
   : { write: () => true }) as unknown as NodeJS.WritableStream;

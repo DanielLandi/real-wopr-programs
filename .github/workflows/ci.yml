@@ -105,6 +105,35 @@ jobs:
       - name: Tests
         run: cd emulator/cli && npm test
 
+  federation:
+    # The whole thing, running: relays, node processes, real period programs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install period toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran sbcl gnucobol bwbasic cc65 gcc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build every program
+        run: make build
+      - name: Install the node host into the venv the CLI looks for
+        run: |
+          python -m venv emulator/node/.venv
+          emulator/node/.venv/bin/pip install -e "emulator/node[dev]"
+      - name: Install the harness packages
+        run: |
+          cd emulator/relay && npm ci
+          cd ../terminal && npm ci
+          cd ../cli && npm ci
+      - name: Bring the federation up and dial it
+        run: cd emulator/cli && npm run test:federation
+
   terminal:
     runs-on: ubuntu-latest
     steps:
