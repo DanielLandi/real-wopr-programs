@@ -88,6 +88,20 @@ jobs:
       - name: Tests (throughput, parity, toggle, FSM, e2e proxy, switchboard)
         run: cd emulator/relay && npm test
 
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: cd emulator/cli && npm ci
+      - name: Typecheck
+        run: cd emulator/cli && npm run typecheck
+      - name: Tests
+        run: cd emulator/cli && npm test
+
   web:
     runs-on: ubuntu-latest
     steps:
