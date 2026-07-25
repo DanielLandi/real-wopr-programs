@@ -113,7 +113,7 @@ def test_list_games_answers_while_attached_to_joshua():
     asyncio.run(flow())
 
 
-def test_status_reports_the_current_mode():
+def test_status_reports_idle_with_no_game_running():
     store = MemoryStore()
     router = make_router(store)
 
@@ -213,5 +213,86 @@ def test_a_terminal_status_detaches_without_being_asked():
         else:
             pytest.fail("tictactoe never reached a terminal status in nine moves")
         assert router.attachment(session.id).mode == JOSHUA
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_a_terminal_status_detaches_a_norad_operator_to_norad_not_joshua():
+    # _core_move can detach twice in one turn (WOPR answers a losing move
+    # inside the same turn). A _detach that re-derived parent from a default
+    # would land the second call in JOSHUA even when the game was started
+    # from NORAD ops — exactly what UNRECOGNIZED_DIRECTIVE exists to prevent
+    # for an operator who never used the backdoor.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        assert router.attachment(session.id).mode == NORAD_OPS
+        await router.handle(session.id, "NEW TICTACTOE")
+        for move in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+            await router.handle(session.id, move)
+            if router.attachment(session.id).mode != GAME:
+                break
+        else:
+            pytest.fail("tictactoe never reached a terminal status in nine moves")
+        assert router.attachment(session.id).mode == NORAD_OPS
+
+    asyncio.run(flow())
+
+
+def test_a_reserved_word_answers_while_attached_to_a_game():
+    # _reserved's claim is that it outranks any attachment. QUIT already
+    # covers the game-ending case; this covers a reserved word that has
+    # nothing to do with ending the game.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        result = await router.handle(session.id, "LIST GAMES")
+        assert result.text.rstrip().endswith("GLOBAL THERMONUCLEAR WAR")
+        att = router.attachment(session.id)
+        assert att.mode == GAME
+        assert att.program == "tictactoe"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_non_ascii_during_a_game_does_not_drop_the_line():
+    # move_pattern was the only ASCII gate. Without it a smart quote or an
+    # accent reached the core encoder and raised past ws_session's only
+    # handler, dropping the socket and orphaning the subprocess.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        result = await router.handle(session.id, "CAFÉ")
+        assert result.route == "core"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_an_embedded_newline_cannot_inject_a_protocol_line():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        result = await router.handle(session.id, "1\nEND")
+        assert result.route == "core"
 
     asyncio.run(flow())

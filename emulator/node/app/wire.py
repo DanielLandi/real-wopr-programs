@@ -58,15 +58,16 @@ def build_request(game_id: str, command: str, state: str | None, move: str | Non
     """Serialize a request frame. `state` is the stored opaque block (None for NEW);
     `move` omitted => the engine plays the current side (T1 convention).
 
-    Relies on the router pre-validating/normalizing `move` (no embedded CR/LF)
-    before it reaches here — unlike systemwire, which flattens newlines itself
-    because arbitrary terminal input reaches it unmediated."""
+    Flattens embedded CR/LF in `move`, exactly as systemwire does: since routing
+    became attachment-based, arbitrary terminal input reaches here unmediated and
+    a stray newline would inject extra protocol lines and desync the frame.
+    """
     lines = [f"{PROTO} {game_id} {command}"]
     state_lines = state.split("\n") if state else []
     lines.append(f"STATE {len(state_lines)}")
     lines.extend(state_lines)
     if move is not None:
-        lines.append(f"INPUT {move}")
+        lines.append(f"INPUT {move.replace(chr(13), ' ').replace(chr(10), ' ')}")
     if reply is not None:
         # The answer to the CALL the game made last turn. Counted like STATE so
         # the program reads exactly as many lines as were sent.

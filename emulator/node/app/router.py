@@ -1,6 +1,7 @@
-"""The bridge's brain — routes every input to exactly one destination
-(api-contract.md §4): 1. in-game move -> core; 2. game-control verb -> bridge;
-3. everything else -> Joshua."""
+"""The bridge's brain — a connection monitor, not a per-line classifier
+(attachment.py). A session is attached to exactly one program, and a line
+either is a reserved word (which outranks any attachment) or belongs entirely
+to whatever the session is attached to: the game, Joshua, or NORAD ops."""
 
 from __future__ import annotations
 
@@ -81,9 +82,15 @@ class Router:
                                               parent=parent)
 
     def _detach(self, session_id: str) -> None:
-        """Return to whatever attached the program — Joshua, or NORAD ops."""
+        """Return to whatever attached the program — Joshua, or NORAD ops.
+
+        `parent` is carried through, not dropped: WOPR answers a losing move
+        inside the same turn, so this runs twice, and a second detach that
+        re-derived the parent from a default would strand a NORAD operator in
+        Joshua — the one place the film says they must never end up.
+        """
         att = self.attachment(session_id)
-        self._attach[session_id] = Attachment(mode=att.parent)
+        self._attach[session_id] = Attachment(mode=att.parent, parent=att.parent)
 
     def is_authenticated(self, session_id: str) -> bool:
         """True once the session has opened the JOSHUA backdoor. The WS layer
@@ -220,6 +227,11 @@ class Router:
                     # surface). Detach rather than move a game we are not on.
                     self._detach(session_id)
                     return RouteResult(text="NO GAME IN PROGRESS.", route="bridge")
+                if not upper:
+                    # A bare Enter is not a move. MOVE with an empty INPUT
+                    # fails as an invalid move and prints a bare ERROR: dump
+                    # (#44); QUERY reads the board back without risking that.
+                    return await self._query_game(session_id, fresh)
                 return await self._core_move(session_id, fresh, upper)
 
         if att.mode == NORAD_OPS:
@@ -285,6 +297,22 @@ class Router:
             self._detach(session_id)
         return RouteResult(text="\n\n".join(texts), route="core",
                            detail={"game": game.game_id, "status": status})
+
+    async def _query_game(self, session_id: str, game: GameState) -> RouteResult:
+        """Re-read a game's display without moving it — what a bare Enter gets,
+        since MOVE with no INPUT is an invalid move to the core, not a peek."""
+        game_meta = self.catalog.get(game.game_id)
+        timeout = game_meta.timeout_s if game_meta else None
+        try:
+            resp = await self.runner.run(game.game_id, "QUERY", game.state, None, timeout_s=timeout)
+        except CoreTimeout:
+            return RouteResult(text=CORE_TIMEOUT_TEXT, route="core", detail={"error": "timeout"})
+        except CoreBusy:
+            return RouteResult(text=CORE_BUSY_TEXT, route="core", detail={"error": "busy"})
+        except CoreError as exc:
+            return RouteResult(text=f"ERROR: {exc}", route="core", detail={"error": str(exc)})
+        return RouteResult(text=resp.display, route="core",
+                           detail={"game": game.game_id, "status": game.status})
 
     async def _new_game(self, session_id: str, game_id: str, room: str | None) -> RouteResult:
         game = self.catalog.get(game_id)
