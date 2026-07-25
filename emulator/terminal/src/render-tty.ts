@@ -23,7 +23,15 @@ export async function runTerminal(
   const input = opts.input ?? process.stdin;
 
   out.write("RINGING...\n");
-  const line = await dial(relay, address, opts);
+  let shown = "";
+  const line = await dial(relay, address, {
+    ...opts,
+    onPrompt: (next) => {
+      if (next === shown) return;
+      shown = next;
+      out.write(`\n${next} `);
+    },
+  });
 
   const rl = createInterface({ input, terminal: false });
   rl.on("line", (text) => line.send(text));

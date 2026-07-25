@@ -68,6 +68,7 @@ const HANDSHAKE_LABELS: Record<string, string> = {
 export default function HomeTerminal() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [text, setText] = useState("");
+  const [prompt, setPrompt] = useState(">");
   const [exchanges, setExchanges] = useState<Exchange[] | null>(null);
   const [hits, setHits] = useState<SweepEntry[] | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
@@ -148,6 +149,11 @@ export default function HomeTerminal() {
         appendText(`${HANDSHAKE_LABELS[state] ?? state}\n`);
         if (state === "NO_CARRIER" || state === "BUSY") setPhase("no-carrier");
       }
+      return;
+    }
+    if (f.kind === "prompt") {
+      // The mode indicator lives on the input line, not in the transcript.
+      setPrompt(f.payload || ">");
       return;
     }
     if (f.kind === "output") {
@@ -463,7 +469,7 @@ export default function HomeTerminal() {
       {/* The CommandLine owns the one cursor (on the > prompt line) in every
           phase; the Teletype never blinks a second one. */}
       <Teletype text={text} cursor={false} />
-      <CommandLine onSubmit={submit} onBreak={() => link.current?.sendControl("BREAK")} />
+      <CommandLine prompt={prompt} onSubmit={submit} onBreak={() => link.current?.sendControl("BREAK")} />
     </CRTScreen>
   );
 }

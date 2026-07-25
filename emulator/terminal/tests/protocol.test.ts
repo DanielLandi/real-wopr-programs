@@ -126,3 +126,33 @@ test("dial: output ends when the far end hangs up", async () => {
   assert.equal(await line.closed, "NO CARRIER");
   await relay.close();
 });
+
+test("dial: a prompt frame updates the prompt without printing as text", async () => {
+  const relay = await fakeRelay((ws) => {
+    ws.send(envelope("TIC-TAC-TOE"));
+    ws.send(JSON.stringify({
+      v: 1, session: "t", seq: 2, kind: "prompt",
+      link: "pstn", payload: "[TTT]>", eom: true,
+    }));
+    ws.send(envelope("YOUR MOVE"));
+  });
+  const line = await dial(relay.url, "(206) 555-0142");
+  const got: string[] = [];
+  for await (const chunk of line.output) {
+    got.push(chunk);
+    if (got.length === 2) break;
+  }
+  // The prompt is not teletype text — it must not appear in the stream.
+  assert.deepEqual(got, ["TIC-TAC-TOE", "YOUR MOVE"]);
+  assert.equal(line.prompt(), "[TTT]>");
+  line.hangUp();
+  await relay.close();
+});
+
+test("dial: the prompt starts bare", async () => {
+  const relay = await fakeRelay(() => {});
+  const line = await dial(relay.url, "(206) 555-0142");
+  assert.equal(line.prompt(), ">");
+  line.hangUp();
+  await relay.close();
+});
