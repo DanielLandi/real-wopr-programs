@@ -52,6 +52,13 @@ class RouteResult:
 
 
 class Router:
+    # Words that always mean the monitor, in every mode. Kept to five: the
+    # objection this design answers is that *Joshua's* vocabulary should not
+    # pull you out of a game, and five words do not. LIST GAMES and NEW are
+    # required by the evals — E03 asserts the catalog in exact order on both
+    # Joshua engines, so Joshua cannot own that answer.
+    RESERVED = frozenset({"LIST GAMES", "HELP GAMES", "NEW", "QUIT", "STATUS", "HELP"})
+
     def __init__(self, runner: CoreRunner, store: Store, joshua: Joshua,
                  catalog: dict[str, Game], joshua_session_cap: int = 50,
                  locks: "RoomLocks | None" = None,
@@ -166,6 +173,30 @@ class Router:
         return RouteResult(text=LOGON_REJECTION, route="bridge",
                            detail={"authenticated": False})
 
+    async def _reserved(self, session_id: str, upper: str,
+                        att: Attachment) -> RouteResult | None:
+        """Monitor commands, which outrank whatever the session is attached to.
+
+        Returns None when the line is not one — the caller then hands it to the
+        attached program untouched.
+        """
+        if upper in ("LIST GAMES", "HELP GAMES"):
+            return RouteResult(text=list_games_text(self.catalog), route="bridge")
+        if upper == "HELP" or upper.startswith("HELP "):
+            return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
+        if upper.startswith("NEW "):
+            room = await self._session_room(session_id)
+            return await self._new_game(session_id, upper[4:].strip().lower(), room)
+        if upper == "QUIT":
+            room = await self._session_room(session_id)
+            active = await self._active_game(session_id, room)
+            return await self._quit(session_id, active, room)
+        if upper == "STATUS":
+            room = await self._session_room(session_id)
+            active = await self._active_game(session_id, room)
+            return await self._status(session_id, active)
+        return None
+
     async def _dispatch(self, session_id: str, raw: str) -> RouteResult:
         upper = raw.upper()
         att = self.attachment(session_id)
@@ -173,7 +204,11 @@ class Router:
         if att.mode == FRONT_DOOR:
             return await self._front_door(session_id, raw, upper)
 
-        # Tasks 4-6 replace everything below with mode dispatch. Until then the
+        reserved = await self._reserved(session_id, upper, att)
+        if reserved is not None:
+            return reserved
+
+        # Tasks 5-6 replace everything below with mode dispatch. Until then the
         # old body runs for an attached session, and still needs this local.
         is_op = await self.is_operator(session_id)
 

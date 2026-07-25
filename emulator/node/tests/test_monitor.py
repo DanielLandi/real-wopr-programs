@@ -93,3 +93,41 @@ def test_roster_logon_attaches_to_norad_operations():
         assert router.attachment(session.id).mode == NORAD_OPS
 
     asyncio.run(flow())
+
+
+def test_list_games_answers_while_attached_to_joshua():
+    # E03 asserts the catalog in exact order on both Joshua engines. If Joshua
+    # owned this answer it would be non-deterministic.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        result = await router.handle(session.id, "LIST GAMES")
+        assert result.text.rstrip().endswith("GLOBAL THERMONUCLEAR WAR")
+        assert "FALKEN'S MAZE" in result.text
+
+    asyncio.run(flow())
+
+
+def test_status_reports_the_current_mode():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        result = await router.handle(session.id, "STATUS")
+        assert "SIMULATION: IDLE" in result.text
+
+    asyncio.run(flow())
+
+
+def test_no_game_may_claim_a_reserved_word():
+    # Move matching runs after reserved words, so a game declaring QUIT would
+    # be unreachable. Nothing in the pack does; this keeps it that way.
+    catalog = load_catalog(GAMES_DIR)
+    for game in catalog.values():
+        for word in Router.RESERVED:
+            assert game.abbrev.upper() != word
