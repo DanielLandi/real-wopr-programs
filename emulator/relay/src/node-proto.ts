@@ -23,7 +23,7 @@ export interface AddressClaim {
 
 export type NodeFrame =
   // node -> relay
-  | { t: "REGISTER"; v: 1; node: string; claims: AddressClaim[] }
+  | { t: "REGISTER"; v: 1; node: string; claims: AddressClaim[]; callable_by?: string[] | null }
   | { t: "ANSWER"; call: number }
   | { t: "DIAL"; call: number; network: string; address: string }
   // relay -> node
@@ -79,6 +79,12 @@ export function decodeNodeFrame(raw: string): NodeFrame {
         throw new Error("bad claim address");
       }
       requireName(c.protocol, "claim protocol");
+    }
+    // Who may reach this node. Absent or null means anyone sharing a network;
+    // the relay enforces it, because a caller cannot vouch for itself.
+    if (f.callable_by !== undefined && f.callable_by !== null) {
+      if (!Array.isArray(f.callable_by)) throw new Error("bad callable_by");
+      for (const who of f.callable_by) requireName(who, "callable_by entry");
     }
   } else if (f.t === "REGISTERED") {
     requireName(f.node, "node");

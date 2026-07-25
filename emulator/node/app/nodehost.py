@@ -118,6 +118,10 @@ class NodeHost:
                     "address": self.decl.networks[network].address,
                     "protocol": self.decl.networks[network].protocol,
                 }],
+                # Who may reach us. The relay enforces this, not the caller —
+                # a caller is never trusted to police its own reach.
+                "callable_by": list(self.decl.callable_by)
+                if self.decl.callable_by is not None else None,
             }))
             self._tasks.append(asyncio.create_task(self._serve(conn, network)))
         await asyncio.wait_for(self._registered.wait(), timeout=10)

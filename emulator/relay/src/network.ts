@@ -120,7 +120,8 @@ export async function startNetworkRelay(
       catch { ws.close(1002, "bad frame"); return; }
 
       if (f.t === "REGISTER") {
-        const res = registry.claim(f.node, f.claims, ws as unknown as NodePort);
+        const res = registry.claim(f.node, f.claims, ws as unknown as NodePort,
+                                   { callableBy: f.callable_by ?? null });
         if (!res.ok) {
           ws.send(encodeNodeFrame({ t: "REJECTED", node: f.node, reason: res.reason ?? "rejected" }));
           return;
