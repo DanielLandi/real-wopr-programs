@@ -493,6 +493,8 @@ class Router:
                                     "start_game": reply.start_game_id})
 
         if reply.start_game_id:
+            # Joshua asks; the monitor attaches. Joshua never reaches a game
+            # itself — which is the film's argument, in the architecture.
             started = await self._new_game(session_id, reply.start_game_id, room)
             return RouteResult(text=f"{reply.text}\n\n{started.text}", route="joshua",
                                detail={"start_game": reply.start_game_id})

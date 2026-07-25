@@ -344,3 +344,39 @@ def test_operator_commands_answer_in_norad_mode():
         assert "SITREP CRYSTAL" in result.text
 
     asyncio.run(flow())
+
+
+@needs_core
+def test_joshua_starting_a_game_attaches_the_terminal():
+    # Joshua is one more program, not the driver: start_game is a request, and
+    # the monitor is what actually attaches.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        await router.handle(session.id, "LATER. LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        att = router.attachment(session.id)
+        assert att.mode == GAME
+        assert att.program == "gtw"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_side_choice_reaches_the_game_not_joshua():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        await router.handle(session.id, "LATER. LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        result = await router.handle(session.id, "2")
+        assert result.route == "core"
+        assert "SOVIET UNION" in result.text
+
+    asyncio.run(flow())
