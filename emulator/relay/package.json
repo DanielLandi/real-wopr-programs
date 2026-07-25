@@ -1,0 +1,29 @@
+{
+  "name": "@real-wopr/comms-layer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Era-constraint simulation layer (baud, latency, framing, handshake) — see docs/comms-protocol.md",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "npm run build && node dist/main.js",
+    "dev": "node --watch src/main.ts",
+    "dev:bridge-stub": "node tools/dev-bridge-stub.ts",
+    "tieline": "node src/tieline.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"tests/*.test.ts\""
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=23.6"
+  }
+}
