@@ -144,6 +144,16 @@ class Router:
         all. Returns None when the line is no part of a logon.
         """
         if session_id in self._pending_logon:
+            if upper in ("JOSHUA", "LOGON JOSHUA"):
+                # The backdoor abandons any in-flight operator logon prompt
+                # with no failure increment — otherwise the next line is
+                # swallowed as a wrong access-code attempt against stale
+                # state. Shared here (not just in _front_door's own copy of
+                # this check) so the carve-out holds in every mode: LOGON is
+                # reserved and reaches _pending_logon from GAME, NORAD_OPS,
+                # and JOSHUA attachments too, not only the front door.
+                self._pending_logon.pop(session_id, None)
+                return None
             # The access code is arbitrary text: catch it before the attached
             # program does, or a game eats the operator's clearance code.
             return await self._logon_code(session_id, raw)
@@ -203,20 +213,19 @@ class Router:
         NORAD terminal, gets past it. Reserved words do not work here — E01
         requires LIST GAMES to be refused without leaking the catalog.
         """
+        # Checked first so a pending access-code prompt is abandoned (not
+        # matched as the code) before the bare-JOSHUA branch below fires;
+        # _logon_line owns that carve-out so every mode shares one copy of it.
+        logon = await self._logon_line(session_id, raw, upper)
+        if logon is not None:
+            return logon
         if upper in ("JOSHUA", "LOGON JOSHUA"):
             self._attach[session_id] = Attachment(mode=JOSHUA)
             self._authenticated.add(session_id)
-            # The backdoor abandons any in-flight operator logon prompt with no
-            # failure increment — otherwise the next command is swallowed as a
-            # wrong access-code attempt against a stale state.
-            self._pending_logon.pop(session_id, None)
             self._joshua_history.setdefault(session_id, []).append(
                 {"role": "assistant", "content": BACKDOOR_GREETING})
             return RouteResult(text=BACKDOOR_GREETING, route="bridge",
                                detail={"backdoor": True})
-        logon = await self._logon_line(session_id, raw, upper)
-        if logon is not None:
-            return logon
         # HELP GAMES is a catalog request, not a plea for help. At the front
         # door it gets the rejection like LIST GAMES does — never the softer
         # HELP NOT AVAILABLE, and never the catalog.
