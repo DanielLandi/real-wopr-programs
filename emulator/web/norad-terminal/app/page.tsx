@@ -52,6 +52,7 @@ export default function NoradTerminal() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectLinkRef = useRef<() => void>(() => undefined);
   const promptBuf = useRef("");
+  const handshakeBuf = useRef("");
 
   /** Mint a fresh bridge session for this console. Shared by first mount and
    *  by 404-recovery after a bridge restart wipes the in-memory session store.
@@ -101,13 +102,22 @@ export default function NoradTerminal() {
     if (e.type !== "frame") return;
     const f = e.frame;
     if (f.kind === "handshake") {
-      if (f.eom && f.payload.includes("CONNECTED")) {
+      // Handshake payloads may arrive chunked; reassemble per message before
+      // testing its content — inert at leased-9600's wide quantum, but
+      // COMMS_BAUD can override any profile, and a test against a single
+      // frame's payload would only ever see the last quantum (the same class
+      // of bug the prompt frame had, fixed in home-terminal).
+      handshakeBuf.current += f.payload;
+      if (!f.eom) return;
+      const msg = handshakeBuf.current;
+      handshakeBuf.current = "";
+      if (msg.includes("CONNECTED")) {
         // A live handshake means the (re)connect — including a post-restart
         // re-mint — took. Clear both retry budgets so future faults start fresh.
         reconnects.current = 0;
         recoveries.current = 0;
         setPhase("connected");
-      } else if (f.eom && (f.payload.startsWith("NO_CARRIER") || f.payload.startsWith("BUSY"))) {
+      } else if (msg.startsWith("NO_CARRIER") || msg.startsWith("BUSY")) {
         // Carrier didn't come up on this (re)connect. The comms layer keeps
         // the line open and waits for a control DIAL retry (comms-protocol
         // §4); without one the console would sit at RESYNC forever.
@@ -144,6 +154,13 @@ export default function NoradTerminal() {
   const connectLink = useCallback(() => {
     if (!sessionRef.current || !tokenRef.current || disposed.current) return;
     link.current?.hangup();
+    // A line drop between a prompt's or handshake's first and last chunk on
+    // the old link strands a fragment that would otherwise prefix the new
+    // link's first one (self-correcting on the next turn, but wrong until
+    // then — and here a leaked prefix could make a later handshake's
+    // includes("CONNECTED") match early or not at all).
+    promptBuf.current = "";
+    handshakeBuf.current = "";
     const l = new WoprLink({
       url: endpointFromQuery("link", process.env.NEXT_PUBLIC_COMMS_URL),
       surface: "norad-terminal",

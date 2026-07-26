@@ -244,8 +244,14 @@ export default function HomeTerminal() {
       return;
     }
     setPhase("dialing");
-    // A fresh dial clears any pending carrier-loss notice from a prior line.
+    // A fresh dial clears any pending carrier-loss notice from a prior line,
+    // and any prompt or handshake fragment stranded by a drop between a
+    // message's first and last chunk on the old line — otherwise it
+    // prefixes the new line's first one (self-correcting on the next turn,
+    // but wrong until then).
     sawNoCarrierFrame.current = false;
+    promptBuf.current = "";
+    handshakeBuf.current = "";
     voiceLine.current = "";
     voice.current?.cancel();
     appendText(`\nDIALING ${target ? target.name : "UNKNOWN"}\n`);
