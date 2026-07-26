@@ -43,6 +43,23 @@ function roomCodeFromLocation(): { code?: string; malformed?: string } {
   return valid ? { code } : { malformed: code.slice(0, 24) };
 }
 
+/** `?joshua=` — which reconstruction of Joshua should answer this session.
+ *
+ *  An experiment parameter, set before the run by whoever is running it, in the
+ *  same layer as ?room= and ?link=. Deliberately NOT a prompt, a menu or a
+ *  console verb: this terminal is a 1983 machine, and a processor selector in
+ *  its grammar would be a modern concept living inside the period device.
+ *
+ *  Not validated here — see sessionBody(). An exchange that cannot serve the
+ *  named processor refuses the session, and the reason is logged to the browser
+ *  console where a developer passing this parameter will look. */
+function joshuaFromLocation(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const raw = new URLSearchParams(window.location.search).get("joshua");
+  const name = raw?.trim().toLowerCase();
+  return name ? name.slice(0, 32) : undefined;
+}
+
 type Phase = "idle" | "scanning" | "dialing" | "connected" | "no-carrier";
 
 const BOOT_TEXT = `IMSAI 8080  SELF TEST OK
@@ -204,7 +221,14 @@ export default function HomeTerminal() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
         });
-        if (!res.ok) throw new Error(String(res.status));
+        if (!res.ok) {
+          // The terminal can only answer NO CARRIER — it has no 1983 vocabulary
+          // for "this exchange cannot serve ?joshua=claude". The bridge's reason
+          // goes to the browser console instead, which is where someone passing
+          // that parameter is already looking.
+          console.warn("[wopr] session refused", res.status, await res.text());
+          throw new Error(String(res.status));
+        }
         return (await res.json()) as { session_id: string; token: string };
       };
       try {
@@ -304,7 +328,7 @@ export default function HomeTerminal() {
       const apiBase = exchange?.api ?? process.env.NEXT_PUBLIC_API_URL ?? "";
       const s = await mintSession(
         apiBase,
-        sessionBody("home-terminal", room.code, null),
+        sessionBody("home-terminal", room.code, null, joshuaFromLocation()),
         target,
       );
       if (!s) {

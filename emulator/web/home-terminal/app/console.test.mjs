@@ -211,3 +211,32 @@ test("sessionBody omits room_code when there is no room", () => {
     system: "airline",
   });
 });
+
+test("sessionBody carries ?joshua= for an exchange dial", () => {
+  assert.deepEqual(sessionBody("home-terminal", undefined, null, "claude"), {
+    surface: "home-terminal",
+    joshua: "claude",
+  });
+  assert.deepEqual(sessionBody("home-terminal", "UXBB6B", null, "lisp"), {
+    surface: "home-terminal",
+    room_code: "UXBB6B",
+    joshua: "lisp",
+  });
+});
+
+test("sessionBody omits joshua for a SYSTEM/1 dial — no Joshua is reachable there", () => {
+  assert.deepEqual(sessionBody("home-terminal", undefined, "airline", "claude"), {
+    surface: "home-terminal",
+    system: "airline",
+  });
+});
+
+test("sessionBody omits joshua when none was asked for", () => {
+  for (const value of [undefined, ""]) {
+    assert.equal("joshua" in sessionBody("home-terminal", undefined, null, value), false);
+  }
+});
+
+test("sessionBody does not vet the processor name — the exchange owns that list", () => {
+  assert.equal(sessionBody("home-terminal", undefined, null, "nonsense").joshua, "nonsense");
+});

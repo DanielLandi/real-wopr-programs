@@ -42,7 +42,7 @@ def test_health(client):
 
 def test_create_session_returns_token_and_link(client):
     body = make_session(client)
-    assert set(body) == {"session_id", "token", "link_profile", "room_code", "system"}
+    assert set(body) == {"session_id", "token", "link_profile", "room_code", "system", "joshua"}
     assert body["link_profile"] == "dialup-300"
     assert body["room_code"] is None
     assert body["system"] is None

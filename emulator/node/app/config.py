@@ -78,6 +78,11 @@ class Settings:
     joshua_max_tokens: int = field(default_factory=lambda: int(os.environ.get("JOSHUA_MAX_TOKENS", "300")))
     joshua_timeout_s: float = field(default_factory=lambda: float(os.environ.get("JOSHUA_TIMEOUT_S", "15")))
     joshua_session_cap: int = field(default_factory=lambda: int(os.environ.get("JOSHUA_SESSION_CAP", "50")))
+    # D5 spend ceiling for the metered engine: calls per UTC day across the
+    # WHOLE exchange, where joshua_session_cap is per session. See app/budget.py.
+    joshua_claude_daily_calls: int = field(
+        default_factory=lambda: int(os.environ.get("JOSHUA_CLAUDE_DAILY_CALLS", "500"))
+    )
 
     # CORS (D3): single public origin in prod, localhost dev ports.
     cors_origins: tuple[str, ...] = field(
