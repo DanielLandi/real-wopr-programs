@@ -15,8 +15,8 @@ from app.attachment import FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from app.games import load_catalog
 from app.joshua import ScriptedJoshua
 from app.operators import Operator
-from app.router import (Router, LOGON_REJECTION, HELP_NOT_AVAILABLE,
-                        UNRECOGNIZED_DIRECTIVE)
+from app.router import (Router, ACCESS_CODE_PROMPT, LOGON_REJECTION,
+                        HELP_NOT_AVAILABLE, UNRECOGNIZED_DIRECTIVE)
 from app.runner import CoreRunner, RunnerConfig
 from app.store import MemoryStore
 
@@ -365,6 +365,54 @@ def test_the_backdoor_reaches_joshua_from_the_norad_console():
         result = await router.handle(session.id, "JOSHUA")
         assert "GREETINGS PROFESSOR FALKEN." in result.text
         assert router.attachment(session.id).mode == JOSHUA
+
+    asyncio.run(flow())
+
+
+def test_the_backdoor_first_does_not_bar_the_operator_tier():
+    # LOGON used to be handled only inside the front door, so JOSHUA before a
+    # logon was a one-way door: the operator tier stayed unreachable for the
+    # life of the session. Every other logon test starts from a fresh front
+    # door, which is why nothing caught it.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "JOSHUA")
+        assert router.attachment(session.id).mode == JOSHUA
+        assert (await router.handle(session.id, "LOGON CRYSTAL")).text == ACCESS_CODE_PROMPT
+        result = await router.handle(session.id, "ANVIL")
+        assert result.text.startswith("CLEARANCE ACCEPTED - CRYSTAL LEVEL 2")
+        assert router.attachment(session.id).mode == NORAD_OPS
+        assert result.prompt == "[NORAD]>"
+
+    asyncio.run(flow())
+
+
+def test_an_operator_who_takes_the_backdoor_can_log_back_on():
+    # api-contract §4.6 offers the backdoor as the way for an operator to play.
+    # With no LOGON out of Joshua, SET DEFCON 3 became conversation and a
+    # clearance-gated capability degraded silently to chat.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        await router.handle(session.id, "JOSHUA")
+        assert router.attachment(session.id).mode == JOSHUA
+        # Attached to Joshua, an instrument is just something said to Joshua.
+        assert (await router.handle(session.id, "SITREP")).route == "joshua"
+
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, "SITREP")
+        assert result.route == "bridge"
+        assert "SITREP CRYSTAL" in result.text
 
     asyncio.run(flow())
 

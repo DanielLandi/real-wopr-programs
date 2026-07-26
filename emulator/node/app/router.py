@@ -43,16 +43,18 @@ class RouteResult:
 
 
 class Router:
-    # Words that always mean the monitor, in every mode. Six literals, five
-    # distinct commands — HELP GAMES is an alias for LIST GAMES, not a sixth
+    # Words that always mean the monitor, in every mode. Seven literals, six
+    # distinct commands — HELP GAMES is an alias for LIST GAMES, not a seventh
     # one. The objection this design answers is that *Joshua's* vocabulary
-    # should not pull you out of a game, and five commands do not. LIST GAMES
+    # should not pull you out of a game, and six commands do not. LIST GAMES
     # and NEW are required by the evals — E03 asserts the catalog in exact
-    # order on both Joshua engines, so Joshua cannot own that answer. NEW is
-    # listed bare because that is the command being reserved, but it always
-    # takes an argument (NEW TICTACTOE); _reserved matches the "NEW " prefix,
-    # never the bare word alone.
-    RESERVED = frozenset({"LIST GAMES", "HELP GAMES", "NEW", "QUIT", "STATUS", "HELP"})
+    # order on both Joshua engines, so Joshua cannot own that answer. NEW and
+    # LOGON are listed bare because that is the command being reserved, but
+    # both take an argument (NEW TICTACTOE, LOGON CRYSTAL); _logon_line and
+    # _reserved match the prefix, never the bare word alone — except a bare
+    # LOGON, which is a rejection rather than a fall-through.
+    RESERVED = frozenset({"LIST GAMES", "HELP GAMES", "NEW", "QUIT", "STATUS",
+                          "HELP", "LOGON"})
 
     def __init__(self, runner: CoreRunner, store: Store, joshua: Joshua,
                  catalog: dict[str, Game], joshua_session_cap: int = 50,
@@ -110,12 +112,6 @@ class Router:
         resync reconnects the same session and must not be re-greeted."""
         return session_id in self._authenticated
 
-    async def is_operator(self, session_id: str) -> bool:
-        """True once the session completed the roster logon (operator tier)."""
-        session = await self.store.get_session(session_id)
-        return (session is not None and session.surface == "norad-terminal"
-                and session.user_id is not None and session.user_id in self.operators)
-
     async def _logon(self, session_id: str, upper: str) -> RouteResult:
         session = await self.store.get_session(session_id)
         callsign = upper[6:].strip() if upper.startswith("LOGON ") else ""
@@ -129,6 +125,32 @@ class Router:
         return RouteResult(text=ACCESS_CODE_PROMPT, route="bridge",
                            detail={"logon": "pending"})
 
+    async def is_operator(self, session_id: str) -> bool:
+        """True once the session completed the roster logon (operator tier)."""
+        session = await self.store.get_session(session_id)
+        return (session is not None and session.surface == "norad-terminal"
+                and session.user_id is not None and session.user_id in self.operators)
+
+    async def _logon_line(self, session_id: str, raw: str,
+                          upper: str) -> RouteResult | None:
+        """The roster logon, from wherever the session happens to be.
+
+        A logon changes what the terminal is attached to, which is precisely
+        what makes a word reserved. api-contract.md §4.6 documents the exchange
+        unconditionally and offers the backdoor as the way for an operator to
+        play — so an operator who takes it has to be able to log back on, and a
+        NORAD user who tried JOSHUA first has to be able to reach the console at
+        all. Returns None when the line is no part of a logon.
+        """
+        if session_id in self._pending_logon:
+            # The access code is arbitrary text: catch it before the attached
+            # program does, or a game eats the operator's clearance code.
+            return await self._logon_code(session_id, raw)
+        if upper == "LOGON" or (upper.startswith("LOGON ") and upper != "LOGON JOSHUA"):
+            # LOGON JOSHUA is the backdoor, which each mode answers itself.
+            return await self._logon(session_id, upper)
+        return None
+
     async def _logon_code(self, session_id: str, raw: str) -> RouteResult:
         callsign = self._pending_logon.pop(session_id)
         op = self.operators[callsign]
@@ -139,6 +161,11 @@ class Router:
         await self.store.set_operator(session_id, callsign, op.level)
         session = await self.store.get_session(session_id)
         defcon = session.defcon if session else 5
+        # Clearance replaces whatever the terminal was on, rather than layering
+        # over it: this console now *is* the operator's, and an operator who
+        # detaches must land on the console, never in Joshua. A game the session
+        # was attached to keeps running in the store — the console can still
+        # watch it (TRACKS) and end it (QUIT), which is all E11 lets it do.
         self._attach[session_id] = Attachment(mode=NORAD_OPS, parent=NORAD_OPS)
         return RouteResult(
             text=f"CLEARANCE ACCEPTED - {callsign} LEVEL {op.level}\nDEFCON {defcon}. READY.",
@@ -186,10 +213,9 @@ class Router:
                 {"role": "assistant", "content": BACKDOOR_GREETING})
             return RouteResult(text=BACKDOOR_GREETING, route="bridge",
                                detail={"backdoor": True})
-        if session_id in self._pending_logon:
-            return await self._logon_code(session_id, raw)
-        if upper == "LOGON" or upper.startswith("LOGON "):
-            return await self._logon(session_id, upper)
+        logon = await self._logon_line(session_id, raw, upper)
+        if logon is not None:
+            return logon
         # HELP GAMES is a catalog request, not a plea for help. At the front
         # door it gets the rejection like LIST GAMES does — never the softer
         # HELP NOT AVAILABLE, and never the catalog.
@@ -198,13 +224,16 @@ class Router:
         return RouteResult(text=LOGON_REJECTION, route="bridge",
                            detail={"authenticated": False})
 
-    async def _reserved(self, session_id: str, upper: str,
+    async def _reserved(self, session_id: str, raw: str, upper: str,
                         att: Attachment) -> RouteResult | None:
         """Monitor commands, which outrank whatever the session is attached to.
 
         Returns None when the line is not one — the caller then hands it to the
         attached program untouched.
         """
+        logon = await self._logon_line(session_id, raw, upper)
+        if logon is not None:
+            return logon
         if upper in ("LIST GAMES", "HELP GAMES"):
             return RouteResult(text=list_games_text(self.catalog), route="bridge")
         if upper == "HELP" or upper.startswith("HELP "):
@@ -235,7 +264,7 @@ class Router:
         if att.mode == FRONT_DOOR:
             return await self._front_door(session_id, raw, upper)
 
-        reserved = await self._reserved(session_id, upper, att)
+        reserved = await self._reserved(session_id, raw, upper, att)
         if reserved is not None:
             return reserved
 
