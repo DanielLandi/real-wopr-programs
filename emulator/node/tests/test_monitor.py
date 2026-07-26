@@ -15,7 +15,8 @@ from app.attachment import FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from app.games import load_catalog
 from app.joshua import ScriptedJoshua
 from app.operators import Operator
-from app.router import (Router, ACCESS_CODE_PROMPT, IMPROPER_REQUEST,
+from app.router import (Router, ACCESS_CODE_PROMPT, CEASE_RANDOM_FUNCTION,
+                        CHANGES_LOCKED_OUT, IMPROPER_REQUEST,
                         LOGON_REJECTION, HELP_NOT_AVAILABLE,
                         UNRECOGNIZED_DIRECTIVE)
 from app.runner import CoreError, CoreRunner, RunnerConfig
@@ -528,6 +529,48 @@ def test_operator_commands_answer_in_norad_mode():
         await router.handle(session.id, "ANVIL")
         result = await router.handle(session.id, "SITREP")
         assert "SITREP CRYSTAL" in result.text
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_cease_random_function_is_locked_out_while_a_simulation_runs():
+    # #116. The console reads the room's live game, not one of its own — the
+    # film had tic-tac-toe on the screen while the launch routine ran, so the
+    # displayed game is not what decides this.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        room = await store.create_room("AAAAAA")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        await router.handle(player.id, "JOSHUA")
+        await router.handle(player.id, "NEW TICTACTOE")
+
+        session = await store.create_session("norad-terminal", "leased-9600", None, room.code)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, CEASE_RANDOM_FUNCTION)
+        assert result.text == CHANGES_LOCKED_OUT
+        assert router.attachment(session.id).mode == NORAD_OPS
+
+    asyncio.run(flow())
+
+
+def test_cease_random_function_is_meaningless_with_nothing_running():
+    # Refusing to stop something that is not running would be nonsense, so it
+    # is just another directive the console does not know.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, CEASE_RANDOM_FUNCTION)
+        assert result.text == UNRECOGNIZED_DIRECTIVE
 
     asyncio.run(flow())
 

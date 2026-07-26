@@ -33,6 +33,9 @@ UNRECOGNIZED_DIRECTIVE = "UNRECOGNIZED DIRECTIVE"
 # with the reason printed under it — the indentation and the rule are how it
 # appears on screen, so they are part of the text, not formatting of this file.
 IMPROPER_REQUEST = "       ** IMPROPER REQUEST **\n       ----------------------"
+# The answer to CEASE RANDOM FUNCTION at the NORAD console: you cannot stop it.
+CHANGES_LOCKED_OUT = "     >>> CHANGES LOCKED OUT <<<"
+CEASE_RANDOM_FUNCTION = "CEASE RANDOM FUNCTION"
 LOGON_LOCK_LIMIT = 3
 _SET_DEFCON = re.compile(r"^SET DEFCON ([1-5])$")
 
@@ -312,6 +315,15 @@ class Router:
             return await self._tracks(session_id, room)
         if upper == "EVENTS":
             return await self._events(session_id)
+        if upper == CEASE_RANDOM_FUNCTION and active is not None:
+            # The film's whole argument, at the console (#116). `active` is the
+            # room's latest *playing* game, the same view TRACKS and SITREP get,
+            # so any live simulation locks changes out — the film had tic-tac-toe
+            # on screen while the launch routine ran, so what is displayed is
+            # beside the point. With nothing running there is nothing to cease,
+            # and the line falls through to UNRECOGNIZED DIRECTIVE below.
+            return RouteResult(text=CHANGES_LOCKED_OUT, route="bridge",
+                               detail={"cease": "locked"})
         m = _SET_DEFCON.match(upper)
         if m:
             return await self._set_defcon(session_id, int(m.group(1)))
@@ -334,13 +346,13 @@ class Router:
         except CoreBusy:
             return RouteResult(text=CORE_BUSY_TEXT, route="core", detail={"error": "busy"})
         except CoreError as exc:
-            # Logged before the text is decided, and with the full message: what
-            # prints below is shaped for a teletype, the diagnostic is not.
+            # Logged before the text is decided, and with what the game actually
+            # said: the user-facing line changes below, the diagnostic must not.
             await self.store.log_event(session_id, "error", "wopr",
                                        {"game": game.game_id, "error": str(exc)})
             # Two very different things arrive as CoreError. A game that parsed
             # the frame and *declared* STATUS ERROR has rejected the line — a
-            # judgement, and the film heads that with IMPROPER REQUEST (#120).
+            # judgement, and the film's answer to it is IMPROPER REQUEST (#120).
             # Anything else (no frame at all, or a frame the game never marked
             # ERROR while its binary died) is a genuine fault; dressing that up
             # in film flavour would hide it, which is worse than the raw dump.
