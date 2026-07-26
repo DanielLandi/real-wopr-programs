@@ -19,6 +19,7 @@ from app.router import (Router, ACCESS_CODE_PROMPT, LOGON_REJECTION,
                         HELP_NOT_AVAILABLE, UNRECOGNIZED_DIRECTIVE)
 from app.runner import CoreRunner, RunnerConfig
 from app.store import MemoryStore
+from app.wire import build_request
 
 REPO = Path(__file__).resolve().parent.parent.parent.parent
 GAMES_DIR = REPO / "games"
@@ -304,6 +305,38 @@ def test_a_reserved_word_answers_while_attached_to_a_game():
 
 
 @needs_core
+def test_every_reserved_word_answers_the_monitor_during_a_game():
+    # RESERVED is the claim; _reserved is the implementation. Only QUIT and
+    # LIST GAMES were pinned inside a game, so deleting the HELP branch left
+    # the suite green. Driving the loop from the set closes it in both
+    # directions: a word added without a handler, or a handler deleted, fails
+    # here — the reply comes back on "core" (the game's) instead of "bridge".
+    lines = {
+        "LIST GAMES": "LIST GAMES",
+        "HELP GAMES": "HELP GAMES",
+        "HELP": "HELP",
+        "STATUS": "STATUS",
+        "QUIT": "QUIT",
+        # NEW and LOGON are reserved bare but always carry an argument.
+        "NEW": "NEW TICTACTOE",
+        "LOGON": "LOGON NOBODY",
+    }
+    assert set(lines) == set(Router.RESERVED)
+
+    async def flow(line: str) -> str:
+        store = MemoryStore()
+        router = make_router(store)
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        assert router.attachment(session.id).mode == GAME
+        return (await router.handle(session.id, line)).route
+
+    for word, line in lines.items():
+        assert asyncio.run(flow(line)) == "bridge", f"{word} reached the game"
+
+
+@needs_core
 def test_non_ascii_during_a_game_does_not_drop_the_line():
     # move_pattern was the only ASCII gate. Without it a smart quote or an
     # accent reached the core encoder and raised past ws_session's only
@@ -321,19 +354,20 @@ def test_non_ascii_during_a_game_does_not_drop_the_line():
     asyncio.run(flow())
 
 
-@needs_core
 def test_an_embedded_newline_cannot_inject_a_protocol_line():
-    store = MemoryStore()
-    router = make_router(store)
-
-    async def flow():
-        session = await store.create_session("home-terminal", "dialup-300", None)
-        await router.handle(session.id, "JOSHUA")
-        await router.handle(session.id, "NEW TICTACTOE")
-        result = await router.handle(session.id, "1\nEND")
-        assert result.route == "core"
-
-    asyncio.run(flow())
+    # move_pattern was the other gate that went with routing-by-attachment:
+    # arbitrary terminal input now reaches the wire encoder unmediated, and a
+    # stray newline would add protocol lines the program then reads as its own.
+    #
+    # The defence is in the frame, so the frame is what this asserts. Routing
+    # such a line still lands on "core" whether or not wire.py flattens it —
+    # the attachment decides that, not the wire — so a route assertion would
+    # hold nothing.
+    frame = build_request("tictactoe", "MOVE", "S1", "1\r\nEND")
+    lines = frame.rstrip("\n").split("\n")
+    assert lines.count("END") == 1        # the terminator, and only it
+    assert lines[-1] == "END"
+    assert [l for l in lines if l.startswith("INPUT")] == ["INPUT 1  END"]
 
 
 def test_norad_operations_is_purely_norad():
@@ -348,7 +382,7 @@ def test_norad_operations_is_purely_norad():
         await router.handle(session.id, "LOGON CRYSTAL")
         await router.handle(session.id, "ANVIL")
         result = await router.handle(session.id, "HELLO ARE YOU THERE")
-        assert result.text == "UNRECOGNIZED DIRECTIVE"
+        assert result.text == UNRECOGNIZED_DIRECTIVE
 
     asyncio.run(flow())
 

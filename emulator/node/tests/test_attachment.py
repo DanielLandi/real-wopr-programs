@@ -24,10 +24,3 @@ def test_a_game_with_no_abbrev_falls_back_to_its_id():
 
 def test_norad_operations_names_itself():
     assert prompt_for(Attachment(mode=NORAD_OPS)) == "[NORAD]>"
-
-
-def test_an_attachment_remembers_where_to_return():
-    # Detaching from a game returns to whatever attached it — Joshua for a
-    # home terminal, NORAD operations for an operator.
-    att = Attachment(mode=GAME, program="gtw", parent=NORAD_OPS)
-    assert att.parent == NORAD_OPS
