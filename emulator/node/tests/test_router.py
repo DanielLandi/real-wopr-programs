@@ -1,26 +1,24 @@
-"""Routing tests (api-contract.md §4.1, §7): moves -> core, control verbs ->
-bridge, chat -> Joshua — deterministically, with Joshua stubbed (the scripted
-engine IS a deterministic stub)."""
+"""Destination tests: what each route actually does once the monitor has
+chosen it. Mode and attachment behaviour lives in test_monitor.py.
+
+Joshua is stubbed throughout — the scripted engine IS a deterministic stub."""
 
 import asyncio
 from pathlib import Path
 
 import pytest
 
+from app.attachment import NORAD_OPS
 from app.games import load_catalog, list_games_text
 from app.joshua import ScriptedJoshua
 from app.rooms import RoomLocks, room_key
-from app.router import Router, build_move_patterns, LOGON_REJECTION, CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT
+from app.router import Router, LOGON_REJECTION, CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT
 from app.runner import CoreBusy, CoreRunner, CoreTimeout, RunnerConfig
 from app.store import MemoryStore
 
 REPO = Path(__file__).resolve().parent.parent.parent.parent
 REAL_BIN = REPO / "games"
 GAMES_DIR = REPO / "games"
-
-# Move patterns now come from each game's manifest (self-describing packs), not
-# a hardcoded dict — build them from the imported catalog to assert on them.
-MOVE_PATTERNS = build_move_patterns(load_catalog(GAMES_DIR))
 
 needs_core = pytest.mark.skipif(
     not (REAL_BIN / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
@@ -376,7 +374,37 @@ def test_quit_terminates_the_active_game():
 
 @needs_core
 def test_room_terminals_share_one_game(router_with_memory_store):
-    """Terminal B's digit move applies to the tictactoe game terminal A started."""
+    """Terminal B's digit move applies to the tictactoe game terminal A started,
+    once B has joined it with NEW — the join gesture the rooms design already
+    specifies ("typing NEW GTW when the room already has a running simulation
+    joins it")."""
+    router, store = router_with_memory_store
+
+    async def flow():
+        room = await store.create_room("AAAAAA")
+        sa = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        sb = await store.create_session("norad-terminal", "leased-9600", None, room.code)
+        await router.handle(sa.id, "JOSHUA")
+        await router.handle(sb.id, "JOSHUA")
+        await router.handle(sa.id, "NEW tictactoe")
+        joined = await router.handle(sb.id, "NEW tictactoe")
+        assert joined.detail.get("attached") is True
+        before = await store.get_latest_game("tictactoe", room.code)
+        moved = await router.handle(sb.id, "5")
+        assert moved.route == "core"
+        after = await store.get_latest_game("tictactoe", room.code)
+        assert after.turn > before.turn
+        assert after.session_id == sa.id  # ownership stays with the creator
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_room_terminals_share_one_game_no_longer_without_joining(router_with_memory_store):
+    """Deliberate change: a terminal in the room that never joined is still
+    attached to Joshua, so its move-shaped line is Joshua's, not the game's.
+    Routing is by attachment now, never by inspecting the line (E1/E2) — the
+    move pattern that used to claim this line for the room's game is gone."""
     router, store = router_with_memory_store
 
     async def flow():
@@ -387,10 +415,15 @@ def test_room_terminals_share_one_game(router_with_memory_store):
         await router.handle(sb.id, "JOSHUA")
         await router.handle(sa.id, "NEW tictactoe")
         before = await store.get_latest_game("tictactoe", room.code)
-        await router.handle(sb.id, "5")
+        # Copied, not aliased: an unmoved MemoryStore hands back the very same
+        # GameState object, and comparing it with itself would assert nothing.
+        before_turn, before_state = before.turn, before.state
+        stray = await router.handle(sb.id, "5")
+        assert stray.route == "joshua"
         after = await store.get_latest_game("tictactoe", room.code)
-        assert after.turn > before.turn
-        assert after.session_id == sa.id  # ownership stays with the creator
+        assert after.turn == before_turn  # A's game did not move
+        assert after.state == before_state
+        assert after.state.splitlines()[0] == "........."  # board still empty
 
     asyncio.run(flow())
 
@@ -433,9 +466,9 @@ def test_roomless_sessions_stay_isolated(router_with_memory_store):
 
 @needs_core
 def test_move_does_not_resurrect_game_that_ended_while_lock_was_held():
-    """If the room's game ends between the pre-lock read and lock acquisition,
-    the queued move must NOT apply to the stale snapshot (which would upsert a
-    finished game back to PLAYING) — it falls through to normal handling."""
+    """If the room's game ends while a move is parked on the room lock, the
+    move must NOT apply to the state it was queued against (which would upsert
+    a finished game back to PLAYING)."""
     store = MemoryStore()
     router = make_router(store, locks=SignalingRoomLocks())
 
@@ -446,9 +479,10 @@ def test_move_does_not_resurrect_game_that_ended_while_lock_was_held():
         await router.handle(sa.id, "JOSHUA")
         await router.handle(sb.id, "JOSHUA")
         await router.handle(sa.id, "NEW tictactoe")
+        await router.handle(sb.id, "NEW tictactoe")  # B joins the room's game
 
-        # Hold the room lock so B's move does its pre-lock read (sees PLAYING)
-        # then parks on the lock while we end the game underneath it.
+        # Hold the room lock so B's move parks on it while we end the game
+        # underneath it.
         lock = router.locks.lock(room_key(room.code))
         await lock.acquire()
         move_task = asyncio.create_task(router.handle(sb.id, "5"))
@@ -461,8 +495,14 @@ def test_move_does_not_resurrect_game_that_ended_while_lock_was_held():
         lock.release()
 
         result = await move_task
-        assert result.route == "joshua"  # normal non-game route, not a core move
+        # Deliberate change: the line no longer falls through to Joshua when
+        # there is no game to move. The terminal is attached, so the monitor
+        # answers for the game that vanished and detaches it.
+        assert result.route == "bridge"
+        assert result.text == "NO GAME IN PROGRESS."
         assert await store.get_latest_game(None, room.code) is None  # not resurrected
+        assert store.games[sa.id].status == "QUIT"  # not flipped back to PLAYING
+        assert store.games[sa.id].turn == 0         # and not advanced by the move
 
     asyncio.run(flow())
 
@@ -586,93 +626,20 @@ def test_joshua_session_cap_defers_in_world():
     asyncio.run(flow())
 
 
-def test_gtw_move_pattern_accepts_map():
-    assert MOVE_PATTERNS["gtw"].match("MAP")
-    assert MOVE_PATTERNS["gtw"].match("map")       # patterns are IGNORECASE
-    assert not MOVE_PATTERNS["gtw"].match("MAPS")  # anchored, no prefix match
-
-
-def test_blackjack_move_pattern():
-    p = MOVE_PATTERNS["blackjack"]
-    for ok in ("DEAL", "HIT", "STAND"):
-        assert p.match(ok)
-    for no in ("HITS", "STAND PAT", "SPLIT", "HELLO"):
-        assert not p.match(no)
-
-
-def test_checkers_move_pattern():
-    p = MOVE_PATTERNS["checkers"]
-    for ok in ("11-15", "18X25", "1X10X19", "26-31"):
-        assert p.match(ok)
-    for no in ("11", "11-", "-15", "11_15", "MOVE 11-15", "A1-B2"):
-        assert not p.match(no)
-
-
-def test_gin_rummy_move_pattern():
-    p = MOVE_PATTERNS["gin-rummy"]
-    for ok in ("DEAL", "DRAW", "TAKE", "DISCARD KH", "KNOCK 9C",
-               "discard th", "KNOCK AS"):
-        assert p.match(ok)
-    for no in ("DISCARD", "KNOCK", "DISCARD 1H", "KNOCK KHX",
-               "TAKE KH", "DRAW 2", "GIN", "STAND PAT"):
-        assert not p.match(no)
-
-
-def test_poker_move_pattern():
-    p = MOVE_PATTERNS["poker"]
-    for ok in ("DEAL", "BET", "CHECK", "CALL", "FOLD", "STAND PAT",
-               "DRAW 1", "DRAW 1 3 5"):
-        assert p.match(ok)
-    for no in ("DRAW", "DRAW 1 2 3 4", "DRAW 6", "RAISE", "STAND"):
-        assert not p.match(no)
-
-
-def test_hearts_move_pattern():
-    p = MOVE_PATTERNS["hearts"]
-    for ok in ("QS", "TH", "2C", "AD", "9S", "qs", "th"):
-        assert p.match(ok)
-    for no in ("10H", "T", "H", "1C", "QX", "QSS", "PLAY QS", "Q S"):
-        assert not p.match(no)
-
-
-def test_falkens_maze_move_pattern():
-    p = MOVE_PATTERNS["falkens-maze"]
-    for ok in ("N", "S", "E", "W", "NORTH", "SOUTH", "EAST", "WEST",
-               "LOOK", "MAP", "north", "look"):
-        assert p.match(ok)
-    for no in ("NE", "UP", "NORTHWEST", "LOOK MAP", "GO NORTH"):
-        assert not p.match(no)
-
-
-def test_every_implemented_game_has_a_move_pattern():
-    """A game manifest without a router pattern is unplayable in-session:
-    LIST GAMES shows it and NEW starts it, but every input falls through
-    to Joshua. Catch the next game PR that forgets the pattern."""
-    from pathlib import Path
-    from app.games import load_catalog
-    games_dir = Path(__file__).resolve().parents[3] / "games"
-    catalog = load_catalog(games_dir)
-    patterns = build_move_patterns(catalog)
-    for game_id, game in catalog.items():
-        if game.status == "implemented":
-            assert game_id in patterns, (
-                f"{game_id} is implemented but declares no move_pattern in its manifest"
-            )
-
-
 from app.operators import parse_roster
 from app.router import ACCESS_CODE_PROMPT, UNRECOGNIZED_DIRECTIVE
 
 ROSTER = parse_roster("NORAD-3:TIGERTEAM:3,NORAD-1:CRYSTALPALACE:1")
 
 
-async def norad_session(store: MemoryStore) -> str:
-    s = await store.create_session("norad-terminal", "leased-9600", None)
+async def norad_session(store: MemoryStore, room: str | None = None) -> str:
+    s = await store.create_session("norad-terminal", "leased-9600", None, room)
     return s.id
 
 
-async def logon_as_operator(router, store, callsign="NORAD-3", code="TIGERTEAM") -> str:
-    sid = await norad_session(store)
+async def logon_as_operator(router, store, callsign="NORAD-3", code="TIGERTEAM",
+                            room: str | None = None) -> str:
+    sid = await norad_session(store, room)
     r = await router.handle(sid, f"LOGON {callsign}")
     assert r.text == ACCESS_CODE_PROMPT
     r = await router.handle(sid, code)
@@ -910,15 +877,28 @@ def test_tracks_without_war_reports_no_active_tracks():
 
 @needs_core
 def test_tracks_with_live_gtw_renders_table():
+    """The film's arrangement: the war runs on someone else's terminal and the
+    NORAD console watches it. The operator console never attaches to a game
+    (spec E11), so the war it reads is the room's, not its own."""
     store = MemoryStore()
     router = make_router(store, operators=ROSTER)
 
     async def flow():
-        sid = await logon_as_operator(router, store)
-        r = await router.handle(sid, "NEW GTW")
+        room = await store.create_room("AAAAAA")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        await logon_as_joshua(router, player.id)
+        r = await router.handle(player.id, "NEW GTW")
         assert "GLOBAL THERMONUCLEAR WAR" in r.text.upper()
+
+        sid = await logon_as_operator(router, store, room=room.code)
         r = await router.handle(sid, "TRACKS")
         assert r.text.startswith("TACTICAL TRACKS  ZULU ")
         assert r.detail.get("game") == "gtw"
+        # Watching cost the console nothing: it is still in NORAD ops, and its
+        # own instruments still answer with the war running.
+        assert router.attachment(sid).mode == NORAD_OPS
+        assert (await router.handle(sid, "SITREP")).text.splitlines()[2] == \
+            "SIMULATION: GTW TURN 0"
+        assert (await router.handle(sid, "SET DEFCON 3")).text == "DEFCON 3 SET"
 
     asyncio.run(flow())

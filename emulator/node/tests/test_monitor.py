@@ -15,7 +15,8 @@ from app.attachment import FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from app.games import load_catalog
 from app.joshua import ScriptedJoshua
 from app.operators import Operator
-from app.router import Router, LOGON_REJECTION, HELP_NOT_AVAILABLE
+from app.router import (Router, LOGON_REJECTION, HELP_NOT_AVAILABLE,
+                        UNRECOGNIZED_DIRECTIVE)
 from app.runner import CoreRunner, RunnerConfig
 from app.store import MemoryStore
 
@@ -217,13 +218,18 @@ def test_a_terminal_status_detaches_without_being_asked():
     asyncio.run(flow())
 
 
-@needs_core
-def test_a_terminal_status_detaches_a_norad_operator_to_norad_not_joshua():
-    # _core_move can detach twice in one turn (WOPR answers a losing move
-    # inside the same turn). A _detach that re-derived parent from a default
-    # would land the second call in JOSHUA even when the game was started
-    # from NORAD ops — exactly what UNRECOGNIZED_DIRECTIVE exists to prevent
-    # for an operator who never used the backdoor.
+def test_a_norad_operator_no_longer_attaches_to_a_game():
+    # Deliberate change, spec E11: the operator console is observational. It
+    # displays a simulation — the film shows tic-tac-toe on the NORAD screen
+    # while an operator types a command and WOPR, not the game, answers — so
+    # NEW is not the console's to give, and falls through to its own refusal.
+    #
+    # This replaces test_a_terminal_status_detaches_a_norad_operator_to_norad_
+    # not_joshua, which walked an operator through a game to its terminal
+    # status. With NEW refused, that test could no longer enter a game at all
+    # and would have passed without ever starting one. What it guarded — the
+    # detach landing back in NORAD rather than Joshua — is now unreachable
+    # state rather than defended behaviour.
     store = MemoryStore()
     ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
     router = make_router(store, operators=ops)
@@ -233,14 +239,12 @@ def test_a_terminal_status_detaches_a_norad_operator_to_norad_not_joshua():
         await router.handle(session.id, "LOGON CRYSTAL")
         await router.handle(session.id, "ANVIL")
         assert router.attachment(session.id).mode == NORAD_OPS
-        await router.handle(session.id, "NEW TICTACTOE")
-        for move in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
-            await router.handle(session.id, move)
-            if router.attachment(session.id).mode != GAME:
-                break
-        else:
-            pytest.fail("tictactoe never reached a terminal status in nine moves")
+        result = await router.handle(session.id, "NEW TICTACTOE")
+        assert result.text == UNRECOGNIZED_DIRECTIVE
         assert router.attachment(session.id).mode == NORAD_OPS
+        assert store.games == {}  # no simulation was started, on any session
+        # The console keeps its own instruments — the point of never attaching.
+        assert "SITREP CRYSTAL" in (await router.handle(session.id, "SITREP")).text
 
     asyncio.run(flow())
 

@@ -93,6 +93,11 @@ class Router:
         inside the same turn, so this runs twice, and a second detach that
         re-derived the parent from a default would strand a NORAD operator in
         Joshua — the one place the film says they must never end up.
+
+        Since E11 the operator console never attaches to a game, so `parent` is
+        JOSHUA on every reachable path today. The carry stays because the rule
+        it encodes — a detach returns where the attach came from — is what has
+        to survive the second call, whatever the parent turns out to be.
         """
         att = self.attachment(session_id)
         self._attach[session_id] = Attachment(mode=att.parent, parent=att.parent)
@@ -203,6 +208,12 @@ class Router:
         if upper == "HELP" or upper.startswith("HELP "):
             return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
         if upper.startswith("NEW "):
+            # The operator console is observational (spec E11): it displays a
+            # simulation, it does not attach to one. Falling through to
+            # _norad_ops gives the console's own refusal rather than a special
+            # case here.
+            if att.mode == NORAD_OPS:
+                return None
             room = await self._session_room(session_id)
             return await self._new_game(session_id, upper[4:].strip().lower(), room)
         if upper == "QUIT":
