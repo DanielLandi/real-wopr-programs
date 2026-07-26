@@ -296,10 +296,15 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
                 await ws.close()
                 return
         elif (session.surface in ("home-terminal", "norad-terminal")
-              and not router.is_authenticated(session_id)
-              and not await router.is_operator(session_id)):
+              and not router.is_authenticated(session_id)):
             # A comms resync reconnects the same session: re-greeting a line
             # that already opened the backdoor would flash a bogus LOGON:.
+            # Both facts consulted here are in-memory, deliberately: the
+            # attachment does not survive a restart either, so after a redeploy
+            # an operator is back at the front door and must be told to log on
+            # again. Adding a store-backed operator check would greet by the
+            # store and answer by memory, and every command would come back
+            # --CONNECTION TERMINATED--.
             # A trunk host's per-exchange banner (BRIDGE_LOGON_BANNER) rides
             # above LOGON:; unset on the main exchange, so it stays bare.
             greeting = "\nLOGON:\n"

@@ -125,12 +125,6 @@ class Router:
         return RouteResult(text=ACCESS_CODE_PROMPT, route="bridge",
                            detail={"logon": "pending"})
 
-    async def is_operator(self, session_id: str) -> bool:
-        """True once the session completed the roster logon (operator tier)."""
-        session = await self.store.get_session(session_id)
-        return (session is not None and session.surface == "norad-terminal"
-                and session.user_id is not None and session.user_id in self.operators)
-
     async def _logon_line(self, session_id: str, raw: str,
                           upper: str) -> RouteResult | None:
         """The roster logon, from wherever the session happens to be.

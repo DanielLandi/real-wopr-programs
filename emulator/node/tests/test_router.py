@@ -653,7 +653,6 @@ def test_operator_logon_happy_path_stamps_session():
 
     async def flow():
         sid = await logon_as_operator(router, store)
-        assert await router.is_operator(sid)
         s = await store.get_session(sid)
         assert s.user_id == "NORAD-3"
         assert await store.get_clearance_level("NORAD-3") == 3
@@ -675,7 +674,7 @@ def test_operator_logon_wrong_code_rejects_and_three_strikes_locks():
         # locked: even the right callsign is now rejected outright
         r = await router.handle(sid, "LOGON NORAD-3")
         assert r.text == LOGON_REJECTION
-        assert not await router.is_operator(sid)
+        assert (await store.get_session(sid)).user_id is None
 
     asyncio.run(flow())
 
