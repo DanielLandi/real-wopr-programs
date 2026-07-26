@@ -94,10 +94,12 @@ class Router:
         re-derived the parent from a default would strand a NORAD operator in
         Joshua — the one place the film says they must never end up.
 
-        Since E11 the operator console never attaches to a game, so `parent` is
-        JOSHUA on every reachable path today. The carry stays because the rule
-        it encodes — a detach returns where the attach came from — is what has
-        to survive the second call, whatever the parent turns out to be.
+        E11 closed the game-attach route into a non-default parent — an
+        operator console never attaches to a game — but it did not make the
+        carry idle. `_logon_code` gives an operator `parent=NORAD_OPS`, and
+        `QUIT` is reserved in every mode, so an operator ending the room's
+        simulation reaches here with no game attachment of their own. Defaulting
+        the parent there drops them into Joshua with every instrument gone.
         """
         att = self.attachment(session_id)
         self._attach[session_id] = Attachment(mode=att.parent, parent=att.parent)

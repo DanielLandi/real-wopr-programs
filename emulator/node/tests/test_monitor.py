@@ -228,8 +228,8 @@ def test_a_norad_operator_no_longer_attaches_to_a_game():
     # not_joshua, which walked an operator through a game to its terminal
     # status. With NEW refused, that test could no longer enter a game at all
     # and would have passed without ever starting one. What it guarded — the
-    # detach landing back in NORAD rather than Joshua — is now unreachable
-    # state rather than defended behaviour.
+    # detach landing back in NORAD rather than Joshua — moved to a path that
+    # E11 leaves open, and is guarded by the QUIT test below.
     store = MemoryStore()
     ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
     router = make_router(store, operators=ops)
@@ -245,6 +245,40 @@ def test_a_norad_operator_no_longer_attaches_to_a_game():
         assert store.games == {}  # no simulation was started, on any session
         # The console keeps its own instruments — the point of never attaching.
         assert "SITREP CRYSTAL" in (await router.handle(session.id, "SITREP")).text
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_quit_leaves_a_norad_operator_in_norad_ops_not_joshua():
+    # The behavioural guard on Attachment.parent. E11 closed the game-attach
+    # route into a non-default parent, but not this one: _logon_code gives an
+    # operator parent=NORAD_OPS, and QUIT is reserved in every mode, so an
+    # operator who ends the room's simulation reaches _detach with no game
+    # attachment of their own. If _detach defaulted the parent there, the
+    # operator would land in Joshua — the one place the film says NORAD staff
+    # who never used the backdoor must never end up — and every instrument
+    # would answer as conversation instead.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        room = await store.create_room("AAAAAA")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        await router.handle(player.id, "JOSHUA")
+        await router.handle(player.id, "NEW TICTACTOE")
+
+        session = await store.create_session("norad-terminal", "leased-9600", None, room.code)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, "QUIT")
+        assert result.text == "TICTACTOE TERMINATED."
+        assert router.attachment(session.id).mode == NORAD_OPS
+        assert result.prompt == "[NORAD]>"
+        sitrep = await router.handle(session.id, "SITREP")
+        assert sitrep.route == "bridge"
+        assert "SITREP CRYSTAL" in sitrep.text
 
     asyncio.run(flow())
 

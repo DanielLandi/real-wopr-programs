@@ -751,7 +751,9 @@ def test_backdoor_during_pending_logon_clears_pending_state():
     asyncio.run(flow())
 
 
-def test_operator_without_backdoor_can_use_game_verbs():
+def test_operator_without_backdoor_can_list_games():
+    # Narrowed from "…can_use_game_verbs": E11 took NEW off the operator
+    # console, and LIST GAMES is the only game verb this test ever exercised.
     store = MemoryStore()
     router = make_router(store, operators=ROSTER)
 
