@@ -84,6 +84,7 @@ export default function HomeTerminal() {
   // so the WS close that follows it does not print a second NO CARRIER.
   const sawNoCarrierFrame = useRef(false);
   const handshakeBuf = useRef("");
+  const promptBuf = useRef("");
   const sweepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modem = useRef<ModemAudio | null>(null);
   // S10 — the machine speaks: completed output lines are fed to Web Speech
@@ -153,7 +154,14 @@ export default function HomeTerminal() {
     }
     if (f.kind === "prompt") {
       // The mode indicator lives on the input line, not in the transcript.
-      setPrompt(f.payload || ">");
+      // Reassemble first: output frames survive chunking because they append,
+      // but a prompt REPLACES, so at dialup-300's two-byte quantum "[TTT]>"
+      // would land as "]>" — the last quantum only.
+      promptBuf.current += f.payload;
+      if (!f.eom) return;
+      const p = promptBuf.current;
+      promptBuf.current = "";
+      setPrompt(p || ">");
       return;
     }
     if (f.kind === "output") {

@@ -51,6 +51,7 @@ export default function NoradTerminal() {
   const pollStopped = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectLinkRef = useRef<() => void>(() => undefined);
+  const promptBuf = useRef("");
 
   /** Mint a fresh bridge session for this console. Shared by first mount and
    *  by 404-recovery after a bridge restart wipes the in-memory session store.
@@ -127,7 +128,14 @@ export default function NoradTerminal() {
     }
     if (f.kind === "prompt") {
       // The mode indicator lives on the input line, not in the transcript.
-      setPrompt(f.payload || "WOPR>");
+      // Reassemble first: a prompt REPLACES where output appends, so a chunked
+      // "[NORAD]>" would land as its last quantum alone. leased-9600's quantum
+      // is wide enough today, but COMMS_BAUD overrides every profile.
+      promptBuf.current += f.payload;
+      if (!f.eom) return;
+      const p = promptBuf.current;
+      promptBuf.current = "";
+      setPrompt(p || "WOPR>");
       return;
     }
     if (f.kind === "output") setText((t) => t + f.payload);

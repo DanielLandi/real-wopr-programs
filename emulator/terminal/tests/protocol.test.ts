@@ -149,6 +149,48 @@ test("dial: a prompt frame updates the prompt without printing as text", async (
   await relay.close();
 });
 
+/** The frames a dialup-300 link really delivers for one message.
+ *
+ * The relay emits ~1/15 s of line rate per envelope, so at 300 baud / 10 bits
+ * per char the quantum is floor(300/10/15) = 2 bytes, and only the last frame
+ * carries eom (comms-protocol.md §5). The relay's own suite pins that the real
+ * shaper still splits a prompt this way; this is the consumer half.
+ */
+function shapeAt300(kind: string, payload: string): string[] {
+  const quantum = Math.floor(300 / 10 / 15);
+  const frames: string[] = [];
+  for (let i = 0; i < payload.length; i += quantum) {
+    const slice = payload.slice(i, i + quantum);
+    frames.push(JSON.stringify({
+      v: 1, session: "t", seq: frames.length, kind,
+      link: "dialup-300", payload: slice, eom: i + quantum >= payload.length,
+    }));
+  }
+  return frames;
+}
+
+test("dial: a prompt chunked by a 300-baud line arrives whole", async () => {
+  // The home terminal's own profile. A handler that replaced on every frame
+  // instead of reassembling would show the last quantum alone — "]>".
+  const relay = await fakeRelay((ws) => {
+    for (const f of shapeAt300("prompt", "[TTT]>")) ws.send(f);
+    ws.send(envelope("YOUR MOVE"));
+  });
+  const seen: string[] = [];
+  const line = await dial(relay.url, "(206) 555-0142", {
+    onPrompt: (p) => seen.push(p),
+  });
+  for await (const chunk of line.output) {
+    assert.equal(chunk, "YOUR MOVE");
+    break;
+  }
+  assert.equal(line.prompt(), "[TTT]>");
+  // One reassembled message, not one callback per quantum.
+  assert.deepEqual(seen, ["[TTT]>"]);
+  line.hangUp();
+  await relay.close();
+});
+
 test("dial: the prompt starts bare", async () => {
   const relay = await fakeRelay(() => {});
   const line = await dial(relay.url, "(206) 555-0142");

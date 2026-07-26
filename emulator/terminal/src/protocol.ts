@@ -60,6 +60,7 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
   let done = false;
   let closeReason = "";
   let promptText = ">";
+  let promptBuf = "";
 
   let resolveClosed: (reason: string) => void;
   const closed = new Promise<string>((r) => { resolveClosed = r; });
@@ -73,7 +74,13 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
     }
     if (env.kind === "prompt") {
       // Not teletype text: it belongs on the input line, not the transcript.
-      promptText = env.payload || ">";
+      // Reassemble per message first (comms-protocol.md §5). Output survives
+      // chunking because it appends; a prompt replaces, so at dialup-300's
+      // two-byte quantum "[TTT]>" would arrive as "]>".
+      promptBuf += env.payload;
+      if (!env.eom) return;
+      promptText = promptBuf || ">";
+      promptBuf = "";
       opts.onPrompt?.(promptText);
       return;
     }
