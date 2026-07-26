@@ -80,9 +80,20 @@ export function sessionBody(
   surface: string,
   roomCode: string | undefined,
   systemId: string | null,
+  joshua?: string,
 ): Record<string, unknown> {
+  // A system dial (PAN AM, GOOSE LAKE) never reaches Joshua, so naming a
+  // dialogue processor there is meaningless — and sending one would earn a 400
+  // that the terminal can only report as the system being unreachable.
   if (systemId !== null) return { surface, system: systemId };
-  return roomCode ? { surface, room_code: roomCode } : { surface };
+  const body: Record<string, unknown> = roomCode
+    ? { surface, room_code: roomCode }
+    : { surface };
+  // Passed through unvalidated on purpose: which processors exist is the
+  // exchange's business, and a surface that knew their names would be a second
+  // place to keep in step. An exchange that cannot serve this one refuses.
+  if (joshua) body.joshua = joshua;
+  return body;
 }
 
 /** The canonical numbered directory: phone-book exchanges first, then the

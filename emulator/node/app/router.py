@@ -63,13 +63,25 @@ class Router:
     RESERVED = frozenset({"LIST GAMES", "HELP GAMES", "NEW", "QUIT", "STATUS",
                           "HELP", "LOGON"})
 
-    def __init__(self, runner: CoreRunner, store: Store, joshua: Joshua,
+    def __init__(self, runner: CoreRunner, store: Store, engines: dict[str, Joshua],
                  catalog: dict[str, Game], joshua_session_cap: int = 50,
                  locks: "RoomLocks | None" = None,
-                 operators: dict[str, Operator] | None = None):
+                 operators: dict[str, Operator] | None = None,
+                 default_engine: str = ""):
         self.runner = runner
         self.store = store
-        self.joshua = joshua
+        # Every dialogue processor this exchange can serve, by name. One Joshua,
+        # several reconstructions of him — a session picks which one answers it
+        # (?joshua=), and JOSHUA_ENGINE only decides what it gets if it doesn't.
+        if not engines:
+            raise ValueError("Router needs at least one Joshua engine")
+        self.engines = engines
+        self.default_engine = default_engine or next(iter(engines))
+        if self.default_engine not in engines:
+            raise ValueError(f"default engine {self.default_engine!r} is not in the registry")
+        # session_id -> engine name. Scratch, like _attach and _joshua_history:
+        # a restart already loses the conversation this would belong to.
+        self._engine_choice: dict[str, str] = {}
         self.catalog = catalog
         self.joshua_session_cap = joshua_session_cap
         self.locks = locks or RoomLocks()
@@ -87,6 +99,24 @@ class Router:
     def attachment(self, session_id: str) -> Attachment:
         """What this session is connected to. New sessions are at the front door."""
         return self._attach.setdefault(session_id, Attachment(mode=FRONT_DOOR))
+
+    def select_engine(self, session_id: str, name: str) -> None:
+        """Bind a session to one dialogue processor for its whole life.
+
+        Raises KeyError for a processor this exchange cannot serve. The caller
+        turns that into a 400 rather than quietly substituting another: someone
+        comparing two reconstructions and silently handed the wrong one would
+        draw a wrong conclusion from it.
+        """
+        if name not in self.engines:
+            raise KeyError(name)
+        self._engine_choice[session_id] = name
+
+    def engine_name(self, session_id: str) -> str:
+        return self._engine_choice.get(session_id, self.default_engine)
+
+    def _engine_for(self, session_id: str) -> Joshua:
+        return self.engines[self.engine_name(session_id)]
 
     def _attach_game(self, session_id: str, game_id: str) -> None:
         """Connect the terminal to a game. Everything typed now goes to it."""
@@ -580,7 +610,7 @@ class Router:
         self._joshua_counts[session_id] = count + 1
 
         history = self._joshua_history.setdefault(session_id, [])
-        reply = await self.joshua.chat(session_id, history, raw)
+        reply = await self._engine_for(session_id).chat(session_id, history, raw)
         history.append({"role": "user", "content": raw})
         history.append({"role": "assistant", "content": reply.text})
         del history[:-20]  # bound the context (and the token bill, D5)

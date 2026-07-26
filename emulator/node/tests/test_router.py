@@ -31,7 +31,7 @@ def make_router(store: MemoryStore, locks: RoomLocks | None = None,
     catalog = load_catalog(GAMES_DIR)
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
     joshua = ScriptedJoshua({g.id: g.title for g in catalog.values() if g.status == "implemented"})
-    return Router(runner, store, joshua, catalog, locks=locks, operators=operators)
+    return Router(runner, store, {"scripted": joshua}, catalog, locks=locks, operators=operators)
 
 
 class ContentionSignalingLock(asyncio.Lock):
@@ -567,7 +567,7 @@ def test_attach_query_core_failures_are_graceful():
         runner = FailQueryRunner(RunnerConfig(bin_dir=REAL_BIN))
         joshua = ScriptedJoshua({g.id: g.title for g in catalog.values()
                                  if g.status == "implemented"})
-        router = Router(runner, store, joshua, catalog)
+        router = Router(runner, store, {"scripted": joshua}, catalog)
 
         async def flow():
             room = await store.create_room("AAAAAA")
@@ -595,7 +595,7 @@ def test_new_game_core_busy_gets_in_world_line():
     store = MemoryStore()
     joshua = ScriptedJoshua({g.id: g.title for g in catalog.values()
                              if g.status == "implemented"})
-    router = Router(BusyRunner(RunnerConfig(bin_dir=REAL_BIN)), store, joshua, catalog)
+    router = Router(BusyRunner(RunnerConfig(bin_dir=REAL_BIN)), store, {"scripted": joshua}, catalog)
 
     async def flow():
         sid = await new_session(store)
@@ -612,7 +612,7 @@ def test_joshua_session_cap_defers_in_world():
     catalog = load_catalog(GAMES_DIR)
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
     joshua = ScriptedJoshua({})
-    router = Router(runner, store, joshua, catalog, joshua_session_cap=2)
+    router = Router(runner, store, {"scripted": joshua}, catalog, joshua_session_cap=2)
 
     async def flow():
         sid = await new_session(store)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -17,10 +18,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .attachment import FRONT_DOOR
+from .budget import DailyBudget, MeteredJoshua
 from .config import load_settings
 from .games import load_catalog
 from .gtwhub import GtwRoomHub
-from .joshua import ClaudeJoshua, LispJoshua, ScriptedJoshua
+from .joshua import ClaudeJoshua, Joshua, LispJoshua, ScriptedJoshua
 from .localcall import run_resolving_calls
 from .operators import parse_roster
 from .rooms import RoomLocks
@@ -48,6 +50,9 @@ class CreateSession(BaseModel):
     link_profile: str | None = None
     room_code: str | None = None
     system: str | None = None
+    # Which reconstruction of Joshua answers this session (?joshua= on the
+    # surface). None takes the exchange's default.
+    joshua: str | None = None
 
 
 class CreateRoom(BaseModel):
@@ -73,8 +78,44 @@ def _session_store_dir(settings, session_id: str):
     return settings.systems_dir.parent / ".wopr" / "sessions" / str(session_id)
 
 
-def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
-    """App factory; tests inject fakes for store/joshua/runner."""
+# Processors a session may ask for by name. `scripted` is deliberately absent:
+# it is the D5 kill-switch and the stand-in the tests and the Lisp engine fall
+# through to, not one of the two reconstructions of Joshua on offer.
+SELECTABLE_ENGINES = frozenset({"lisp", "claude"})
+
+# Registered only when a key is present, so it is also the only engine whose
+# availability can change while the exchange is up (the D5 budget).
+METERED_ENGINE = "claude"
+
+
+def build_engines(settings, catalog, budget=None) -> dict[str, "Joshua"]:
+    """Every dialogue processor this exchange can actually serve.
+
+    An engine is registered only when the thing it needs is present, so that
+    `?joshua=` gets an honest 400 rather than something that answers in the
+    wrong voice: `lisp` without its binary would quietly behave as `scripted`,
+    and `claude` without a key would answer FALLBACK_LINE forever.
+
+    `scripted` is always here — it is the D5 kill-switch and the backstop the
+    Lisp engine falls through to — but it is never selectable (see
+    SELECTABLE_ENGINES).
+    """
+    scripted = ScriptedJoshua({g.id: g.title for g in catalog.values()
+                               if g.status == "implemented"})
+    engines: dict[str, Joshua] = {"scripted": scripted}
+    if settings.joshua_lisp_bin.exists():
+        # The Falken Dialogue Processor (joshua/) — period Lisp with
+        # anachronistic statistics; the scripted engine backs it up.
+        engines["lisp"] = LispJoshua(settings.joshua_lisp_bin, fallback=scripted)
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        claude = ClaudeJoshua(settings.joshua_model, settings.joshua_max_tokens,
+                              settings.joshua_timeout_s)
+        engines[METERED_ENGINE] = MeteredJoshua(claude, budget) if budget else claude
+    return engines
+
+
+def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
+    """App factory; tests inject fakes for store/engines/runner."""
     settings = settings or load_settings()
     store = store or make_store(settings.supabase_url, settings.supabase_service_role_key)
     catalog = load_catalog(settings.games_dir)
@@ -84,23 +125,29 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
         pool_size=settings.core_pool_size,
         queue_size=settings.core_queue_size,
     ))
-    if joshua is None:
-        scripted = ScriptedJoshua({g.id: g.title for g in catalog.values()
-                                   if g.status == "implemented"})
-        if settings.joshua_engine == "claude":
-            joshua = ClaudeJoshua(settings.joshua_model, settings.joshua_max_tokens,
-                                  settings.joshua_timeout_s)
-        elif settings.joshua_engine == "lisp":
-            # The Falken Dialogue Processor (joshua-lisp/) — period Lisp with
-            # anachronistic statistics; scripted engine backs it up.
-            joshua = LispJoshua(settings.joshua_lisp_bin, fallback=scripted)
-        else:
-            # Kill-switch / period mode (D5): the 1983-honest scripted engine.
-            joshua = scripted
+    budget = DailyBudget(settings.joshua_claude_daily_calls)
+    engines = engines or build_engines(settings, catalog, budget)
+    # JOSHUA_ENGINE is no longer the switch — it is what a session gets when it
+    # asks for nothing. Asking for one this exchange cannot serve falls back to
+    # the always-present scripted engine rather than failing to boot.
+    default_engine = settings.joshua_engine if settings.joshua_engine in engines else "scripted"
+
+    def serveable_processors() -> list[str]:
+        """What `?joshua=` may name right now. Ground truth, not intent.
+
+        The metered engine drops off the list once its daily ceiling is reached,
+        so a caller is never offered something the exchange can no longer
+        afford, and the refusal below is the same one a typo gets.
+        """
+        names = [n for n in engines if n in SELECTABLE_ENGINES]
+        if METERED_ENGINE in names and not budget.available():
+            names.remove(METERED_ENGINE)
+        return sorted(names)
     locks = RoomLocks()
-    router = Router(runner, store, joshua, catalog,
+    router = Router(runner, store, engines, catalog,
                     joshua_session_cap=settings.joshua_session_cap, locks=locks,
-                    operators=parse_roster(settings.wopr_operators))
+                    operators=parse_roster(settings.wopr_operators),
+                    default_engine=default_engine)
     gtw_hub = GtwRoomHub(store, runner, catalog, locks)
     systems = load_systems(settings.systems_dir)
     system_runner = SystemRunner(
@@ -131,8 +178,13 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
     # -- REST (api-contract.md §2) --------------------------------------------
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok", "service": "api-bridge", "contract": "WOPR/1"}
+    def health() -> dict:
+        return {"status": "ok", "service": "api-bridge", "contract": "WOPR/1",
+                # Which reconstructions of Joshua this exchange can serve right
+                # now. Nothing renders a menu from it — it is how someone
+                # passing ?joshua= finds out what a given exchange has.
+                "joshua_processors": serveable_processors(),
+                "joshua_default": default_engine}
 
     @app.post("/api/session", status_code=201)
     async def create_session(body: CreateSession):
@@ -160,14 +212,27 @@ def create_app(settings=None, store=None, joshua=None, runner=None) -> FastAPI:
                 # One cheap write per join keeps the room's last_seen_at
                 # truthful for idle-room reaping — never per-tick (#44).
                 await store.touch_room(code)
+        if body.joshua is not None and body.joshua.lower() not in serveable_processors():
+            # Never substitute another processor. Someone comparing the two
+            # reconstructions and quietly handed the wrong one would draw a
+            # wrong conclusion from it, which is the worst failure available
+            # when the whole point is measurement.
+            raise HTTPException(
+                400,
+                f"this exchange cannot serve joshua={body.joshua!r}; "
+                f"available: {serveable_processors()}",
+            )
         session = await store.create_session(body.surface, link, user_id=None, room_code=code,
                                              system_id=body.system)
+        if body.joshua is not None:
+            router.select_engine(session.id, body.joshua.lower())
         return {
             "session_id": session.id,
             "token": sign_session(settings.session_secret, session.id),
             "link_profile": session.link_profile,
             "room_code": session.room_code,
             "system": session.system_id,
+            "joshua": router.engine_name(session.id),
         }
 
     @app.post("/api/room", status_code=201)

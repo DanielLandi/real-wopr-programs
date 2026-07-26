@@ -109,7 +109,7 @@ def test_gtw_full_flow_the_films_play():
     store = MemoryStore()
     catalog = load_catalog(GAMES_DIR)
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
-    router = Router(runner, store, ScriptedJoshua({}), catalog)
+    router = Router(runner, store, {"scripted": ScriptedJoshua({})}, catalog)
 
     async def flow():
         s = await store.create_session("norad-terminal", "leased-9600", None)
@@ -186,7 +186,7 @@ def test_gtw_bad_target_is_clean_error():
     store = MemoryStore()
     catalog = load_catalog(GAMES_DIR)
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
-    router = Router(runner, store, ScriptedJoshua({}), catalog)
+    router = Router(runner, store, {"scripted": ScriptedJoshua({})}, catalog)
 
     async def flow():
         s = await store.create_session("norad-terminal", "leased-9600", None)

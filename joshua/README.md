@@ -104,8 +104,14 @@ harness/build.sh             # -> harness/bin/joshua (standalone executable)
 ./tests/run_golden.sh        # golden stdin/stdout fixtures
 ```
 
-Select it in the bridge with `JOSHUA_ENGINE=lisp` (falls back to the scripted engine if the
-binary misbehaves — the fiction never breaks).
+`JOSHUA_ENGINE=lisp` makes it the bridge's **default** — what a session gets when it asks for
+nothing (it falls back to the scripted engine if the binary misbehaves; the fiction never
+breaks). It is not the only processor an exchange serves: the bridge holds every one it can
+(the Lisp binary here, plus `claude` when a key is configured), and a single session picks
+with `?joshua=lisp` on the surface. `GET /health` lists what a given exchange can serve.
+
+One Joshua, two reconstructions of him — this is the period one. Comparing them is what
+[`evals/warmth_eval.py`](https://github.com/DanielLandi/real-wopr) in the engine repo is for.
 
 ## Honesty notes (same discipline as F90-vs-F77)
 

@@ -100,7 +100,7 @@ def test_router_with_lisp_engine_starts_games_from_conversation():
     store = MemoryStore()
     catalog = load_catalog(GAMES_DIR)
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
-    router = Router(runner, store, make_lisp(), catalog)
+    router = Router(runner, store, {"lisp": make_lisp()}, catalog)
 
     async def flow():
         s = await store.create_session("home-terminal", "dialup-300", None)

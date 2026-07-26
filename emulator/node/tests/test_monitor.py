@@ -32,7 +32,7 @@ def make_router(store, operators=None) -> Router:
     runner = CoreRunner(RunnerConfig(bin_dir=GAMES_DIR))
     joshua = ScriptedJoshua(
         {g.id: g.title for g in catalog.values() if g.status == "implemented"})
-    return Router(runner, store, joshua, catalog, operators=operators)
+    return Router(runner, store, {"scripted": joshua}, catalog, operators=operators)
 
 
 def test_a_new_session_starts_at_the_front_door():
