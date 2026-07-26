@@ -15,9 +15,11 @@ from app.attachment import FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from app.games import load_catalog
 from app.joshua import ScriptedJoshua
 from app.operators import Operator
-from app.router import (Router, ACCESS_CODE_PROMPT, LOGON_REJECTION,
-                        HELP_NOT_AVAILABLE, UNRECOGNIZED_DIRECTIVE)
-from app.runner import CoreRunner, RunnerConfig
+from app.router import (Router, ACCESS_CODE_PROMPT, CEASE_RANDOM_FUNCTION,
+                        CHANGES_LOCKED_OUT, IMPROPER_REQUEST,
+                        LOGON_REJECTION, HELP_NOT_AVAILABLE,
+                        UNRECOGNIZED_DIRECTIVE)
+from app.runner import CoreError, CoreRunner, RunnerConfig
 from app.store import MemoryStore
 from app.wire import build_request
 
@@ -177,6 +179,71 @@ def test_conversation_during_a_game_never_reaches_joshua():
         assert result.route == "core"
         assert "SHALL WE PLAY A GAME?" not in result.text
         assert router.attachment(session.id).mode == GAME
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_an_unparseable_line_during_a_game_gets_the_films_refusal():
+    # #120: attached to a game, a word the game cannot parse used to come back
+    # as a raw "ERROR: INVALID MOVE". The "ERROR: " prefix was the fault — a
+    # Python exception on the teletype, the bare dump #44 ruled out. The film
+    # heads this with IMPROPER REQUEST and prints the reason underneath, so the
+    # game's own words stay on screen; only the prefix goes.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        result = await router.handle(session.id, "BANANA")
+        assert result.text.startswith(IMPROPER_REQUEST)
+        assert "INVALID MOVE" in result.text
+        assert "ERROR:" not in result.text
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_refused_line_still_reaches_the_event_log():
+    # The screen shows the game's reason, but the log is what a diagnosis reads:
+    # it keeps the full message whether or not the game supplied one to print.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+        await router.handle(session.id, "BANANA")
+        errors = [e for e in store.events if e["kind"] == "error"]
+        assert errors, "the refusal logged nothing"
+        assert "INVALID MOVE" in errors[-1]["payload"]["error"]
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_a_crashed_core_is_not_dressed_up_as_a_refusal(monkeypatch):
+    # The distinction the discriminator exists for. A game that declared
+    # STATUS ERROR made a judgement; a binary that produced no frame at all is
+    # broken, and hiding that behind film flavour is worse than the raw dump.
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        await router.handle(session.id, "JOSHUA")
+        await router.handle(session.id, "NEW TICTACTOE")
+
+        async def broken(*args, **kwargs):
+            raise CoreError(None, "unparseable core output: bad header")
+
+        monkeypatch.setattr(router.runner, "run", broken)
+        result = await router.handle(session.id, "1")
+        assert not result.text.startswith(IMPROPER_REQUEST)
+        assert "bad header" in result.text
 
     asyncio.run(flow())
 
@@ -462,6 +529,48 @@ def test_operator_commands_answer_in_norad_mode():
         await router.handle(session.id, "ANVIL")
         result = await router.handle(session.id, "SITREP")
         assert "SITREP CRYSTAL" in result.text
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_cease_random_function_is_locked_out_while_a_simulation_runs():
+    # #116. The console reads the room's live game, not one of its own — the
+    # film had tic-tac-toe on the screen while the launch routine ran, so the
+    # displayed game is not what decides this.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        room = await store.create_room("AAAAAA")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        await router.handle(player.id, "JOSHUA")
+        await router.handle(player.id, "NEW TICTACTOE")
+
+        session = await store.create_session("norad-terminal", "leased-9600", None, room.code)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, CEASE_RANDOM_FUNCTION)
+        assert result.text == CHANGES_LOCKED_OUT
+        assert router.attachment(session.id).mode == NORAD_OPS
+
+    asyncio.run(flow())
+
+
+def test_cease_random_function_is_meaningless_with_nothing_running():
+    # Refusing to stop something that is not running would be nonsense, so it
+    # is just another directive the console does not know.
+    store = MemoryStore()
+    ops = {"CRYSTAL": Operator(callsign="CRYSTAL", code="ANVIL", level=2)}
+    router = make_router(store, operators=ops)
+
+    async def flow():
+        session = await store.create_session("norad-terminal", "leased-9600", None)
+        await router.handle(session.id, "LOGON CRYSTAL")
+        await router.handle(session.id, "ANVIL")
+        result = await router.handle(session.id, CEASE_RANDOM_FUNCTION)
+        assert result.text == UNRECOGNIZED_DIRECTIVE
 
     asyncio.run(flow())
 

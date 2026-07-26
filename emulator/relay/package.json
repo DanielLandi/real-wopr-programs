@@ -13,7 +13,7 @@
     "dev:bridge-stub": "node tools/dev-bridge-stub.ts",
     "tieline": "node src/tieline.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test \"tests/*.test.ts\""
+    "test": "node --test --test-force-exit \"tests/*.test.ts\""
   },
   "dependencies": {
     "ws": "^8.18.0"

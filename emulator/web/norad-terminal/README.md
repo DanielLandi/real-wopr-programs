@@ -13,7 +13,9 @@ game verbs `LIST GAMES`, `STATUS` and `QUIT`. `NEW <game>` is not among them:
 the console observes the room's simulation and never attaches to one (spec
 E11), which is what keeps its own instruments answering while a war runs. It
 also offers `WALL`, which prints the screen-wall URL for the
-current room as a surface-side handoff. Joshua still requires the film's
-`JOSHUA` backdoor.
+current room as a surface-side handoff. `CEASE RANDOM FUNCTION` is recognised
+while a simulation is running and answered with `CHANGES LOCKED OUT` — the
+console cannot stop the machine, and being told so is the point. Joshua still
+requires the film's `JOSHUA` backdoor.
 
 Dev: `npm run dev:norad` from `surfaces/` (port 3001, served under `/norad`).
