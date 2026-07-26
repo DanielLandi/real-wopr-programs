@@ -627,7 +627,7 @@ def test_joshua_session_cap_defers_in_world():
 
 
 from app.operators import parse_roster
-from app.router import ACCESS_CODE_PROMPT, UNRECOGNIZED_DIRECTIVE
+from app.router import ACCESS_CODE_PROMPT, LOGON_LOCK_LIMIT, UNRECOGNIZED_DIRECTIVE
 
 ROSTER = parse_roster("NORAD-3:TIGERTEAM:3,NORAD-1:CRYSTALPALACE:1")
 
@@ -746,6 +746,36 @@ def test_backdoor_during_pending_logon_clears_pending_state():
         # and it must have been logged as itself, not [REDACTED]
         texts = [e["payload"].get("text", "") for e in store.events if e["kind"] == "input"]
         assert "LIST GAMES" in texts
+
+    asyncio.run(flow())
+
+
+def test_operator_console_joshua_abandons_pending_logon_without_a_strike():
+    """The carve-out proven at the front door by
+    test_backdoor_during_pending_logon_clears_pending_state must also hold
+    from the console: LOGON is reserved and reaches _pending_logon from every
+    mode now, so JOSHUA against a pending access-code prompt must abandon it
+    there too, not spend one of the three strikes."""
+    store = MemoryStore()
+    router = make_router(store, operators=ROSTER)
+
+    async def flow():
+        sid = await logon_as_operator(router, store)  # NORAD_OPS, not front door
+        r = await router.handle(sid, "LOGON NORAD-1")
+        assert r.text == ACCESS_CODE_PROMPT
+        r = await router.handle(sid, "JOSHUA")
+        assert r.text == "GREETINGS PROFESSOR FALKEN."
+
+        # Two REAL wrong-code strikes. If the abandonment above had also
+        # spent one, this would already be the third and the roster would
+        # lock here; it must still take a genuine third failure.
+        for _ in range(LOGON_LOCK_LIMIT - 1):
+            r = await router.handle(sid, "LOGON NORAD-3")
+            assert r.text == ACCESS_CODE_PROMPT
+            r = await router.handle(sid, "WRONGCODE")
+            assert r.text == LOGON_REJECTION
+        r = await router.handle(sid, "LOGON NORAD-3")
+        assert r.text == ACCESS_CODE_PROMPT  # not yet locked
 
     asyncio.run(flow())
 
