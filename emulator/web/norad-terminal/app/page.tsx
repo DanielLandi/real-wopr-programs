@@ -38,6 +38,10 @@ export default function NoradTerminal() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [text, setText] = useState("");
   const [defcon, setDefcon] = useState(5);
+  // Resting default is this console's own "WOPR>" — the router's prompt frame
+  // only arrives once attached, and until then the console shows what it
+  // always has.
+  const [prompt, setPrompt] = useState("WOPR>");
   const link = useRef<WoprLink | null>(null);
   const sessionRef = useRef<string>("");
   const tokenRef = useRef<string>("");
@@ -119,6 +123,11 @@ export default function NoradTerminal() {
     }
     if (f.kind === "control" && f.payload === "NO CARRIER") {
       setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}NO CARRIER\n`);
+      return;
+    }
+    if (f.kind === "prompt") {
+      // The mode indicator lives on the input line, not in the transcript.
+      setPrompt(f.payload || "WOPR>");
       return;
     }
     if (f.kind === "output") setText((t) => t + f.payload);
@@ -236,7 +245,7 @@ export default function NoradTerminal() {
       <Teletype text={text} cursor={phase !== "connected"} />
       {phase === "connected" && (
         <CommandLine
-          prompt="WOPR>"
+          prompt={prompt}
           mask={awaitingAccessCode(text)}
           onSubmit={submit}
           onBreak={() => link.current?.sendControl("BREAK")}
