@@ -37,10 +37,13 @@ Each program is a directory with its **source at the top** and a `harness/` besi
 ```
 
 `id`, `title`, and `binary` are required. Games add `players`, an optional `input_syntax`,
-and a **`move_pattern`** — an anchored regex (compiled case-insensitively) that tells the
-engine which typed inputs are this game's moves vs. ordinary chat, so a game routes without
-any engine-side edit. Systems add their own fields. The engine reads the manifest to route
-and present the program.
+and an **`abbrev`** — a short label the monitor puts in the user's prompt while the
+terminal is attached to this game (`[TTT]>`). Omit it and the game's id is used.
+
+A game does not declare how to recognise its own moves. The terminal is attached to
+one program at a time, so while a game is running everything typed goes to it.
+Systems add their own fields. The engine reads the manifest to route and present the
+program.
 
 ### `node` — becoming an endpoint
 

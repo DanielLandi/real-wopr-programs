@@ -2,10 +2,11 @@
 
 **Tech:** Python + FastAPI · **Spec:** [`../docs/api-contract.md`](../docs/api-contract.md)
 
-The execution wrapper and router. Per request it: loads `game_state` from Supabase, spawns the
-short-lived Fortran core (stdin→stdout), persists the new state, and **routes** each input to
-the game engine *or* to Joshua (Claude API). Owns all Supabase and Anthropic access. Stateless:
-no in-memory game state.
+The execution wrapper and connection monitor. Per request it: loads `game_state` from Supabase,
+spawns the short-lived Fortran core (stdin→stdout), persists the new state, and **attaches**
+each session to exactly one program — a game, Joshua (Claude API), or NORAD ops — so every
+non-reserved line goes there until the attachment ends. Owns all Supabase and Anthropic access.
+Stateless: no in-memory game state.
 
 ## Layout
 
@@ -18,9 +19,9 @@ api-bridge/
 ## Status
 
 **Implemented.** All of api-contract.md: REST (session lifecycle, catalog, game state,
-clearance-gated DEFCON), the WS stream, the three-way router, the D2 subprocess runner
-(pool 4, bounded queue, 2 s SIGKILL timeout -> defined error frame), event logging, and both
-Joshua engines.
+clearance-gated DEFCON), the WS stream, the attachment-based connection monitor, the D2
+subprocess runner (pool 4, bounded queue, 2 s SIGKILL timeout -> defined error frame), event
+logging, and both Joshua engines.
 
 Key wiring facts:
 

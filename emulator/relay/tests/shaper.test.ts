@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { LinkShaper } from "../src/shaper.ts";
 import { chunkPayload, reassemble, type Envelope } from "../src/envelope.ts";
-import type { LinkProfile } from "../src/config.ts";
+import { DEFAULT_CONFIG, type LinkProfile } from "../src/config.ts";
 
 const collect = () => {
   const frames: Envelope[] = [];
@@ -91,6 +91,27 @@ test("ordering: jitter never reorders frames", async () => {
   const seqs = frames.map((f) => f.seq);
   assert.deepEqual(seqs, [...seqs].sort((x, y) => x - y));
   assert.equal(reassemble(frames)[0], "ABCDEFGH".repeat(8));
+});
+
+test("framing: a prompt is chunked like any other payload at dialup-300", async () => {
+  // The shaper never inspects payload (§3), so a prompt gets the same trickle
+  // output does — and a consumer that REPLACES rather than appends would keep
+  // only the last quantum. This is the real home-terminal profile, so these
+  // are the numbers the surfaces actually face.
+  const { frames, deliver } = collect();
+  const shaper = new LinkShaper(DEFAULT_CONFIG.profiles["dialup-300"],
+                                "dialup-300", "s1", deliver);
+  shaper.send({ kind: "prompt", payload: "[TTT]>" });
+  await done(frames, 1);
+  shaper.close();
+
+  assert.ok(frames.length > 1, "a prompt that fits one frame would not prove the hazard");
+  assert.equal(frames.filter((f) => f.eom).length, 1);
+  assert.equal(frames.at(-1)!.eom, true);
+  assert.ok(frames.every((f) => f.kind === "prompt"));
+  assert.equal(reassemble(frames).join(""), "[TTT]>");
+  // What a replacing consumer would have shown instead.
+  assert.notEqual(frames.at(-1)!.payload, "[TTT]>");
 });
 
 test("framing: chunker respects byte width and multi-byte boundaries", () => {

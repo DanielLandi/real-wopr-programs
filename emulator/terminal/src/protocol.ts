@@ -14,7 +14,7 @@ export interface Envelope {
   v: 1;
   session: string;
   seq: number;
-  kind: "input" | "output" | "control" | "handshake";
+  kind: "input" | "output" | "control" | "handshake" | "prompt";
   link: string;
   payload: string;
   eom: boolean;
@@ -24,6 +24,8 @@ export interface DialOpts {
   /** Who is calling. The callee's relay checks this against callable_by. */
   from?: string;
   signal?: AbortSignal;
+  /** Called when the far end changes the prompt — i.e. the mode changed. */
+  onPrompt?: (prompt: string) => void;
 }
 
 export interface Line {
@@ -34,6 +36,8 @@ export interface Line {
   /** Why the line ended, once it has. */
   closed: Promise<string>;
   hangUp: () => void;
+  /** The prompt the far end last asked for — carries the current mode. */
+  prompt: () => string;
 }
 
 export function dialUrl(relay: string, address: string, from: string): string {
@@ -55,6 +59,8 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
   let notify: (() => void) | null = null;
   let done = false;
   let closeReason = "";
+  let promptText = ">";
+  let promptBuf = "";
 
   let resolveClosed: (reason: string) => void;
   const closed = new Promise<string>((r) => { resolveClosed = r; });
@@ -65,6 +71,18 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
       env = JSON.parse(raw.toString()) as Envelope;
     } catch {
       return;   // a frame we cannot read is not a reason to drop the call
+    }
+    if (env.kind === "prompt") {
+      // Not teletype text: it belongs on the input line, not the transcript.
+      // Reassemble per message first (comms-protocol.md §5). Output survives
+      // chunking because it appends; a prompt replaces, so at dialup-300's
+      // two-byte quantum "[TTT]>" would arrive as "]>".
+      promptBuf += env.payload;
+      if (!env.eom) return;
+      promptText = promptBuf || ">";
+      promptBuf = "";
+      opts.onPrompt?.(promptText);
+      return;
     }
     if (env.payload) {
       queue.push(env.payload);
@@ -114,5 +132,6 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
     },
     closed,
     hangUp: () => ws.close(),
+    prompt: () => promptText,
   };
 }

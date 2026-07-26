@@ -38,6 +38,10 @@ export default function NoradTerminal() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [text, setText] = useState("");
   const [defcon, setDefcon] = useState(5);
+  // Resting default is this console's own "WOPR>" — the router's prompt frame
+  // only arrives once attached, and until then the console shows what it
+  // always has.
+  const [prompt, setPrompt] = useState("WOPR>");
   const link = useRef<WoprLink | null>(null);
   const sessionRef = useRef<string>("");
   const tokenRef = useRef<string>("");
@@ -47,6 +51,7 @@ export default function NoradTerminal() {
   const pollStopped = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectLinkRef = useRef<() => void>(() => undefined);
+  const promptBuf = useRef("");
 
   /** Mint a fresh bridge session for this console. Shared by first mount and
    *  by 404-recovery after a bridge restart wipes the in-memory session store.
@@ -119,6 +124,18 @@ export default function NoradTerminal() {
     }
     if (f.kind === "control" && f.payload === "NO CARRIER") {
       setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}NO CARRIER\n`);
+      return;
+    }
+    if (f.kind === "prompt") {
+      // The mode indicator lives on the input line, not in the transcript.
+      // Reassemble first: a prompt REPLACES where output appends, so a chunked
+      // "[NORAD]>" would land as its last quantum alone. leased-9600's quantum
+      // is wide enough today, but COMMS_BAUD overrides every profile.
+      promptBuf.current += f.payload;
+      if (!f.eom) return;
+      const p = promptBuf.current;
+      promptBuf.current = "";
+      setPrompt(p || "WOPR>");
       return;
     }
     if (f.kind === "output") setText((t) => t + f.payload);
@@ -236,7 +253,7 @@ export default function NoradTerminal() {
       <Teletype text={text} cursor={phase !== "connected"} />
       {phase === "connected" && (
         <CommandLine
-          prompt="WOPR>"
+          prompt={prompt}
           mask={awaitingAccessCode(text)}
           onSubmit={submit}
           onBreak={() => link.current?.sendControl("BREAK")}

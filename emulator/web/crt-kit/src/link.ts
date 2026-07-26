@@ -3,7 +3,7 @@
 // spec-level duplicate of the codec on purpose: surfaces and the comms layer
 // are separate modules of the federation and share only the wire contract.
 
-export type FrameKind = "input" | "output" | "control" | "handshake";
+export type FrameKind = "input" | "output" | "control" | "handshake" | "prompt";
 
 export interface Envelope {
   v: 1;

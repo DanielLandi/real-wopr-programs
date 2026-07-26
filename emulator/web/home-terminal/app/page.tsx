@@ -68,6 +68,7 @@ const HANDSHAKE_LABELS: Record<string, string> = {
 export default function HomeTerminal() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [text, setText] = useState("");
+  const [prompt, setPrompt] = useState(">");
   const [exchanges, setExchanges] = useState<Exchange[] | null>(null);
   const [hits, setHits] = useState<SweepEntry[] | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
@@ -83,6 +84,7 @@ export default function HomeTerminal() {
   // so the WS close that follows it does not print a second NO CARRIER.
   const sawNoCarrierFrame = useRef(false);
   const handshakeBuf = useRef("");
+  const promptBuf = useRef("");
   const sweepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modem = useRef<ModemAudio | null>(null);
   // S10 — the machine speaks: completed output lines are fed to Web Speech
@@ -148,6 +150,18 @@ export default function HomeTerminal() {
         appendText(`${HANDSHAKE_LABELS[state] ?? state}\n`);
         if (state === "NO_CARRIER" || state === "BUSY") setPhase("no-carrier");
       }
+      return;
+    }
+    if (f.kind === "prompt") {
+      // The mode indicator lives on the input line, not in the transcript.
+      // Reassemble first: output frames survive chunking because they append,
+      // but a prompt REPLACES, so at dialup-300's two-byte quantum "[TTT]>"
+      // would land as "]>" — the last quantum only.
+      promptBuf.current += f.payload;
+      if (!f.eom) return;
+      const p = promptBuf.current;
+      promptBuf.current = "";
+      setPrompt(p || ">");
       return;
     }
     if (f.kind === "output") {
@@ -463,7 +477,7 @@ export default function HomeTerminal() {
       {/* The CommandLine owns the one cursor (on the > prompt line) in every
           phase; the Teletype never blinks a second one. */}
       <Teletype text={text} cursor={false} />
-      <CommandLine onSubmit={submit} onBreak={() => link.current?.sendControl("BREAK")} />
+      <CommandLine prompt={prompt} onSubmit={submit} onBreak={() => link.current?.sendControl("BREAK")} />
     </CRTScreen>
   );
 }

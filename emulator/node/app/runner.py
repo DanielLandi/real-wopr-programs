@@ -93,7 +93,12 @@ class CoreRunner:
         )
         try:
             stdout, _ = await asyncio.wait_for(
-                proc.communicate(request.encode("ascii")), timeout=timeout_s
+                # errors="replace" mirrors systemrunner: a non-ASCII user line
+                # becomes '?' rather than raising out of ws_session and dropping
+                # the line. The move regexes used to guarantee ASCII; attachment
+                # routing does not.
+                proc.communicate(request.encode("ascii", errors="replace")),
+                timeout=timeout_s,
             )
         except RuntimeError as exc:
             proc.kill()
