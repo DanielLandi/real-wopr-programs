@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CRTScreen, StatusPanel, WoprLink, endpointFromQuery, type LinkEvent } from "@real-wopr/crt-kit";
 import { parseFeed, type GtwFeed } from "./feed";
+import { boardAt, gamesCompleted, GAMES, type Board } from "./selfplay";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -128,6 +129,70 @@ function CodeReadout({ locked, epoch, aborted }: {
   );
 }
 
+/** One 3x3 grid, drawn as a board rather than as text so it reads at a glance
+ *  while the bank is cycling. */
+function TicTacToe({ board }: { board: Board }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)",
+        gap: "1px",
+        background: "var(--crt-dim)",
+        border: "1px solid var(--crt-dim)",
+        aspectRatio: "1",
+      }}
+    >
+      {board.map((cell, i) => (
+        <span
+          key={i}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--crt-bg)",
+            fontSize: "1.1em",
+            lineHeight: 1,
+            color: cell === "X" ? "#ffb000" : "#33ff66",
+            textShadow: cell === " " ? "none" : "0 0 6px currentColor",
+          }}
+        >
+          {cell}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** S14: the machine plays itself and nothing comes of it. Nine real minimax
+ *  games cycling out of phase — every one a draw, which is why the tally can
+ *  only ever read WINNER: NONE. */
+function SelfPlayBank({ tick }: { tick: number }) {
+  return (
+    <div style={{ border: "1px solid var(--crt-dim)", padding: "0.9em" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", letterSpacing: "0.2em" }}>
+        <span>TIC-TAC-TOE — SELF PLAY</span>
+        <span>GAMES: {gamesCompleted(tick)} &nbsp; WINNER: NONE</span>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${GAMES.length}, 1fr)`,
+          gap: "0.7em",
+          marginTop: "0.7em",
+        }}
+      >
+        {GAMES.map((_, g) => (
+          <TicTacToe key={g} board={boardAt(g, tick)} />
+        ))}
+      </div>
+      <div style={{ marginTop: "0.7em", letterSpacing: "0.15em", opacity: 0.85 }}>
+        A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.
+      </div>
+    </div>
+  );
+}
+
 function DefconBoard({ level }: { level: number }) {
   return (
     <div style={{ border: "1px solid var(--crt-dim)", padding: "0.4em 0.8em", textAlign: "center" }}>
@@ -153,14 +218,16 @@ function DefconBoard({ level }: { level: number }) {
 }
 
 // Demo escalation timeline, in ticks (300 ms each): DEFCON steps every 8 s,
-// NO-WIN after 8 s at DEFCON 1, back to standby 8 s later.
+// NO-WIN after 8 s at DEFCON 1, then two steps of the S14 lesson before the
+// panel returns to standby. The lesson gets 16 s because it is the point of
+// the scene, not a transition out of it.
 const DEMO_STEP = Math.round(8000 / TICK_MS);
 
 function demoFeed(t: number): GtwFeed | null {
   const phase = Math.floor(t / DEMO_STEP);
-  if (phase >= 6) return null; // demo over — back to standby
+  if (phase >= 7) return null; // demo over — back to standby
   const defcon = Math.max(1, 5 - phase);
-  const noWin = phase === 5;
+  const noWin = phase >= 5;
   const secondsLeft = Math.max(0, Math.round(((5 - phase) * DEMO_STEP - (t % DEMO_STEP)) * (TICK_MS / 1000)));
   return {
     type: "gtw_state",
@@ -191,6 +258,7 @@ export default function WoprPanel() {
   const [roomFault, setRoomFault] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const [demoStart, setDemoStart] = useState<number | null>(null);
+  const [lessonStart, setLessonStart] = useState<number | null>(null);
   const buffer = useRef("");
   const mounted = useRef(0);
 
@@ -284,6 +352,13 @@ export default function WoprPanel() {
   const epoch = Math.floor(tick / Math.max(1, defcon - (aborted ? 2 : 0)));
   const density = 16 + (5 - defcon) * 14 + (aborted ? 20 : 0);
 
+  // The lesson's tally counts from the moment the routine reached NO-WIN, not
+  // from page load, so a visitor who arrives mid-crisis still sees it start at
+  // nothing and climb.
+  useEffect(() => {
+    setLessonStart((previous) => (aborted ? previous ?? tick : null));
+  }, [aborted, tick]);
+
   return (
     <CRTScreen theme="green" flicker={false}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -324,7 +399,11 @@ export default function WoprPanel() {
             <LampBank rows={6} cols={10} epoch={epoch} density={density} bank={3} />
           </div>
         </div>
-        <LampBank rows={3} cols={28} epoch={epoch} density={Math.max(8, density - 10)} bank={4} />
+        {aborted ? (
+          <SelfPlayBank tick={tick - (lessonStart ?? tick)} />
+        ) : (
+          <LampBank rows={3} cols={28} epoch={epoch} density={Math.max(8, density - 10)} bank={4} />
+        )}
       </div>
     </CRTScreen>
   );
