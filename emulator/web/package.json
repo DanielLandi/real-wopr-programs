@@ -18,6 +18,6 @@
     "dev:bigboard": "npm run dev -w @real-wopr/norad-bigboard",
     "dev:panel": "npm run dev -w @real-wopr/wopr-panel",
     "dev:warroom": "npm run dev -w @real-wopr/norad-warroom",
-    "test": "node --test crt-kit/tests/*.test.mjs home-terminal/app/*.test.mjs norad-terminal/app/*.test.mjs norad-bigboard/app/*.test.mjs norad-warroom/app/*.test.mjs"
+    "test": "node --test --test-force-exit crt-kit/tests/*.test.mjs home-terminal/app/*.test.mjs norad-terminal/app/*.test.mjs norad-bigboard/app/*.test.mjs norad-warroom/app/*.test.mjs"
   }
 }
