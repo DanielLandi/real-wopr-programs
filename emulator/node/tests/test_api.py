@@ -256,6 +256,36 @@ def test_ws_greets_an_operator_again_after_a_restart():
             assert "--CONNECTION TERMINATED--" in json.loads(ws.receive_text())["payload"]
 
 
+def test_ws_operator_reconnect_in_same_process_is_not_regreeted():
+    """The counterpart to the restart case above: a resync *within* the same
+    process keeps the router's in-memory attachment, so the door already
+    admits the operator's commands. Greeting by `is_authenticated` (which
+    only the JOSHUA backdoor sets) would flash a bogus LOGON: here even
+    though the door says the operator is in — norad-terminal auto-reconnects
+    on every close, so this is a live path, not a hypothetical one."""
+    settings = Settings(wopr_operators="NORAD-3:TIGERTEAM:3")
+    store = MemoryStore()
+
+    with TestClient(create_app(settings=settings, store=store)) as c:
+        body = make_session(c, "norad-terminal")
+        sid, token = body["session_id"], body["token"]
+        with c.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+            assert "LOGON:" in json.loads(ws.receive_text())["payload"]
+            ws.send_text(ws_envelope(sid, "LOGON NORAD-3"))
+            assert "ACCESS CODE:" in json.loads(ws.receive_text())["payload"]
+            json.loads(ws.receive_text())  # prompt frame
+            ws.send_text(ws_envelope(sid, "TIGERTEAM"))
+            assert "CLEARANCE ACCEPTED" in json.loads(ws.receive_text())["payload"]
+
+        # Resync: a new WS connection for the same session, same process —
+        # the router's attachment (NORAD_OPS) survives this, unlike a restart.
+        with c.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+            ws.send_text(ws_envelope(sid, "SITREP"))
+            out = json.loads(ws.receive_text())
+            assert "LOGON:" not in out["payload"]
+            assert "SITREP NORAD-3" in out["payload"]
+
+
 def test_ws_dialup_observe_gtw_is_refused(client):
     """A dialup-300 link can't carry the 2.5s telemetry feed (fidelity-notes.md);
     OBSERVE GTW must be refused, not gated later, and never reach the hub."""
