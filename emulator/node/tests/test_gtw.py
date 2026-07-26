@@ -12,7 +12,7 @@ from app.gtwfeed import FEED_PREFIX, display_to_feed, feed_line, tracks_text
 from app.gtwhub import GtwRoomHub
 from app.joshua import ScriptedJoshua
 from app.rooms import RoomLocks, room_key
-from app.router import Router
+from app.router import IMPROPER_REQUEST, Router
 from app.runner import CoreBusy, CoreRunner, RunnerConfig
 from app.store import GLOBAL_ROOM_KEY, GameState, MemoryStore
 from app.wire import CoreResponse
@@ -194,7 +194,13 @@ def test_gtw_bad_target_is_clean_error():
         await router.handle(s.id, "NEW gtw")
         await router.handle(s.id, "1")
         r = await router.handle(s.id, "LAUNCH USSR:PORTLAND")
+        # Clean means headed and unprefixed, not silent. #120 puts the film's
+        # banner above the refusal and drops the "ERROR: " prefix, but the
+        # game's own reason still prints — otherwise a player who mistypes a
+        # city cannot tell why the machine refused.
+        assert r.text.startswith(IMPROPER_REQUEST)
         assert "UNKNOWN TARGET" in r.text
+        assert "ERROR:" not in r.text
         # game survives the bad input
         assert (await store.get_active_game(s.id)) is not None
 

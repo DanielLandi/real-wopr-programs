@@ -29,6 +29,10 @@ CORE_TIMEOUT_TEXT = "WOPR CORE UNRESPONSIVE. REQUEST TERMINATED."
 CORE_BUSY_TEXT = "ALL WOPR PROCESSORS COMMITTED. STAND BY."
 ACCESS_CODE_PROMPT = "ACCESS CODE:"
 UNRECOGNIZED_DIRECTIVE = "UNRECOGNIZED DIRECTIVE"
+# How the film's WOPR heads a line it cannot parse. A banner and its underline,
+# with the reason printed under it — the indentation and the rule are how it
+# appears on screen, so they are part of the text, not formatting of this file.
+IMPROPER_REQUEST = "       ** IMPROPER REQUEST **\n       ----------------------"
 LOGON_LOCK_LIMIT = 3
 _SET_DEFCON = re.compile(r"^SET DEFCON ([1-5])$")
 
@@ -275,9 +279,9 @@ class Router:
                     self._detach(session_id)
                     return RouteResult(text="NO GAME IN PROGRESS.", route="bridge")
                 if not upper:
-                    # A bare Enter is not a move. MOVE with an empty INPUT
-                    # fails as an invalid move and prints a bare ERROR: dump
-                    # (#44); QUERY reads the board back without risking that.
+                    # A bare Enter is not a move, so it must not be refused like
+                    # one: MOVE with an empty INPUT fails as an invalid move,
+                    # and QUERY reads the board back without asking anything.
                     return await self._query_game(session_id, fresh)
                 return await self._core_move(session_id, fresh, upper)
 
@@ -330,8 +334,28 @@ class Router:
         except CoreBusy:
             return RouteResult(text=CORE_BUSY_TEXT, route="core", detail={"error": "busy"})
         except CoreError as exc:
+            # Logged before the text is decided, and with the full message: what
+            # prints below is shaped for a teletype, the diagnostic is not.
             await self.store.log_event(session_id, "error", "wopr",
                                        {"game": game.game_id, "error": str(exc)})
+            # Two very different things arrive as CoreError. A game that parsed
+            # the frame and *declared* STATUS ERROR has rejected the line — a
+            # judgement, and the film heads that with IMPROPER REQUEST (#120).
+            # Anything else (no frame at all, or a frame the game never marked
+            # ERROR while its binary died) is a genuine fault; dressing that up
+            # in film flavour would hide it, which is worse than the raw dump.
+            if exc.response is not None and exc.response.status == "ERROR":
+                # The film prints a banner, its underline, and then a reason
+                # line — so the game's own RESULT goes underneath rather than in
+                # the bin. It is terse uppercase machine text, exactly what a
+                # 1983 system prints; what #44 objected to was the raw "ERROR: "
+                # prefix putting a Python exception on the teletype, not the
+                # machine saying which target it failed to recognise. A game
+                # that gave no reason gets the banner alone.
+                reason = exc.response.result
+                text = f"{IMPROPER_REQUEST}\n\n{reason}" if reason else IMPROPER_REQUEST
+                return RouteResult(text=text, route="core",
+                                   detail={"error": str(exc), "refused": True})
             return RouteResult(text=f"ERROR: {exc}", route="core", detail={"error": str(exc)})
 
         await self.store.upsert_game(GameState(
