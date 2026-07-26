@@ -72,6 +72,11 @@ export function useGtwFeed(): {
       });
       if (!res.ok || cancelled) return;
       const s = (await res.json()) as { session_id: string; token: string };
+      // A drop between a feed message's first and last chunk strands a
+      // fragment that would otherwise prefix the next connection's first
+      // message — here that corrupts a JSON parseFeed() call, not just a
+      // cosmetic prefix, so it must not survive a reconnect.
+      buffer.current = "";
       link = new WoprLink({
         url: endpointFromQuery("link", process.env.NEXT_PUBLIC_COMMS_URL),
         surface: "norad-bigboard",
