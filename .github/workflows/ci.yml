@@ -7,6 +7,7 @@ on:
 jobs:
   programs:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - name: Install period toolchains
@@ -40,6 +41,7 @@ jobs:
 
   node:
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Install period toolchains (golden-path tests spawn the real programs)
@@ -58,6 +60,7 @@ jobs:
 
   devkit:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
       - name: Install period toolchains
@@ -76,6 +79,7 @@ jobs:
 
   relay:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,6 +94,7 @@ jobs:
 
   cli:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -108,6 +113,7 @@ jobs:
   federation:
     # The whole thing, running: relays, node processes, real period programs.
     runs-on: ubuntu-latest
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: Install period toolchains
@@ -136,6 +142,7 @@ jobs:
 
   terminal:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -150,6 +157,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -164,6 +172,7 @@ jobs:
 
   images:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
       - name: Build node image
