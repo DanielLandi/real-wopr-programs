@@ -114,9 +114,16 @@ class Router:
         self._attach[session_id] = Attachment(mode=att.parent, parent=att.parent)
 
     def is_authenticated(self, session_id: str) -> bool:
-        """True once the session has opened the JOSHUA backdoor. The WS layer
-        uses this to greet only unauthenticated lines with LOGON: — a comms
-        resync reconnects the same session and must not be re-greeted."""
+        """True once the session has opened the JOSHUA backdoor.
+
+        Nothing in production consults this any more: the WS layer used to
+        greet only unauthenticated lines with LOGON:, but that conflated the
+        backdoor with a NORAD roster logon (an operator's reconnect kept its
+        attachment yet was never "authenticated" by this method's definition)
+        and got re-greeted wrongly. The greeting is decided by
+        `attachment(session_id).mode == FRONT_DOOR` instead. Left in place —
+        only test_is_authenticated_tracks_the_backdoor reaches it — for a
+        later phase that may still want a pure backdoor check."""
         return session_id in self._authenticated
 
     async def _logon(self, session_id: str, upper: str) -> RouteResult:
