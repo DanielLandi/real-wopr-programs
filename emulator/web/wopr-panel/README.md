@@ -11,6 +11,13 @@ Lamp agitation scales with DEFCON; the launch code's characters lock in one by o
 to the abort. With no live simulation the panel idles at DEFCON 5 — `RUN DEMO` plays a
 self-contained escalation timeline (~1 minute, no backend needed).
 
+On `NO-WIN` the bottom lamp bank gives way to **the lesson** (film-baseline S14): nine
+tic-tac-toe boards cycling out of phase, with a tally that counts games and reports the
+same result for every one. They are not decoration — [`app/selfplay.ts`](./app/selfplay.ts)
+plays real minimax against itself, one deterministic game per opening square, and
+`selfplay.test.mjs` asserts that all nine end in a draw. The scene's claim is a fact about
+the game, so the panel derives it instead of asserting it.
+
 All blink patterns derive from a deterministic position/epoch hash (no `Math.random`),
 the same discipline as crt-kit's modem-noise LCG.
 
