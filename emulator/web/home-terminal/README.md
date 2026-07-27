@@ -1,7 +1,7 @@
 # Surface — Home Terminal
 
 David Lightman's bedroom. Dial-up, ~300 baud, full handshake. Slow, intimate, text-only.
-Spec: [`../../docs/surfaces.md`](../../docs/surfaces.md).
+Spec: the engine repo's `docs/surfaces.md`.
 
 Everything renders at link speed — the comms layer's `dialup-300` profile owns the cadence;
 this page only appends what arrives.
@@ -41,7 +41,7 @@ An exchange serves only what it has configured; `GET /health` lists that as
 substituting, and the reason is logged to the browser console — the terminal has no 1983
 words for it and will simply report no carrier.
 
-Dev: `npm run dev:home` from `surfaces/` (port 3000, needs `NEXT_PUBLIC_API_URL` +
-`NEXT_PUBLIC_COMMS_URL` — see the `local-stack` skill). Static export lands in `out/`,
+Dev: `npm run dev:home` from `emulator/web/` (port 3000, needs `NEXT_PUBLIC_API_URL` +
+`NEXT_PUBLIC_COMMS_URL` — see [`../README.md`](../README.md)). Static export lands in `out/`,
 served at `/` (deployment.md D3); the public site commits a copy under `terminal/`
 (regenerate it after changing this surface — commands in real-wopr-site's README).

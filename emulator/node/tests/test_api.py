@@ -197,7 +197,7 @@ def test_ws_reassembles_chunked_input(client):
 
 
 def test_ws_resync_does_not_regreet_an_authenticated_session(client):
-    """A comms-layer resync reconnects the same session (#54): the LOGON:
+    """A relay resync reconnects the same session (engine repo #54): the LOGON:
     greeting belongs only to a line that hasn't opened the backdoor yet."""
     body = make_session(client)
     sid, token = body["session_id"], body["token"]

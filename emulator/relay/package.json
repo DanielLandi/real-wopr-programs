@@ -1,8 +1,8 @@
 {
-  "name": "@real-wopr/comms-layer",
+  "name": "@real-wopr/relay",
   "version": "0.1.0",
   "private": true,
-  "description": "Era-constraint simulation layer (baud, latency, framing, handshake) — see docs/comms-protocol.md",
+  "description": "Era-constraint simulation layer (baud, latency, framing, handshake) (spec: the engine repo's comms-protocol)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

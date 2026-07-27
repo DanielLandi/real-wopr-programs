@@ -1,6 +1,8 @@
-# Module 5b — The Falken Dialogue Processor (F.D.P.)
+# joshua — The Falken Dialogue Processor (F.D.P.)
 
-**Tech:** Common Lisp (SBCL) · **Spec:** [`docs/feasibility.md` §Module 5](https://github.com/DanielLandi/real-wopr/blob/main/docs/feasibility.md#module-5--joshua-the-conversational-persona) · **Protocol:** JOSHUA/1 (below)
+**Tech:** Common Lisp (SBCL) · **Spec:** `docs/feasibility.md` §Module 5 in the private
+engine repo (`real-wopr`; sibling checkout: `../real-wopr/docs/feasibility.md`) ·
+**Protocol:** JOSHUA/1 (below)
 
 Joshua's third engine, and the project's answer to a delicious what-if: *the film says Falken
 was a genius — what could a genius actually have built in 1983?* This module is our
@@ -27,9 +29,9 @@ feasibility verdict for open conversation (**NO**) stands unchanged.
 
 ## Execution model
 
-Identical to the Fortran core (design.md §4): a **stateless subprocess** per exchange, fully
-deterministic (the only randomness is an LCG seeded from the dialogue history — the same rule
-games follow, games.md §7). Golden fixtures are the test suite.
+Identical to the Fortran games (the engine repo's design.md §4): a **stateless subprocess**
+per exchange, fully deterministic (the only randomness is an LCG seeded from the dialogue
+history — the same rule games follow). Golden fixtures are the test suite.
 
 ```
 Request                     Response
@@ -101,17 +103,17 @@ lines can be *addressed*, never *generated into* a musing.
 ```bash
 brew install sbcl            # or: apt install sbcl
 harness/build.sh             # -> harness/bin/joshua (standalone executable)
-./tests/run_golden.sh        # golden stdin/stdout fixtures
+../tools/test.sh joshua      # golden stdin/stdout fixtures (harness/tests/)
 ```
 
-`JOSHUA_ENGINE=lisp` makes it the bridge's **default** — what a session gets when it asks for
-nothing (it falls back to the scripted engine if the binary misbehaves; the fiction never
-breaks). It is not the only processor an exchange serves: the bridge holds every one it can
+`JOSHUA_ENGINE=lisp` makes it the node host's **default** — what a session gets when it asks
+for nothing (it falls back to the scripted engine if the binary misbehaves; the fiction never
+breaks). It is not the only processor an exchange serves: the node host holds every one it can
 (the Lisp binary here, plus `claude` when a key is configured), and a single session picks
 with `?joshua=lisp` on the surface. `GET /health` lists what a given exchange can serve.
 
 One Joshua, two reconstructions of him — this is the period one. Comparing them is what
-[`evals/warmth_eval.py`](https://github.com/DanielLandi/real-wopr) in the engine repo is for.
+`evals/warmth_eval.py` in the private engine repo is for.
 
 ## Honesty notes (same discipline as F90-vs-F77)
 

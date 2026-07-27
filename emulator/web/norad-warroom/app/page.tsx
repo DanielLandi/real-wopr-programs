@@ -1,6 +1,6 @@
 "use client";
 // NORAD screen wall — a room of monitors observing one war (issue #38;
-// docs/superpowers/specs/2026-07-20-norad-screen-wall-design.md).
+// the engine repo's 2026-07-20-norad-screen-wall-design spec).
 // Pure composition: each live monitor is an iframe of an exported sibling
 // surface sharing the same ?room=. The wall renders no game state itself.
 

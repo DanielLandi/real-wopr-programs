@@ -1,7 +1,7 @@
 # Surface — NORAD Terminal
 
 Operator console inside NORAD. Leased line, faster, framed. Authoritative, command-oriented.
-Spec: [`../../docs/surfaces.md`](../../docs/surfaces.md).
+Spec: the engine repo's `docs/surfaces.md`.
 
 **Status:** implemented as an operator console. It opens a `norad-terminal`
 session, connects through the comms layer, and offers a two-step operator
@@ -18,4 +18,4 @@ while a simulation is running and answered with `CHANGES LOCKED OUT` — the
 console cannot stop the machine, and being told so is the point. Joshua still
 requires the film's `JOSHUA` backdoor.
 
-Dev: `npm run dev:norad` from `surfaces/` (port 3001, served under `/norad`).
+Dev: `npm run dev:norad` from `emulator/web/` (port 3001, served under `/norad`).

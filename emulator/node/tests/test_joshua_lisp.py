@@ -1,4 +1,4 @@
-"""Falken Dialogue Processor integration (joshua-lisp/ via LispJoshua)."""
+"""Falken Dialogue Processor integration (joshua/ via LispJoshua)."""
 
 import asyncio
 from pathlib import Path

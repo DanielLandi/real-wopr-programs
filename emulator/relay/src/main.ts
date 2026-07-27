@@ -2,7 +2,7 @@
 import { startServer } from "./server.ts";
 
 const server = await startServer();
-console.log(`comms-layer listening on :${server.port} (/link), mode=${process.env.COMMS_MODE ?? "authentic"}`);
+console.log(`relay listening on :${server.port} (/link), mode=${process.env.COMMS_MODE ?? "authentic"}`);
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {

@@ -18,7 +18,7 @@
 !
 ! The clock only advances once war has started; each tick is 3 minutes and
 ! missiles fly for 30. DISPLAY carries operator text plus machine telemetry
-! for the Big Board (bridge-relayed, surfaces/norad-bigboard/app/feed.ts):
+! for the Big Board (bridge-relayed, emulator/web/norad-bigboard/app/feed.ts):
 !            TRK <from> <to> <lon1> <lat1> <lon2> <lat2> <progress>
 !            HIT <city>
 !
@@ -55,7 +55,7 @@ program gtw
   integer, parameter :: SU_LON(NCITY) = [ 37, 30, 31, 132, 83, 33, 34, 104 ]
   integer, parameter :: SU_LAT(NCITY) = [ 56, 60, 50,  43, 55, 69, 45,  52 ]
 
-  ! ---- strategic map (spec: docs/superpowers/specs/2026-07-14-gtw-ascii-map-design.md)
+  ! ---- strategic map (spec: the engine repo's 2026-07-14-gtw-ascii-map-design)
   ! Coastline art is the WOPR map() render from zompiexx/wargames (Andy Glenn),
   ! reproduced verbatim under its README grant ("free to use and modify ... but
   ! must credit the author"). Credit: CREDITS.md. City markers are hand-pinned

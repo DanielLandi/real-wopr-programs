@@ -66,7 +66,7 @@ def test_connect_then_echo_then_bye():
 @pytest.fixture()
 def system_client():
     # Settings() defaults point systems_dir/internal_token at the real repo
-    # systems/ dir and an empty token, same as api-bridge/tests/test_api.py's
+    # systems/ dir and an empty token, same as tests/test_api.py's
     # `client` fixture — the reference system is registered via its checked-in
     # manifest.json regardless of build status; @needs_reference gates the
     # tests that actually invoke its binary.

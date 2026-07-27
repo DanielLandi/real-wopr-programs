@@ -1,6 +1,8 @@
-# Module 2 — Comms Simulation Layer
+# emulator/relay — the networks
 
-**Tech:** TypeScript / Node over WebSocket · **Spec:** [`../docs/comms-protocol.md`](../docs/comms-protocol.md)
+**Tech:** TypeScript / Node over WebSocket · **Spec:** `docs/comms-protocol.md` in the
+private engine repo ([`real-wopr`](https://github.com/DanielLandi/real-wopr); sibling
+checkout: `../real-wopr/docs/comms-protocol.md`)
 
 The *wire*, not application logic. Imposes era-accurate constraints — baud throttling
 (token bucket), latency, framing, dial-up handshake FSM — on every link between the surfaces
@@ -10,17 +12,23 @@ purpose: it must be independently measured and switched.
 ## Layout
 
 ```
-comms-layer/
+emulator/relay/
 ├── src/
-│   ├── config.ts     # link profiles + COMMS_MODE toggle (env-overridable)
-│   ├── envelope.ts   # §5 envelope codec, chunking, reassembly
-│   ├── bucket.ts     # token-bucket baud throttle (§3.1)
-│   ├── shaper.ts     # per-direction framing + baud + latency±jitter (§3)
-│   ├── handshake.ts  # dial-up FSM incl. NO_CARRIER/BUSY (§4)
-│   ├── server.ts     # WS proxy: /link (public) ⇄ bridge WS (internal)
-│   └── main.ts       # service entry (env-driven, deployment.md D6)
-├── tests/            # node:test — throughput, parity, toggle, FSM, e2e proxy
-└── tools/            # dev-bridge-stub.ts (dev-only canned bridge)
+│   ├── config.ts       # link profiles + COMMS_MODE toggle (env-overridable)
+│   ├── envelope.ts     # §5 envelope codec, chunking, reassembly
+│   ├── bucket.ts       # token-bucket baud throttle (§3.1)
+│   ├── shaper.ts       # per-direction framing + baud + latency±jitter (§3)
+│   ├── handshake.ts    # dial-up FSM incl. NO_CARRIER/BUSY (§4)
+│   ├── server.ts       # WS proxy: /link (public) ⇄ node-host WS (internal)
+│   ├── main.ts         # service entry (env-driven, deployment.md D6)
+│   ├── registry.ts     # the frame room: which node answers which line, on which network
+│   ├── network.ts      # one network, one relay process — built from a pack descriptor
+│   ├── network-main.ts # run one network's relay (WOPR_NETWORK env)
+│   ├── node-proto.ts   # NODE/1 — nodes register their lines outbound; calls ride back
+│   ├── trunk.ts        # TRUNK/1 — the exchange-to-exchange switchboard hub
+│   └── tieline.ts      # host side of TRUNK/1: one outbound trunk to a hub
+├── tests/              # node:test — throughput, parity, toggle, FSM, federation, e2e
+└── tools/              # dev-bridge-stub.ts (dev-only canned node host)
 ```
 
 ## Status
@@ -32,7 +40,7 @@ cannot be bypassed.
 
 ```bash
 npm install
-npm test                 # 10 tests: throughput-at-baud, parity, toggle, FSM, e2e
+npm test                 # throughput-at-baud, parity, toggle, FSM, federation, e2e
 npm run dev              # service on :8081 (COMMS_MODE, BRIDGE_WS_URL, ...)
 npm run dev:bridge-stub  # dev-only fake bridge on :8000 (use when the real bridge is not running)
 ```

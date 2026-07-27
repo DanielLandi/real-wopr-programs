@@ -1,6 +1,8 @@
-# Module 6 — Surfaces
+# emulator/web — the surfaces
 
-**Tech:** Next.js (React) + shared CRT component library · **Spec:** [`../docs/surfaces.md`](../docs/surfaces.md)
+**Tech:** Next.js (React) + shared CRT component library · **Spec:** `docs/surfaces.md` in
+the private engine repo ([`real-wopr`](https://github.com/DanielLandi/real-wopr); sibling
+checkout: `../real-wopr/docs/surfaces.md`)
 
 Five separately-deployable front-ends — most behind a distinct simulated link — all
 sharing the `crt-kit` aesthetic core (scanlines, phosphor glow, link-driven `<Teletype>`,
@@ -17,14 +19,14 @@ handshake view).
 
 ## Status
 
-npm **workspace** (`surfaces/package.json`): `crt-kit` is symlinked into each app and
+npm **workspace** (`emulator/web/package.json`): `crt-kit` is symlinked into each app and
 consumed as raw TSX via `transpilePackages`. Apps build as **static exports**
 (deployment.md D1) and use same-origin relative URLs (D3).
 
 All five apps are implemented; see each app's README for its behavior and dev port.
 
 ```bash
-npm install                 # once, from surfaces/
+npm install                 # once, from emulator/web/
 npm run build               # static-exports every app
 npm run dev:home            # home terminal on :3000 -> /terminal
 npm run dev:norad           # NORAD operator terminal on :3001 -> /norad

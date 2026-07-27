@@ -1,5 +1,5 @@
-// Comms Simulation Layer — public surface.
-// Spec: ../docs/comms-protocol.md · Topology: ../docs/deployment.md D1/D3.
+// The relay — public surface.
+// Spec: the engine repo's comms-protocol.md · Topology: its deployment.md D1/D3.
 
 export {
   DEFAULT_CONFIG,

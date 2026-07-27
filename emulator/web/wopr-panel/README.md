@@ -1,7 +1,7 @@
 # Surface — WOPR Panel
 
 The cabinet itself: banks of blinking lamps and the launch-code readout, inside the NORAD
-computer room (film-baseline S11/S13). Spec: [`../../docs/surfaces.md`](../../docs/surfaces.md)
+computer room (film-baseline S11/S13). Spec: the engine repo's `docs/surfaces.md`
 §4.
 
 Observe-only, like the Big Board: on load it opens a session, sends `OBSERVE GTW`, and
