@@ -1,5 +1,5 @@
-# Comms layer image (deployment.md D1): its own container — it is a wire,
-# not application logic. Build from comms-layer/:  docker build .
+# Relay image (deployment.md D1): its own container — it is a wire,
+# not application logic. Build from emulator/relay/:  docker build .
 
 FROM node:24-slim AS build
 WORKDIR /app

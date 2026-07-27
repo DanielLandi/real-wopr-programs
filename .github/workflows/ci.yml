@@ -176,6 +176,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build node image
-        run: docker build -f emulator/node/Dockerfile -t real-wopr-bridge:ci .
+        run: docker build -f emulator/node/Dockerfile -t real-wopr-node:ci .
       - name: Build relay image
-        run: docker build -t real-wopr-comms:ci emulator/relay
+        run: docker build -t real-wopr-relay:ci emulator/relay

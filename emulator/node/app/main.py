@@ -179,7 +179,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "service": "api-bridge", "contract": "WOPR/1",
+        return {"status": "ok", "service": "wopr-node", "contract": "WOPR/1",
                 # Which reconstructions of Joshua this exchange can serve right
                 # now. Nothing renders a menu from it — it is how someone
                 # passing ?joshua= finds out what a given exchange has.

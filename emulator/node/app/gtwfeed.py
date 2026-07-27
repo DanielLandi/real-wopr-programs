@@ -2,7 +2,7 @@
 deployment.md impact #3: realtime is bridge-relayed).
 
 Converts the GTW DISPLAY block's telemetry lines into the GTW-FEED json the
-Big Board renders (surfaces/norad-bigboard/app/feed.ts):
+Big Board renders (emulator/web/norad-bigboard/app/feed.ts):
 
     ZULU 00:12  DEFCON 2
     UNITED STATES  ARSENAL 20  CITIES LOST 1

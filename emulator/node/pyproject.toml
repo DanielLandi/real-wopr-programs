@@ -1,7 +1,7 @@
 [project]
-name = "real-wopr-api-bridge"
+name = "real-wopr-node"
 version = "0.3.0"
-description = "API / Emulation Bridge — routes input to the Fortran core or Joshua. See docs/api-contract.md"
+description = "The node host — runs period programs as subprocesses and serves the exchange REST/WS API"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",

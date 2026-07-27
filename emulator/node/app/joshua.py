@@ -104,7 +104,7 @@ class ScriptedJoshua:
 
 class LispJoshua:
     """The Falken Dialogue Processor — period Common Lisp, anachronistic
-    statistics (joshua-lisp/; feasibility.md §Module 5 "the Falken
+    statistics (joshua/; the engine repo's feasibility.md §Module 5 "the Falken
     interpretation"). Stateless subprocess speaking JOSHUA/1, same execution
     model as the Fortran core. Falls back to a scripted reply if the binary
     misbehaves — the fiction never breaks."""

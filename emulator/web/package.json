@@ -1,8 +1,8 @@
 {
-  "name": "@real-wopr/surfaces",
+  "name": "@real-wopr/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Workspace root for the five surfaces + crt-kit (docs/surfaces.md)",
+  "description": "Workspace root for the five surfaces + crt-kit (spec: the engine repo's surfaces doc)",
   "workspaces": [
     "crt-kit",
     "home-terminal",
