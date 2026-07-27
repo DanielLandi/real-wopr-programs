@@ -175,8 +175,15 @@ class ClaudeJoshua:
 
     def __init__(self, model: str, max_tokens: int, timeout_s: float, api_key: str | None = None):
         import anthropic  # lazy: dev/tests run without the dependency
+        import os
 
-        self._client = anthropic.AsyncAnthropic(api_key=api_key, timeout=timeout_s, max_retries=1)
+        # Resolve to a string even when nothing is configured. With api_key=None
+        # the SDK sends no auth header at all and raises TypeError from inside
+        # the request — which is not an APIError, so it would escape chat() and
+        # take the socket down. An empty string sends an empty header, earns a
+        # 401, and comes back as the in-character fallback line below.
+        key = api_key if api_key is not None else os.environ.get("ANTHROPIC_API_KEY", "")
+        self._client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout_s, max_retries=1)
         self._model = model
         self._max_tokens = max_tokens
 
