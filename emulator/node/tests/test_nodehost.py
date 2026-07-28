@@ -173,9 +173,18 @@ def test_the_program_can_end_the_call_itself():
             await relay.wait_frames(2)
             relay.frames.clear()
 
-            for _ in range(3):
+            # Wait for each reprompt before trying again — a fixed sleep
+            # loses the race on a slow runner now that the school reloads
+            # its data files every spawn.
+            for i in range(2):
                 await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
-                await asyncio.sleep(0.5)
+                await relay.wait_frames(i + 1)
+            await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
+
+            async def _closed():
+                while not any(f["t"] == "CLOSE" for f in relay.frames):
+                    await asyncio.sleep(0.02)
+            await asyncio.wait_for(_closed(), 15.0)
 
             assert any(f["t"] == "CLOSE" for f in relay.frames), relay.frames
             await host.stop()
