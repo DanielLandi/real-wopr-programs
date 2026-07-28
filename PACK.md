@@ -10,6 +10,7 @@ Each program is a directory with its **source at the top** and a `harness/` besi
 ```
 <category>/<id>/
   <source files>          # the program, in a period language
+  data/                   # optional: fixed-width flat data files, read-only
   harness/
     manifest.json         # metadata (below)
     build.sh              # builds the source -> harness/bin/<binary>
@@ -19,6 +20,12 @@ Each program is a directory with its **source at the top** and a `harness/` besi
 - `build.sh` runs from its own directory, reads the source from `..`, and writes an executable
   to `bin/<binary>`. Interpreted or emulated programs (BASIC, 6502) ship a small wrapper as
   `bin/<binary>` that runs the source under its interpreter or emulator.
+- A program may keep committed, read-only **data files** under `data/` — fixed-width flat
+  records, the era's file technology — and re-read them at every spawn. The program never
+  writes them (mutations travel in the `STATE` block like everything else), nothing outside
+  the program knows their layout, and because they are committed bytes they do not disturb
+  determinism. A program whose binary is not a wrapper script ships one anyway, chdir-ing to
+  the program folder so relative paths resolve wherever the host spawns it from.
 - The built `bin/<binary>` reads **one request frame** on stdin and writes **one response
   frame** on stdout, then exits. It keeps no state between calls — any state travels in the
   frames. A rule violation writes a well-formed error frame and exits non-zero.

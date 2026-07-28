@@ -2,16 +2,24 @@
 20 REM Menu-driven administrative datanet in plain line-numbered BASIC,
 30 REM run by the Bywater BASIC interpreter. Stateless per invocation:
 40 REM the session (auth flag, password tries, menu step, work-in-
-50 REM progress grade entry) rides the opaque
+50 REM progress grade entry, roster-listing cursor) rides the opaque
 60 REM STATE block, echoed back each turn per docs/systems.md. No wall
 70 REM clock and no rng, so same request bytes give the same response.
 72 REM The grades themselves are NOT here: they live in school-db, on the
 74 REM local bus. This program owns the roster and the schedule and asks
 76 REM the records store for anything about a grade (CALL/REPLY).
-82 DIM NM$(10)
-84 DIM CO(40)
-86 DIM CN$(40)
-88 DIM CB$(40)
+78 REM The roster, the schedule and the course catalog are fixed-width
+79 REM flat files under data/ (layouts in tools/gen-systems-data.py),
+80 REM RSTS/E-fashion; the program re-reads them into its arrays at
+81 REM every spawn. The harness wrapper chdirs here first.
+82 DIM NM$(400)
+83 DIM SID(400)
+84 DIM IX(400)
+85 DIM GL$(400)
+86 DIM CO(2200)
+87 DIM CN$(2200)
+88 DIM CT$(60)
+89 DIM CD$(60)
 90 DIM GS$(40)
 92 DIM GC$(40)
 94 DIM GG$(40)
@@ -97,7 +105,7 @@
 3430 ST$ = "MENU"
 3440 PRINT "SYSTEM/1 school OK"
 3450 GOSUB 7500
-3460 PRINT "DISPLAY 6"
+3460 PRINT "DISPLAY 7"
 3470 PRINT "WELCOME TO DISTRICT DATANET"
 3480 GOSUB 7700
 3490 PRINT "LINE UP"
@@ -127,7 +135,9 @@
 3730 IF ST$ = "GRNAME" THEN GOTO 4400
 3740 IF ST$ = "GRCOURSE" THEN GOTO 4500
 3750 IF ST$ = "GRVALUE" THEN GOTO 4600
-3760 GOTO 7000
+3760 IF ST$ = "LSTS" THEN GOTO 5600
+3770 IF ST$ = "LSTC" THEN GOTO 5800
+3780 GOTO 7000
 3900 REM RESUME: school-db has answered the CALL made last turn
 3905 IF ST$ = "AWAITREC" THEN GOTO 3920
 3910 IF ST$ = "AWAITSET" THEN GOTO 3960
@@ -139,9 +149,9 @@
 3928 IF RS$ <> "OK" THEN GOTO 3950
 3930 PRINT "SYSTEM/1 school OK"
 3932 GOSUB 7500
-3934 DC = 1 + NR + 5
+3934 DC = 1 + NR + 6
 3936 PRINT "DISPLAY " + MID$(STR$(DC), 2)
-3938 PRINT "STUDENT: " + NM$(FS) + "   GRADE 11"
+3938 PRINT "STUDENT: " + NM$(IX(FS)) + "   GRADE " + GL$(IX(FS))
 3940 FOR K = 1 TO NR
 3942 PRINT RL$(K)
 3944 NEXT K
@@ -152,7 +162,7 @@
 3950 REM the records store did not answer. Say so; do not hang the line.
 3951 PRINT "SYSTEM/1 school OK"
 3952 GOSUB 7500
-3953 PRINT "DISPLAY 6"
+3953 PRINT "DISPLAY 7"
 3954 PRINT "RECORDS UNAVAILABLE"
 3955 GOSUB 7700
 3956 PRINT "LINE UP"
@@ -165,7 +175,7 @@
 3968 IF RS$ <> "OK" THEN GOTO 3950
 3970 PRINT "SYSTEM/1 school OK"
 3972 GOSUB 7500
-3974 PRINT "DISPLAY 6"
+3974 PRINT "DISPLAY 7"
 3976 PRINT "RECORD UPDATED."
 3978 GOSUB 7700
 3980 PRINT "LINE UP"
@@ -176,7 +186,11 @@
 4020 IF IN$ = "2" THEN GOTO 4300
 4030 IF IN$ = "3" THEN GOTO 5000
 4040 IF IN$ = "4" THEN GOTO 5200
-4050 GOTO 5400
+4050 IF IN$ = "LIST" THEN GOTO 5500
+4060 IF LEFT$(IN$, 5) = "LIST " THEN GOTO 5500
+4070 IF IN$ = "COURSES" THEN GOTO 5700
+4080 IF LEFT$(IN$, 8) = "COURSES " THEN GOTO 5700
+4090 GOTO 5400
 4100 REM option 1: records - ask for the student name
 4110 ST$ = "RECNAME"
 4120 PRINT "SYSTEM/1 school OK"
@@ -206,7 +220,7 @@
 4282 ST$ = "MENU"
 4284 PRINT "SYSTEM/1 school OK"
 4286 GOSUB 7500
-4288 PRINT "DISPLAY 6"
+4288 PRINT "DISPLAY 7"
 4290 PRINT "NO RECORD ON FILE"
 4292 GOSUB 7700
 4294 PRINT "LINE UP"
@@ -238,7 +252,7 @@
 4462 ST$ = "MENU"
 4464 PRINT "SYSTEM/1 school OK"
 4466 GOSUB 7500
-4468 PRINT "DISPLAY 6"
+4468 PRINT "DISPLAY 7"
 4470 PRINT "NO RECORD ON FILE"
 4472 GOSUB 7700
 4474 PRINT "LINE UP"
@@ -265,7 +279,7 @@
 4563 WP$ = "-"
 4564 PRINT "SYSTEM/1 school OK"
 4566 GOSUB 7500
-4568 PRINT "DISPLAY 6"
+4568 PRINT "DISPLAY 7"
 4570 PRINT "NO SUCH COURSE FOR STUDENT"
 4572 GOSUB 7700
 4574 PRINT "LINE UP"
@@ -293,7 +307,7 @@
 4726 WC$ = "-"
 4728 PRINT "SYSTEM/1 school OK"
 4730 GOSUB 7500
-4732 PRINT "DISPLAY 6"
+4732 PRINT "DISPLAY 7"
 4734 PRINT "GRADE MUST BE A-F"
 4736 GOSUB 7700
 4738 PRINT "LINE UP"
@@ -302,7 +316,7 @@
 5000 REM option 3: attendance is a stub (out of scope this semester)
 5010 PRINT "SYSTEM/1 school OK"
 5020 GOSUB 7500
-5030 PRINT "DISPLAY 6"
+5030 PRINT "DISPLAY 7"
 5040 PRINT "ATTENDANCE REPORTING IS CLOSED FOR THE SEMESTER."
 5050 GOSUB 7700
 5060 PRINT "LINE UP"
@@ -325,12 +339,123 @@
 5400 REM unrecognized menu selection
 5410 PRINT "SYSTEM/1 school OK"
 5420 GOSUB 7500
-5430 PRINT "DISPLAY 6"
+5430 PRINT "DISPLAY 7"
 5440 PRINT "INVALID SELECTION"
 5450 GOSUB 7700
 5460 PRINT "LINE UP"
 5470 PRINT "END"
 5480 END
+5500 REM LIST [NAME*]: roster listing, 15 rows to a page. The optional
+5502 REM pattern is a starts-with prefix over the roster name; a
+5504 REM trailing * is tolerated. The page cursor and pattern ride the
+5506 REM STATE block (STEP LSTS, WIP = next row, WIPC = pattern).
+5510 P9$ = ""
+5512 IF LEN(IN$) > 5 THEN P9$ = MID$(IN$, 6)
+5514 IF LEN(P9$) > 0 THEN IF RIGHT$(P9$, 1) = "*" THEN P9$ = LEFT$(P9$, LEN(P9$) - 1)
+5516 CUR = 1
+5518 GOTO 5900
+5600 REM STEP LSTS: M turns the page; anything else ends the listing
+5610 IF IN$ <> "M" THEN GOTO 6300
+5620 CUR = VAL(WP$)
+5630 P9$ = WC$
+5640 IF P9$ = "-" THEN P9$ = ""
+5650 GOTO 5900
+5700 REM COURSES [PFX*]: course-catalog listing, same paging as LIST
+5710 P9$ = ""
+5712 IF LEN(IN$) > 8 THEN P9$ = MID$(IN$, 9)
+5714 IF LEN(P9$) > 0 THEN IF RIGHT$(P9$, 1) = "*" THEN P9$ = LEFT$(P9$, LEN(P9$) - 1)
+5716 CUR = 1
+5718 GOTO 6600
+5800 REM STEP LSTC: M turns the page; anything else ends the listing
+5810 IF IN$ <> "M" THEN GOTO 6300
+5820 CUR = VAL(WP$)
+5830 P9$ = WC$
+5840 IF P9$ = "-" THEN P9$ = ""
+5850 GOTO 6600
+5900 REM ---- emit one roster page from row CUR, prefix P9$ ----
+5905 N9 = 0
+5910 PX = 0
+5915 FOR SI = CUR TO NS
+5920 IF LEFT$(NM$(SI), LEN(P9$)) <> P9$ THEN GOTO 5945
+5925 IF PX > 0 THEN GOTO 5945
+5930 IF N9 = 15 THEN PX = SI : GOTO 5945
+5935 N9 = N9 + 1
+5940 RL$(N9) = RIGHT$("000" + MID$(STR$(SID(SI)), 2), 4) + "  " + NM$(SI) + SPACE$(32 - LEN(NM$(SI))) + GL$(SI)
+5945 NEXT SI
+5950 T9$ = "** STUDENT ROSTER **"
+5955 S9$ = "LSTS"
+5960 GOTO 6350
+6600 REM ---- emit one catalog page from row CUR, prefix P9$ ----
+6605 N9 = 0
+6610 PX = 0
+6615 FOR CI = CUR TO CC
+6620 IF LEFT$(CT$(CI), LEN(P9$)) <> P9$ THEN GOTO 6645
+6625 IF PX > 0 THEN GOTO 6645
+6630 IF N9 = 15 THEN PX = CI : GOTO 6645
+6635 N9 = N9 + 1
+6640 RL$(N9) = CT$(CI) + SPACE$(16 - LEN(CT$(CI))) + CD$(CI)
+6645 NEXT CI
+6650 T9$ = "** COURSE CATALOG **"
+6655 S9$ = "LSTC"
+6660 GOTO 6350
+6300 REM a non-M entry at a MORE prompt ends the listing
+6310 ST$ = "MENU"
+6312 WP$ = "-"
+6314 WC$ = "-"
+6320 PRINT "SYSTEM/1 school OK"
+6322 GOSUB 7500
+6324 PRINT "DISPLAY 7"
+6326 PRINT "END OF LIST"
+6328 GOSUB 7700
+6330 PRINT "LINE UP"
+6332 PRINT "END"
+6334 END
+6350 REM ---- shared page printer: N9 rows, PX cursor, T9$ title ----
+6355 IF N9 > 0 THEN GOTO 6380
+6360 ST$ = "MENU"
+6362 WP$ = "-"
+6364 WC$ = "-"
+6366 PRINT "SYSTEM/1 school OK"
+6368 GOSUB 7500
+6370 PRINT "DISPLAY 7"
+6372 PRINT "NO MATCH"
+6374 GOSUB 7700
+6376 PRINT "LINE UP"
+6378 PRINT "END"
+6379 END
+6380 IF PX = 0 THEN GOTO 6440
+6385 REM more rows remain: park the cursor in the STATE block
+6390 ST$ = S9$
+6392 WP$ = MID$(STR$(PX), 2)
+6394 WC$ = P9$
+6396 IF WC$ = "" THEN WC$ = "-"
+6400 PRINT "SYSTEM/1 school OK"
+6402 GOSUB 7500
+6404 PRINT "DISPLAY " + MID$(STR$(N9 + 2), 2)
+6406 PRINT T9$
+6410 FOR K = 1 TO N9
+6412 PRINT RL$(K)
+6414 NEXT K
+6416 PRINT "MORE - TYPE M"
+6420 PRINT "LINE UP"
+6422 PRINT "END"
+6424 END
+6440 REM final page: rows, END OF LIST, back to the menu
+6442 ST$ = "MENU"
+6444 WP$ = "-"
+6446 WC$ = "-"
+6448 PRINT "SYSTEM/1 school OK"
+6450 GOSUB 7500
+6452 PRINT "DISPLAY " + MID$(STR$(N9 + 8), 2)
+6454 PRINT T9$
+6458 FOR K = 1 TO N9
+6460 PRINT RL$(K)
+6462 NEXT K
+6464 PRINT "END OF LIST"
+6466 GOSUB 7700
+6468 PRINT "LINE UP"
+6470 PRINT "END"
+6472 END
 6000 REM ---- parse one opaque STATE line in L$ ----
 6010 IF LEFT$(L$, 5) = "AUTH " THEN AU = VAL(MID$(L$, 6))
 6020 IF LEFT$(L$, 6) = "TRIES " THEN TR = VAL(MID$(L$, 7))
@@ -355,37 +480,21 @@
 6230 RETURN
 6500 REM resolve typed name US$ to a student id FS (0 if none).
 6502 REM key = first token before a space or comma; prefix-match the
-6504 REM full name, first student wins (same rule as the retired sim).
-6506 KP = INSTR(US$, " ")
-6508 KQ = INSTR(US$, ",")
-6510 KD = KP
-6512 IF KD = 0 THEN KD = KQ
-6514 IF KQ > 0 AND KQ < KD THEN KD = KQ
-6516 KEY$ = US$
-6518 IF KD > 0 THEN KEY$ = LEFT$(US$, KD - 1)
-6520 FS = 0
-6522 IF KEY$ = "" THEN RETURN
-6524 FOR SI = 1 TO NS
-6526 IF LEFT$(NM$(SI), LEN(KEY$)) = KEY$ AND FS = 0 THEN FS = SI
-6528 NEXT SI
-6530 RETURN
-6700 REM count the courses on file for student FS into RC
-6710 RC = 0
-6720 FOR CI = 1 TO TC
-6730 IF CO(CI) = FS THEN RC = RC + 1
-6740 NEXT CI
-6750 RETURN
-6800 REM print each course row for student FS, applying overrides
-6810 SIX$ = MID$(STR$(FS), 2)
-6820 FOR CI = 1 TO TC
-6830 IF CO(CI) <> FS THEN GOTO 6890
-6840 EG$ = CB$(CI)
-6850 FOR GI = 1 TO NG
-6860 IF GS$(GI) = SIX$ AND GC$(GI) = CN$(CI) THEN EG$ = GG$(GI)
-6870 NEXT GI
-6880 PRINT CN$(CI) + SPACE$(16 - LEN(CN$(CI))) + EG$
-6890 NEXT CI
-6900 RETURN
+6504 REM full roster name in file (alphabetical) order, first match
+6506 REM wins; the winner's file id is the answer.
+6508 KP = INSTR(US$, " ")
+6510 KQ = INSTR(US$, ",")
+6512 KD = KP
+6514 IF KD = 0 THEN KD = KQ
+6516 IF KQ > 0 AND KQ < KD THEN KD = KQ
+6518 KEY$ = US$
+6520 IF KD > 0 THEN KEY$ = LEFT$(US$, KD - 1)
+6522 FS = 0
+6524 IF KEY$ = "" THEN RETURN
+6526 FOR SI = 1 TO NS
+6528 IF LEFT$(NM$(SI), LEN(KEY$)) = KEY$ AND FS = 0 THEN FS = SID(SI)
+6530 NEXT SI
+6532 RETURN
 7000 REM protocol error: fixed drop response (wrapper exits non-zero)
 7010 PRINT "SYSTEM/1 school OK"
 7020 PRINT "STATE 1"
@@ -408,40 +517,57 @@
 7600 PRINT "GRD " + GS$(GI) + " " + GC$(GI) + " " + GG$(GI)
 7610 NEXT GI
 7620 RETURN
-7700 REM emit the 5-line main menu (MENU5)
+7700 REM emit the 6-line main menu (MENU6)
 7710 PRINT "1 - STUDENT RECORDS"
 7720 PRINT "2 - GRADE ENTRY"
 7730 PRINT "3 - ATTENDANCE"
 7740 PRINT "4 - LOG OFF"
+7745 PRINT "LIST NAME* OR COURSES PFX* FOR ROSTERS"
 7750 PRINT "SELECT:"
 7760 RETURN
-8500 REM ---- student roster and course/grade tables (canonical) ----
-8510 NS = 2
-8520 NM$(1) = "LIGHTMAN, DAVID L."
-8530 NM$(2) = "MACK, JENNIFER K."
-8560 TC = 8
-8570 CO(1) = 1
-8572 CN$(1) = "BIOLOGY 2"
-8574 CB$(1) = "F"
-8580 CO(2) = 1
-8582 CN$(2) = "ENGLISH 11"
-8584 CB$(2) = "D"
-8590 CO(3) = 1
-8592 CN$(3) = "GEOMETRY"
-8594 CB$(3) = "C"
-8600 CO(4) = 1
-8602 CN$(4) = "COMPUTER LAB"
-8604 CB$(4) = "A"
-8610 CO(5) = 2
-8612 CN$(5) = "BIOLOGY 2"
-8614 CB$(5) = "F"
-8620 CO(6) = 2
-8622 CN$(6) = "ENGLISH 11"
-8624 CB$(6) = "B"
-8630 CO(7) = 2
-8632 CN$(7) = "ALGEBRA 2"
-8634 CB$(7) = "C"
-8640 CO(8) = 2
-8642 CN$(8) = "PHYS ED"
-8644 CB$(8) = "A"
-8650 RETURN
+8500 REM ---- load roster, schedule and catalog from the data files ----
+8505 NS = 0
+8510 OPEN "data/students.dat" FOR INPUT AS #1
+8515 IF EOF(1) THEN GOTO 8545
+8520 LINE INPUT #1, L9$
+8525 NS = NS + 1
+8527 SID(NS) = VAL(LEFT$(L9$, 4))
+8529 T9$ = MID$(L9$, 6, 30)
+8531 GOSUB 9000
+8533 NM$(NS) = T9$
+8535 T9$ = MID$(L9$, 37, 2)
+8537 GOSUB 9000
+8539 GL$(NS) = T9$
+8541 IX(SID(NS)) = NS
+8543 GOTO 8515
+8545 CLOSE #1
+8550 TC = 0
+8555 OPEN "data/schedule.dat" FOR INPUT AS #1
+8560 IF EOF(1) THEN GOTO 8585
+8565 LINE INPUT #1, L9$
+8570 TC = TC + 1
+8572 CO(TC) = VAL(LEFT$(L9$, 4))
+8574 T9$ = MID$(L9$, 6, 14)
+8576 GOSUB 9000
+8578 CN$(TC) = T9$
+8580 GOTO 8560
+8585 CLOSE #1
+8590 CC = 0
+8595 OPEN "data/courses.dat" FOR INPUT AS #1
+8600 IF EOF(1) THEN GOTO 8635
+8605 LINE INPUT #1, L9$
+8610 CC = CC + 1
+8615 T9$ = LEFT$(L9$, 14)
+8620 GOSUB 9000
+8622 CT$(CC) = T9$
+8625 T9$ = MID$(L9$, 16, 6) + "  " + MID$(L9$, 23, 12)
+8627 GOSUB 9000
+8629 CD$(CC) = T9$
+8631 GOTO 8600
+8635 CLOSE #1
+8640 RETURN
+9000 REM trim trailing spaces from T9$
+9010 IF LEN(T9$) = 0 THEN RETURN
+9020 IF RIGHT$(T9$, 1) <> " " THEN RETURN
+9030 T9$ = LEFT$(T9$, LEN(T9$) - 1)
+9040 GOTO 9010

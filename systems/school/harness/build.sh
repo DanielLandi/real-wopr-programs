@@ -10,8 +10,10 @@ mkdir -p bin
 cat > bin/school <<'WRAP'
 #!/usr/bin/env bash
 set -uo pipefail
-src="$(cd "$(dirname "$0")/../.." && pwd)/school.bas"
-out="$(bwbasic "$src" 2>/dev/null | sed -n '/^SYSTEM\/1 /,/^END$/p')"
+# chdir to the program's folder so the BASIC's relative OPEN of its
+# data/*.dat files resolves no matter where the host spawned us from.
+cd "$(cd "$(dirname "$0")/../.." && pwd)"
+out="$(bwbasic "school.bas" 2>/dev/null | sed -n '/^SYSTEM\/1 /,/^END$/p')"
 printf '%s\n' "$out"
 case "$out" in
   *"PROTOCOL ERROR"*) exit 1 ;;
