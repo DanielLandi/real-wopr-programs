@@ -4,12 +4,11 @@
 engine repo (`real-wopr`; sibling checkout: `../real-wopr/docs/feasibility.md`) ·
 **Protocol:** JOSHUA/1 (below)
 
-Joshua's third engine, and the project's answer to a delicious what-if: *the film says Falken
-was a genius — what could a genius actually have built in 1983?* This module is our
-interpretation: a dialogue engine in the **AI language of the era** whose every technique was
-**computable on period hardware**, but whose *ideas* would not be invented for another decade
-or four. W.O.P.R. was, canonically, a very large machine — compute is the one thing Falken
-had plenty of.
+Joshua's third engine. The film says Falken was a genius; this module is our interpretation
+of what a genius could actually have built in 1983 — a dialogue engine in the **AI language
+of the era** whose every technique was **computable on period hardware**, but whose *ideas*
+would not be invented for another decade or four. W.O.P.R. was, canonically, a very large
+machine — compute is the one thing Falken had plenty of.
 
 ## Heritage vs. anachronism (honestly labeled)
 

@@ -1,7 +1,7 @@
 # real-wopr-programs
 
-The period-language programs behind **[real-wopr.ai](https://real-wopr.ai)** — a faithful
-technical reconstruction of the W.O.P.R. from *WarGames* (1983), with each program written
+The period-language programs behind **[realwopr.ai](https://realwopr.ai)** — a technical
+reconstruction of the W.O.P.R. from *WarGames* (1983), with each program written
 in a language of its era.
 
 This repository holds **both halves**, and keeps them visibly apart:

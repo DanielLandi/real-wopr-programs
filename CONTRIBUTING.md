@@ -1,6 +1,6 @@
 # Contributing
 
-These are the period-language programs behind [real-wopr.ai](https://real-wopr.ai), plus the
+These are the period-language programs behind [realwopr.ai](https://realwopr.ai), plus the
 modern harness that runs them. The guiding rule is fidelity to the era: a program stays within
 constructs its language plausibly had in the early 1980s, and it says so when it approximates.
 
