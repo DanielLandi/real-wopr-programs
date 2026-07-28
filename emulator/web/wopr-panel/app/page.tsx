@@ -92,11 +92,27 @@ function LampBank({ rows, cols, epoch, density, bank }: {
   );
 }
 
-function CodeReadout({ locked, epoch, aborted }: {
-  locked: number; epoch: number; aborted: boolean;
+// The brute force spins far faster than the panel's 300 ms housekeeping tick —
+// on film the unsolved characters are a blur. Own clock, same time-derived
+// deterministic discipline as the main tick.
+const CODE_TICK_MS = 50;
+
+function CodeReadout({ locked, aborted }: {
+  locked: number; aborted: boolean;
 }) {
   const lockedSet = new Set(CODE_SLOTS.slice(0, locked));
   const complete = locked >= CODE_SLOTS.length;
+  const [epoch, setEpoch] = useState(0);
+  const born = useRef(0);
+  useEffect(() => {
+    if (complete || aborted) return;
+    born.current = born.current || performance.now();
+    const t = setInterval(
+      () => setEpoch(Math.floor((performance.now() - born.current) / CODE_TICK_MS)),
+      CODE_TICK_MS,
+    );
+    return () => clearInterval(t);
+  }, [complete, aborted]);
   return (
     <div style={{ border: "1px solid var(--crt-dim)", padding: "0.9em 1.2em", textAlign: "center" }}>
       <div style={{ letterSpacing: "0.3em", marginBottom: "0.4em" }}>LAUNCH CODE</div>
@@ -393,7 +409,7 @@ export default function WoprPanel() {
             <LampBank rows={6} cols={10} epoch={epoch} density={density} bank={2} />
           </div>
           <div style={{ flex: 2, display: "flex", flexDirection: "column", justifyContent: "center" }}>
-            <CodeReadout locked={locked} epoch={tick} aborted={aborted} />
+            <CodeReadout locked={locked} aborted={aborted} />
           </div>
           <div style={{ flex: 1 }}>
             <LampBank rows={6} cols={10} epoch={epoch} density={density} bank={3} />
