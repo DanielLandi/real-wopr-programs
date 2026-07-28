@@ -6,10 +6,13 @@
 60 REM per docs/systems.md. No wall clock and no rng, so same request
 70 REM bytes give the same response.
 80 REM Verbs: LOOKUP GRADE <id> <course> | SET GRADE <id> <course> <grade>
-82 DIM NM$(10)
-84 DIM CO(40)
-86 DIM CN$(40)
-88 DIM CB$(40)
+81 REM The base grades are a fixed-width flat file, data/grades.dat
+82 REM (layout in tools/gen-systems-data.py), re-read into the arrays at
+83 REM every spawn, ISAM-fashion; overrides ride the STATE block on top.
+84 REM The harness wrapper chdirs here first so the relative OPEN works.
+85 DIM CO(2200)
+86 DIM CN$(2200)
+88 DIM CB$(2200)
 90 DIM GS$(40)
 92 DIM GC$(40)
 94 DIM GG$(40)
@@ -194,33 +197,24 @@
 7540 PRINT "GRD " + GS$(GI) + " " + GC$(GI) + " " + GG$(GI)
 7550 NEXT GI
 7560 RETURN
-8500 REM ---- student roster and course/grade tables (canonical) ----
-8510 NS = 2
-8520 NM$(1) = "LIGHTMAN, DAVID L."
-8530 NM$(2) = "MACK, JENNIFER K."
-8560 TC = 8
-8570 CO(1) = 1
-8572 CN$(1) = "BIOLOGY 2"
-8574 CB$(1) = "F"
-8580 CO(2) = 1
-8582 CN$(2) = "ENGLISH 11"
-8584 CB$(2) = "D"
-8590 CO(3) = 1
-8592 CN$(3) = "GEOMETRY"
-8594 CB$(3) = "C"
-8600 CO(4) = 1
-8602 CN$(4) = "COMPUTER LAB"
-8604 CB$(4) = "A"
-8610 CO(5) = 2
-8612 CN$(5) = "BIOLOGY 2"
-8614 CB$(5) = "F"
-8620 CO(6) = 2
-8622 CN$(6) = "ENGLISH 11"
-8624 CB$(6) = "B"
-8630 CO(7) = 2
-8632 CN$(7) = "ALGEBRA 2"
-8634 CB$(7) = "C"
-8640 CO(8) = 2
-8642 CN$(8) = "PHYS ED"
-8644 CB$(8) = "A"
-8650 RETURN
+8500 REM ---- load the grade file; NS = the highest student id on it ----
+8505 NS = 0
+8510 TC = 0
+8520 OPEN "data/grades.dat" FOR INPUT AS #1
+8530 IF EOF(1) THEN GOTO 8600
+8540 LINE INPUT #1, L9$
+8550 TC = TC + 1
+8560 CO(TC) = VAL(LEFT$(L9$, 4))
+8565 IF CO(TC) > NS THEN NS = CO(TC)
+8570 T9$ = MID$(L9$, 6, 14)
+8575 GOSUB 9000
+8580 CN$(TC) = T9$
+8585 CB$(TC) = MID$(L9$, 21, 1)
+8590 GOTO 8530
+8600 CLOSE #1
+8610 RETURN
+9000 REM trim trailing spaces from T9$
+9010 IF LEN(T9$) = 0 THEN RETURN
+9020 IF RIGHT$(T9$, 1) <> " " THEN RETURN
+9030 T9$ = LEFT$(T9$, LEN(T9$) - 1)
+9040 GOTO 9010

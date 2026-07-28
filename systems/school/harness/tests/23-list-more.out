@@ -1,0 +1,27 @@
+SYSTEM/1 school OK
+STATE 5
+AUTH 1
+TRIES 0
+STEP LSTS
+WIP 31
+WIPC -
+DISPLAY 17
+** STUDENT ROSTER **
+0018  BAKER, MELISSA E.               11
+0019  BAKER, ROBERT B.                10
+0020  BAKER, TODD D.                  12
+0021  BALL, WAYNE S.                  9
+0022  BARNES, ERIC E.                 11
+0023  BARNES, MICHELLE G.             10
+0024  BARNES, ROBERT E.               9
+0025  BATES, TERESA J.                12
+0026  BECK, LISA S.                   9
+0027  BECK, VICKIE R.                 11
+0028  BELL, GLENN G.                  10
+0029  BELL, KEITH A.                  10
+0030  BELL, MICHAEL N.                11
+0031  BERRY, DONNA J.                 10
+0032  BERRY, GLENN S.                 12
+MORE - TYPE M
+LINE UP
+END
