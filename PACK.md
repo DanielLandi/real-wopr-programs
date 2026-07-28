@@ -87,7 +87,7 @@ A program speaks exactly one line-oriented ASCII protocol, named in `pack.json`:
   reply out.
 
 The protocols are designed so a golden fixture pair (`NN.in` / `NN.out`) fully specifies a turn.
-They are documented in full in the engine's docs, linked from [real-wopr.ai](https://real-wopr.ai).
+They are documented in full in the engine's docs, linked from [realwopr.ai](https://realwopr.ai).
 
 ### Asking another program for something
 
@@ -132,7 +132,7 @@ The pack index at the repository root:
   "pack": "real-wopr-programs",
   "version": "1.0.0",
   "author": "...",
-  "homepage": "https://real-wopr.ai",
+  "homepage": "https://realwopr.ai",
   "programs": [
     { "id": "hearts", "kind": "game", "protocol": "WOPR/1",
       "language": "fortran", "path": "games/hearts", "binary": "hearts" }
