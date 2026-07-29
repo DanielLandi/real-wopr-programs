@@ -55,7 +55,14 @@ export function dialUrl(relay: string, address: string, from: string): string {
 export async function dial(relay: string, address: string, opts: DialOpts = {}): Promise<Line> {
   const ws = new WebSocket(dialUrl(relay, address, opts.from ?? "console"));
 
-  const queue: string[] = [];
+  // ONE queue for both kinds. The link delivers display text and the prompt
+  // that follows it in order, but a socket hands several frames over in a
+  // single read: acting on a prompt the moment its frame parses would repaint
+  // the input line while the text ahead of it is still queued, splitting the
+  // display around the prompt ("BALANCE DUE $" / "TEST: 0.00"). Prompts ride
+  // the same FIFO as text and are applied where they actually arrived.
+  type Pending = { text: string } | { prompt: string };
+  const queue: Pending[] = [];
   let notify: (() => void) | null = null;
   let done = false;
   let closeReason = "";
@@ -79,13 +86,13 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
       // two-byte quantum "[TTT]>" would arrive as "]>".
       promptBuf += env.payload;
       if (!env.eom) return;
-      promptText = promptBuf || ">";
+      queue.push({ prompt: promptBuf || ">" });
       promptBuf = "";
-      opts.onPrompt?.(promptText);
+      notify?.();
       return;
     }
     if (env.payload) {
-      queue.push(env.payload);
+      queue.push({ text: env.payload });
       notify?.();
     }
   });
@@ -119,7 +126,17 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
 
   async function* output(): AsyncIterableIterator<string> {
     while (true) {
-      while (queue.length) yield queue.shift()!;
+      while (queue.length) {
+        const next = queue.shift()!;
+        if ("prompt" in next) {
+          // The consumer has already written every chunk yielded before this,
+          // so the input line repaints below finished text, never through it.
+          promptText = next.prompt;
+          opts.onPrompt?.(promptText);
+          continue;
+        }
+        yield next.text;
+      }
       if (done) return;
       await new Promise<void>((r) => { notify = () => { notify = null; r(); }; });
     }

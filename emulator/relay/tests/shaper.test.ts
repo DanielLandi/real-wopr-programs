@@ -93,6 +93,34 @@ test("ordering: jitter never reorders frames", async () => {
   assert.equal(reassemble(frames)[0], "ABCDEFGH".repeat(8));
 });
 
+test("ordering: a prompt never overtakes the display it follows", async () => {
+  // A system sends DISPLAY then PROMPT back to back, both through the one
+  // per-call shaper. The prompt is short and the display is long, so anything
+  // resembling a per-kind queue — or a per-message timer — would let the
+  // prompt out first and split the display around the input line. One FIFO
+  // across kinds is what the terminal client relies on.
+  const profile: LinkProfile = {
+    baud: 1200, bits_per_char: 10, latency_ms: 10, jitter_ms: 10,
+    frame_bytes: 64, handshake: "none",
+  };
+  const { frames, deliver } = collect();
+  let i = 0;
+  const rng = () => (i++ % 2 === 0 ? 0 : 1);   // adversarial jitter
+  const shaper = new LinkShaper(profile, "dialup-1200", "s1", deliver, { rng });
+  const display = "SUBSCRIBER: LIGHTMAN H  BALANCE DUE $0.00\n".repeat(4);
+  shaper.send({ kind: "output", payload: display });
+  shaper.send({ kind: "prompt", payload: "TEST:" });
+  await done(frames, 2);
+  shaper.close();
+
+  const kinds = frames.map((f) => f.kind);
+  assert.equal(kinds.lastIndexOf("output") < kinds.indexOf("prompt"), true,
+    `a prompt frame preceded the tail of the display: ${kinds.join(",")}`);
+  const seqs = frames.map((f) => f.seq);
+  assert.deepEqual(seqs, [...seqs].sort((x, y) => x - y));
+  assert.deepEqual(reassemble(frames), [display, "TEST:"]);
+});
+
 test("framing: a prompt is chunked like any other payload at dialup-300", async () => {
   // The shaper never inspects payload (§3), so a prompt gets the same trickle
   // output does — and a consumer that REPLACES rather than appends would keep

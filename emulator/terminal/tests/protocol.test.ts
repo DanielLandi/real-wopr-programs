@@ -191,6 +191,42 @@ test("dial: a prompt chunked by a 300-baud line arrives whole", async () => {
   await relay.close();
 });
 
+test("dial: a prompt never overtakes display text still queued ahead of it", async () => {
+  // The live symptom (task-10 Anomaly A): a system's DISPLAY and the PROMPT
+  // that follows it ride the same shaped link, so they reach the socket in
+  // order — but the socket hands several frames to the client in one read.
+  // If the prompt is acted on the moment its frame parses while the display
+  // text is still sitting in the output queue, the prompt paints first and
+  // the tail of the display lands after it ("BALANCE DUE $" / "TEST: 0.00").
+  const relay = await fakeRelay((ws) => {
+    // Sent back-to-back on purpose: one write, one read, one tick.
+    ws.send(envelope("SUBSCRIBER: LIGHTMAN H  BALANCE DUE $"));
+    ws.send(envelope("0.00\n"));
+    ws.send(JSON.stringify({
+      v: 1, session: "t", seq: 3, kind: "prompt",
+      link: "pstn", payload: "TEST:", eom: true,
+    }));
+    ws.send(envelope("AFTER\n"));
+  });
+  const log: string[] = [];
+  const line = await dial(relay.url, "(311) 555-0100", {
+    onPrompt: (p) => log.push(`prompt:${p}`),
+  });
+  let chunks = 0;
+  for await (const chunk of line.output) {
+    log.push(`out:${chunk}`);
+    if (++chunks === 3) break;
+  }
+  assert.deepEqual(log, [
+    "out:SUBSCRIBER: LIGHTMAN H  BALANCE DUE $",
+    "out:0.00\n",
+    "prompt:TEST:",
+    "out:AFTER\n",
+  ]);
+  line.hangUp();
+  await relay.close();
+});
+
 test("dial: the prompt starts bare", async () => {
   const relay = await fakeRelay(() => {});
   const line = await dial(relay.url, "(206) 555-0142");

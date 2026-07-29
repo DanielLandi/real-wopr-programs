@@ -39,6 +39,32 @@ function captureOutput() {
   return { output, text: () => chunks.join("") };
 }
 
+function outputEnvelope(payload: string, seq: number) {
+  return JSON.stringify({
+    v: 1, session: "s", seq, kind: "output", link: "pstn", payload, eom: true,
+  });
+}
+
+test("render-tty: the prompt repaints after the display text, never through it", async () => {
+  // task-10 Anomaly A, on the surface where it was seen: several frames land
+  // in one socket read, and the prompt repaint must not jump the queue.
+  const relay = await fakeRelay((ws) => {
+    ws.send(outputEnvelope("SUBSCRIBER: LIGHTMAN H  BALANCE DUE $", 0));
+    ws.send(outputEnvelope("0.00\n", 1));
+    ws.send(promptEnvelope("TEST:", 2));
+    setTimeout(() => ws.close(1000, "NO CARRIER"), 100);
+  });
+
+  const { output, text } = captureOutput();
+  const input = new Readable({ read() {} });
+
+  await runTerminal(relay.url, "(311) 555-0100", { input, output });
+
+  const out = text();
+  assert.match(out, /BALANCE DUE \$0\.00\n\nTEST: /, out);
+  await relay.close();
+});
+
 test("render-tty: an identical prompt repaints on every arrival, not only the first", async () => {
   const relay = await fakeRelay((ws) => {
     ws.send(promptEnvelope("TEST:", 0));
