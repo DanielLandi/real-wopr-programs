@@ -35,6 +35,13 @@ PLACEHOLDER_TITLES = {
 
 
 @dataclass(frozen=True)
+class Interpretation:
+    """One reconstruction of a title (docs/games.md §8)."""
+    name: str
+    author: str
+
+
+@dataclass(frozen=True)
 class Game:
     id: str
     title: str
@@ -46,26 +53,60 @@ class Game:
     self_resolving: bool = False  # engine resolves all non-human seats in the
     # human's MOVE; the bridge must never fire the inputless follow-up MOVE.
     abbrev: str = ""  # short label for the prompt ("TTT"); empty => use the id
+    interpretations: tuple[Interpretation, ...] = ()  # empty = flat slot (§8)
+
+
+def _game_from_manifest(m: dict, interpretations: tuple[Interpretation, ...]) -> Game:
+    timeout = m.get("timeout_s")
+    if timeout is not None:
+        timeout = min(float(timeout), 10.0)  # hard cap per D2
+    return Game(
+        id=m["id"], title=m["title"].upper(), status=m["status"],
+        players=m.get("players", 2), summary=m.get("summary", ""),
+        input_syntax=m.get("input_syntax", ""), timeout_s=timeout,
+        self_resolving=bool(m.get("self_resolving", False)),
+        abbrev=m.get("abbrev", ""),
+        interpretations=interpretations,
+    )
+
+
+def _nested_game(game_id: str, games_dir: Path, sub_manifests: list[Path]) -> Game:
+    """A converted slot: games/<id>/<interpretation>/, each a complete program.
+
+    The slot's catalog entry is built from the core manifest — core is the
+    default everywhere (§8) — and every sub-manifest must agree on the slot's
+    identity, or the catalog refuses to load at all: a half-converted slot is
+    a startup error, never a play-time surprise.
+    """
+    by_name: dict[str, tuple[dict, Interpretation]] = {}
+    for man in sub_manifests:
+        dir_name = man.parent.parent.name
+        m = json.loads(man.read_text())
+        if m.get("id") != game_id or m.get("interpretation") != dir_name or not m.get("author"):
+            raise ValueError(
+                f"nested slot {game_id!r}: manifest under {dir_name!r} must carry "
+                f"id={game_id!r}, interpretation={dir_name!r}, and an author")
+        by_name[dir_name] = (m, Interpretation(name=dir_name, author=m["author"]))
+    if "core" not in by_name:
+        raise ValueError(f"nested slot {game_id!r} has no core/ interpretation")
+    ordered = ("core", *sorted(n for n in by_name if n != "core"))
+    core_manifest = by_name["core"][0]
+    return _game_from_manifest(
+        core_manifest, tuple(by_name[n][1] for n in ordered))
 
 
 def load_catalog(games_dir: Path) -> dict[str, Game]:
     """Manifests define implemented games; everything else in CATALOG_ORDER is
-    a placeholder."""
+    a placeholder. A slot is nested (§8) when its harness has moved down into
+    per-interpretation subdirectories."""
     catalog: dict[str, Game] = {}
     for game_id in CATALOG_ORDER:
         manifest = games_dir / game_id / "harness" / "manifest.json"
+        subs = sorted((games_dir / game_id).glob("*/harness/manifest.json"))
         if manifest.exists():
-            m = json.loads(manifest.read_text())
-            timeout = m.get("timeout_s")
-            if timeout is not None:
-                timeout = min(float(timeout), 10.0)  # hard cap per D2
-            catalog[game_id] = Game(
-                id=m["id"], title=m["title"].upper(), status=m["status"],
-                players=m.get("players", 2), summary=m.get("summary", ""),
-                input_syntax=m.get("input_syntax", ""), timeout_s=timeout,
-                self_resolving=bool(m.get("self_resolving", False)),
-                abbrev=m.get("abbrev", ""),
-            )
+            catalog[game_id] = _game_from_manifest(json.loads(manifest.read_text()), ())
+        elif subs:
+            catalog[game_id] = _nested_game(game_id, games_dir, subs)
         else:
             catalog[game_id] = Game(
                 id=game_id, title=PLACEHOLDER_TITLES[game_id], status="placeholder",
