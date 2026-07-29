@@ -50,6 +50,27 @@ games/hearts/harness/bin/hearts < games/hearts/harness/tests/01-new.in
 4. Add your program to `pack.json` (or regenerate the index).
 5. `make build && make test`.
 
+## Reinterpret an existing game
+
+A catalog slot can hold several competing reconstructions of the same title — the pack calls
+them **interpretations**. Yours does not replace the official one; it sits beside it, and a
+player finds it by asking (`LIST CHESS` at the terminal lists a slot's interpretations;
+starting a title bare always runs the official one).
+
+1. A slot with one implementation is flat (`games/<id>/`). Your PR converts it:
+   `games/<id>/<interpretation>/`, one subdirectory per interpretation, each a complete
+   program with its source at the top and its own `harness/{manifest.json,build.sh,tests/}`.
+   Move the existing program into `games/<id>/core/` unchanged.
+2. Pick a short lowercase `interpretation` name, set it in your manifest along with your
+   `author`, and keep the slot's `id`/`title` identical across interpretations.
+3. Your golden fixtures are yours alone; the existing interpretation's fixtures must still
+   pass byte-exact. CI builds and tests every interpretation in the slot.
+4. Save state is not portable between interpretations — the `STATE` block is your program's
+   own; a `LOAD` of foreign state should fail your program's normal way.
+
+Same wire protocol, same determinism and period rules as any program. The official
+real-wopr implementations carry `"author": "core"`.
+
 ## Determinism and period discipline
 
 - Same request bytes ⇒ same response bytes. No wall clock; seed any randomness from the request.
