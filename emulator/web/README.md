@@ -10,7 +10,7 @@ handshake view).
 
 | App | Vantage | Simulated link |
 | --- | --- | --- |
-| `home-terminal/` | David's bedroom | Dial-up ~300 baud, full handshake |
+| `home-terminal/` | David's bedroom | Dial-up ~1200 baud, full handshake |
 | `norad-terminal/` | Operator console | Leased line, faster, framed |
 | `norad-bigboard/` | War-room map | Internal bus, fastest (graphical) |
 | `wopr-panel/` | The cabinet itself | Internal bus, observe-only (graphical) |
