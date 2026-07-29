@@ -10,7 +10,7 @@ practicality. Reading it tells you nothing about 1983; reading the programs does
 
 | Folder | What it is |
 | --- | --- |
-| `relay/` | The networks. Era shaping (300 baud), dial FSM, switchboard. TypeScript. |
+| `relay/` | The networks. Era shaping (1200 baud), dial FSM, switchboard. TypeScript. |
 | `node/` | The host that runs programs as subprocesses and serves the API. Python. |
 | `web/` | Browser surfaces — a proxy onto what the programs do. TypeScript/Next.js. |
 | `devkit/` | A period line-mode IDE for editing and building programs. Python. |

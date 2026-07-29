@@ -44,7 +44,9 @@ export interface RunningNetworkRelay {
   setCallableBy: (node: string, callableBy: string[] | null) => void;
 }
 
-/** Which link profile a network's kind implies. `fast` mode flattens them all. */
+/** Which link profile a network implies: a declared baud picks the matching
+ * tuned profile when one exists ("dialup-1200"); otherwise the kind's
+ * default. `fast` mode flattens them all. */
 export function profileFor(desc: NetworkDescriptor, mode: CommsMode): LinkProfile {
   if (mode === "fast") return DEFAULT_CONFIG.profiles.off;
   const byKind: Record<NetworkDescriptor["kind"], string> = {
@@ -52,7 +54,10 @@ export function profileFor(desc: NetworkDescriptor, mode: CommsMode): LinkProfil
     leased: "leased-9600",
     local: "internal-bus",
   };
-  return DEFAULT_CONFIG.profiles[byKind[desc.kind]] ?? DEFAULT_CONFIG.profiles.off;
+  const tuned = desc.baud !== undefined
+    ? DEFAULT_CONFIG.profiles[`${desc.kind}-${desc.baud}`]
+    : undefined;
+  return tuned ?? DEFAULT_CONFIG.profiles[byKind[desc.kind]] ?? DEFAULT_CONFIG.profiles.off;
 }
 
 interface Call {

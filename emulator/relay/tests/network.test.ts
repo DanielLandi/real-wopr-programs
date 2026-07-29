@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
-import { startNetworkRelay, type NetworkDescriptor } from "../src/network.ts";
+import { startNetworkRelay, profileFor, type NetworkDescriptor } from "../src/network.ts";
 import { decodeNodeFrame, encodeNodeFrame, type NodeFrame } from "../src/node-proto.ts";
 import { decodeEnvelope } from "../src/envelope.ts";
 
@@ -169,4 +169,23 @@ test("network relay: callable_by keeps a store unreachable by the wrong caller",
 
   store.ws.close();
   await relay.close();
+});
+
+test("profileFor honors a declared baud that matches a tuned profile", () => {
+  const p = profileFor(
+    { name: "pstn", kind: "dialup", addressing: "phone", baud: 1200 }, "authentic");
+  assert.equal(p.baud, 1200);
+  assert.equal(p.handshake, "dialup");
+});
+
+test("profileFor without a declared baud keeps the kind default", () => {
+  const p = profileFor(
+    { name: "pstn", kind: "dialup", addressing: "phone" }, "authentic");
+  assert.equal(p.baud, 300);
+});
+
+test("profileFor with an unmatched baud falls back to the kind default", () => {
+  const p = profileFor(
+    { name: "pstn", kind: "dialup", addressing: "phone", baud: 600 }, "authentic");
+  assert.equal(p.baud, 300);
 });
