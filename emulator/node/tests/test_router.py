@@ -21,7 +21,7 @@ REAL_BIN = REPO / "games"
 GAMES_DIR = REPO / "games"
 
 needs_core = pytest.mark.skipif(
-    not (REAL_BIN / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
+    not (REAL_BIN / "tictactoe" / "core" / "harness" / "bin" / "tictactoe").exists(),
     reason="core not built (run tools/import-programs.sh)",
 )
 
@@ -560,7 +560,8 @@ def test_attach_query_core_failures_are_graceful():
                       interp_dir=None):
             if command == "QUERY" and self.exc is not None:
                 raise self.exc
-            return await super().run(game_id, command, state, move, timeout_s=timeout_s)
+            return await super().run(game_id, command, state, move, timeout_s=timeout_s,
+                                     interp_dir=interp_dir)
 
     for exc, expected in ((CoreBusy("core queue full"), CORE_BUSY_TEXT),
                           (CoreTimeout("queued too long"), CORE_TIMEOUT_TEXT)):

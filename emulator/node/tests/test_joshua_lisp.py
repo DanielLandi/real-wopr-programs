@@ -95,7 +95,7 @@ def test_missing_binary_falls_back_to_scripted():
 
 
 @needs_lisp
-@pytest.mark.skipif(not (REAL_BIN / "tictactoe" / "harness" / "bin" / "tictactoe").exists(), reason="core not built")
+@pytest.mark.skipif(not (REAL_BIN / "tictactoe" / "core" / "harness" / "bin" / "tictactoe").exists(), reason="core not built")
 def test_router_with_lisp_engine_starts_games_from_conversation():
     store = MemoryStore()
     catalog = load_catalog(GAMES_DIR)

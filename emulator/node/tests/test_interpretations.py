@@ -64,7 +64,14 @@ def test_nested_slot_is_discovered_from_its_core_manifest(nested_games_dir):
 
 def test_flat_slots_have_no_interpretations():
     catalog = load_catalog(REPO / "games")
-    assert catalog["tictactoe"].interpretations == ()
+    assert catalog["gtw"].interpretations == ()
+
+
+def test_the_real_tictactoe_slot_is_nested():
+    # The first converted slot in the pack: core plus the heuristic
+    # reconstruction (§8).
+    catalog = load_catalog(REPO / "games")
+    assert [i.name for i in catalog["tictactoe"].interpretations][0] == "core"
 
 
 def test_nested_slot_without_core_is_a_hard_error(nested_games_dir):
@@ -103,7 +110,7 @@ def test_resolve_selector_number_name_author(nested_games_dir):
 
 
 def test_resolve_selector_on_flat_slot_accepts_only_core():
-    game = load_catalog(REPO / "games")["tictactoe"]
+    game = load_catalog(REPO / "games")["gtw"]
     assert resolve_selector(game, "1") == "core"
     assert resolve_selector(game, "CORE") == "core"
     assert resolve_selector(game, "2") is None
@@ -115,12 +122,12 @@ def test_list_interpretations_output(nested_games_dir):
 
 
 def test_list_interpretations_flat_slot():
-    game = load_catalog(REPO / "games")["tictactoe"]
-    assert list_interpretations_text(game) == "TIC-TAC-TOE\n1. CORE"
+    game = load_catalog(REPO / "games")["gtw"]
+    assert list_interpretations_text(game) == "GLOBAL THERMONUCLEAR WAR\n1. CORE"
 
 
 def test_interpretation_dir_flat_nested_and_vanished(nested_games_dir):
-    flat = load_catalog(REPO / "games")["tictactoe"]
+    flat = load_catalog(REPO / "games")["gtw"]
     nested = load_catalog(nested_games_dir)["chess"]
     assert interpretation_dir(flat, "core") is None
     assert interpretation_dir(nested, "minimal") == "minimal"

@@ -16,7 +16,7 @@ REPO = Path(__file__).resolve().parent.parent.parent.parent
 REAL_BIN = REPO / "games"
 
 needs_core = pytest.mark.skipif(
-    not (REAL_BIN / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
+    not (REAL_BIN / "tictactoe" / "core" / "harness" / "bin" / "tictactoe").exists(),
     reason="core not built (run tools/import-programs.sh)",
 )
 
@@ -80,10 +80,13 @@ def test_games_catalog_lists_all_sixteen(client):
     byid = {g["id"]: g for g in games}
     assert byid["tictactoe"]["status"] == "implemented"
     # Status mirrors the manifests on disk, so this test never goes stale
-    # as catalog placeholders get implemented one PR at a time.
+    # as catalog placeholders get implemented one PR at a time. A slot is
+    # implemented whether flat or nested per interpretation (§8).
     games_dir = Path(__file__).resolve().parents[3] / "games"
     for gid, g in byid.items():
-        expected = "implemented" if (games_dir / gid / "harness" / "manifest.json").exists() else "placeholder"
+        on_disk = ((games_dir / gid / "harness" / "manifest.json").exists()
+                   or any((games_dir / gid).glob("*/harness/manifest.json")))
+        expected = "implemented" if on_disk else "placeholder"
         assert g["status"] == expected, f"{gid}: {g['status']} != {expected}"
 
 
@@ -169,7 +172,7 @@ def test_ws_full_exchange_list_games_and_play(client):
         prompt_frame = json.loads(ws.receive_text())
         assert prompt_frame["kind"] == "prompt"
         # NEW tictactoe attaches the terminal to the game; tictactoe's
-        # manifest abbrev is TTT (games/tictactoe/harness/manifest.json).
+        # manifest abbrev is TTT (games/tictactoe/core/harness/manifest.json).
         assert prompt_frame["payload"] == "[TTT]>"
 
         ws.send_text(ws_envelope(sid, "5"))

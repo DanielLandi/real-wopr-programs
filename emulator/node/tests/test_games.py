@@ -24,8 +24,11 @@ def test_no_game_declares_a_move_pattern_any_more():
     # Attachment removed the need to classify a typed line, so the regex that
     # did it is gone from the pack — not re-notated, removed.
     import json
-    for game_id in ("gtw", "tictactoe", "checkers", "hearts", "poker",
+    for game_id in ("gtw", "checkers", "hearts", "poker",
                     "blackjack", "gin-rummy", "falkens-maze"):
         manifest = json.loads(
             (GAMES_DIR / game_id / "harness" / "manifest.json").read_text())
         assert "move_pattern" not in manifest, game_id
+    # tictactoe is a nested slot (§8): every interpretation's manifest obeys.
+    for manifest_path in sorted((GAMES_DIR / "tictactoe").glob("*/harness/manifest.json")):
+        assert "move_pattern" not in json.loads(manifest_path.read_text()), str(manifest_path)
