@@ -26,6 +26,7 @@ export type NodeFrame =
   | { t: "REGISTER"; v: 1; node: string; claims: AddressClaim[]; callable_by?: string[] | null }
   | { t: "ANSWER"; call: number }
   | { t: "DIAL"; call: number; network: string; address: string }
+  | { t: "PROMPT"; call: number; data: string }
   // relay -> node
   | { t: "REGISTERED"; node: string }
   | { t: "REJECTED"; node: string; reason: string }
@@ -40,7 +41,7 @@ export const NODE_MAX_FRAME_BYTES = 8192;
 
 const FRAME_TYPES = new Set([
   "REGISTER", "REGISTERED", "REJECTED", "RING", "ANSWER",
-  "FRAME", "CLOSE", "DIAL", "PING", "PONG",
+  "FRAME", "CLOSE", "DIAL", "PING", "PONG", "PROMPT",
 ]);
 
 function requireCall(f: { call?: unknown }): void {
@@ -106,6 +107,10 @@ export function decodeNodeFrame(raw: string): NodeFrame {
     requireCall(f);
     // Type-checked, never inspected: a raw ws send() must not be able to blow
     // up downstream, but what the payload *means* is between the two programs.
+    if (typeof f.data !== "string") throw new Error("bad data");
+  } else if (f.t === "PROMPT") {
+    requireCall(f);
+    // Same wire discipline as FRAME: opaque data, type-checked only.
     if (typeof f.data !== "string") throw new Error("bad data");
   } else if (f.t === "CLOSE") {
     requireCall(f);

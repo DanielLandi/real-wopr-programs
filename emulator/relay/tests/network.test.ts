@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { WebSocket } from "ws";
 import { startNetworkRelay, profileFor, type NetworkDescriptor } from "../src/network.ts";
 import { decodeNodeFrame, encodeNodeFrame, type NodeFrame } from "../src/node-proto.ts";
-import { decodeEnvelope } from "../src/envelope.ts";
+import { decodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 
 const PSTN: NetworkDescriptor = {
   name: "pstn", kind: "dialup", addressing: "phone", baud: 300, public: true, private: false,
@@ -42,12 +42,14 @@ function dialClient(port: number, address: string, from = "console") {
   const url = `ws://127.0.0.1:${port}/dial?address=${encodeURIComponent(address)}&from=${from}`;
   const ws = new WebSocket(url);
   const text: string[] = [];
+  const envelopes: Envelope[] = [];
   ws.on("message", (d) => {
     const e = decodeEnvelope(d.toString());
+    envelopes.push(e);
     if (e.payload) text.push(e.payload);
   });
   return {
-    ws, text,
+    ws, text, envelopes,
     open: () => new Promise<void>((r) => ws.once("open", () => r())),
     closed: () => new Promise<{ code: number; reason: string }>((r) =>
       ws.once("close", (code, reason) => r({ code, reason: reason.toString() }))),
@@ -110,6 +112,33 @@ test("network relay: dialing a claimed line rings the node, and frames cross", a
   node.send({ t: "FRAME", call: ring.call, data: "GOOSE LAKE UNIFIED SCHOOL DISTRICT" });
 
   assert.equal(await caller.waitFor("GOOSE LAKE"), true);
+
+  caller.ws.close(); node.ws.close();
+  await relay.close();
+});
+
+test("network relay: a node's PROMPT frame reaches the caller as a prompt envelope", async () => {
+  const relay = await startNetworkRelay(PSTN, { port: 0, mode: "fast" });
+  const node = nodeClient(relay.port);
+  await node.open();
+  node.send({ t: "REGISTER", v: 1, node: "school",
+    claims: [{ network: "pstn", address: "(206) 555-0142", protocol: "SYSTEM/1" }] });
+  await node.next("REGISTERED");
+
+  const caller = dialClient(relay.port, "206-555-0142");
+  await caller.open();
+
+  const ring = await node.next("RING") as { call: number; address: string };
+  node.send({ t: "ANSWER", call: ring.call });
+  node.send({ t: "PROMPT", call: ring.call, data: "TEST:" });
+
+  const until = Date.now() + 3000;
+  while (Date.now() < until && !caller.envelopes.some((e) => e.kind === "prompt")) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  const promptFrames = caller.envelopes.filter((e) => e.kind === "prompt");
+  assert.ok(promptFrames.length > 0, "expected at least one prompt envelope");
+  assert.deepEqual(reassemble(promptFrames), ["TEST:"]);
 
   caller.ws.close(); node.ws.close();
   await relay.close();

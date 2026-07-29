@@ -151,6 +151,15 @@ export async function startNetworkRelay(
         return;
       }
 
+      if (f.t === "PROMPT") {
+        const call = calls.get(f.call);
+        if (!call || call.node !== nodeId) return;
+        // Not transcript text: rides the same shaped link, tagged for the
+        // input line (envelope kind "prompt", reassembled by the client).
+        call.shaper.send({ kind: "prompt", payload: f.data });
+        return;
+      }
+
       if (f.t === "CLOSE") {
         if (calls.get(f.call)?.node === nodeId) endCall(f.call, f.reason ?? "NO CARRIER");
         return;
