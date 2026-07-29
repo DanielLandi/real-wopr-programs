@@ -149,6 +149,10 @@ class DevSession:
             return "? RUN needs a game id (e.g. RUN tictactoe)"
         binary = PACK / "games" / game_id / "harness" / "bin" / game_id
         if not binary.exists():
+            # Nested slot (games.md §8): a bare RUN is the core interpretation,
+            # same as a bare start at the terminal.
+            binary = PACK / "games" / game_id / "core" / "harness" / "bin" / game_id
+        if not binary.exists():
             return f"? no binary for {game_id!r} — FORTRAN first"
         frame = f"WOPR/1 {game_id} NEW\nSTATE 0\nEND\n"
         return self._shell([str(binary)], stdin=frame, title=f"RUN {game_id} (NEW)")

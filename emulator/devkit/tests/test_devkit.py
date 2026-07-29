@@ -12,7 +12,7 @@ sys.path.insert(0, str(DEVKIT))
 from wopr_dev.lineeditor import LineEditor  # noqa: E402
 from wopr_dev.session import DevSession, PACK  # noqa: E402
 
-CORE_BIN = PACK / "games" / "tictactoe" / "harness" / "bin"  # devkit's resolved pack root
+CORE_BIN = PACK / "games" / "tictactoe" / "core" / "harness" / "bin"  # nested slot (§8)
 needs_core = pytest.mark.skipif(not (CORE_BIN / "tictactoe").exists(),
                                 reason="core not built")
 
@@ -79,7 +79,9 @@ def test_quit_warns_when_dirty(tmp_path):
 def test_directory_lists_real_sources():
     s = DevSession()
     out, _ = s.command("DIRECTORY core")
-    assert "games/tictactoe/main.f90" in out
+    # tictactoe is a nested slot (§8): each interpretation's source is listed.
+    assert "games/tictactoe/core/main.f90" in out
+    assert "games/tictactoe/heuristic/main.f90" in out
     out, _ = s.command("DIRECTORY joshua")
     assert "joshua/src/engine.lisp" in out
 
@@ -93,7 +95,7 @@ def test_edit_refuses_traversal_and_nonsource():
 
 def test_edit_routes_input_to_editor_until_quit():
     s = DevSession()
-    out, _ = s.command("EDIT games/tictactoe/main.f90")
+    out, _ = s.command("EDIT games/tictactoe/core/main.f90")
     assert "editing" in out
     assert s.editor is not None
     # a print command goes to the editor, not the top-level dispatcher
