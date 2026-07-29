@@ -115,6 +115,60 @@ def load_catalog(games_dir: Path) -> dict[str, Game]:
     return catalog
 
 
+def match_slot(catalog: dict[str, Game], arg: str) -> Game | None:
+    """A LIST/NEW argument names a slot by id or exact title, either case."""
+    a = arg.strip().upper()
+    game = catalog.get(a.lower())
+    if game is not None:
+        return game
+    for g in catalog.values():
+        if g.title == a:
+            return g
+    return None
+
+
+def _effective(game: Game) -> tuple[Interpretation, ...]:
+    # A flat slot behaves as a single core interpretation (§8).
+    return game.interpretations or (Interpretation(name="core", author="core"),)
+
+
+def resolve_selector(game: Game, sel: str) -> str | None:
+    """`<TITLE> <n>` / name / author -> interpretation name; None = invalid."""
+    s = sel.strip().upper()
+    interps = _effective(game)
+    if s.isdigit():
+        n = int(s)
+        return interps[n - 1].name if 1 <= n <= len(interps) else None
+    for i in interps:
+        if s in (i.name.upper(), i.author.upper()):
+            return i.name
+    return None
+
+
+def list_interpretations_text(game: Game) -> str:
+    """The `LIST <TITLE>` answer — the one door into the alternatives (§8)."""
+    lines = [game.title]
+    for n, i in enumerate(_effective(game), start=1):
+        label = i.name.upper()
+        if i.author.upper() != label:
+            label += f" - {i.author.upper()}"
+        lines.append(f"{n}. {label}")
+    return "\n".join(lines)
+
+
+def interpretation_dir(game: Game, pin: str) -> str | None:
+    """The runner's subdirectory for a pinned game row: None = flat layout.
+
+    A pin naming a vanished interpretation is a loud KeyError — never a
+    silent fallback to a binary that did not write this STATE (§8).
+    """
+    if not game.interpretations:
+        return None
+    if pin not in {i.name for i in game.interpretations}:
+        raise KeyError(pin)
+    return pin
+
+
 def list_games_text(catalog: dict[str, Game]) -> str:
     """The in-world LIST GAMES output — the film's recitation, ending on
     GLOBAL THERMONUCLEAR WAR."""

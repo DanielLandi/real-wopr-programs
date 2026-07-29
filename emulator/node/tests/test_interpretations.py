@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from app.games import Interpretation, load_catalog
+from app.games import (Interpretation, interpretation_dir,
+                       list_interpretations_text, load_catalog, match_slot,
+                       resolve_selector)
 
 REPO = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -79,3 +81,48 @@ def test_sub_manifest_with_wrong_id_is_a_hard_error(nested_games_dir):
     man.write_text(json.dumps(bad))
     with pytest.raises(ValueError, match="minimal"):
         load_catalog(nested_games_dir)
+
+
+# -- selection (Task 2) -------------------------------------------------------
+
+def test_match_slot_by_id_and_exact_title():
+    catalog = load_catalog(REPO / "games")
+    assert match_slot(catalog, "TICTACTOE").id == "tictactoe"
+    assert match_slot(catalog, "TIC-TAC-TOE").id == "tictactoe"
+    assert match_slot(catalog, "NOPE") is None
+
+
+def test_resolve_selector_number_name_author(nested_games_dir):
+    game = load_catalog(nested_games_dir)["chess"]
+    assert resolve_selector(game, "1") == "core"
+    assert resolve_selector(game, "2") == "minimal"
+    assert resolve_selector(game, "MINIMAL") == "minimal"
+    assert resolve_selector(game, "DANIEL") == "minimal"
+    assert resolve_selector(game, "3") is None
+    assert resolve_selector(game, "BOGUS") is None
+
+
+def test_resolve_selector_on_flat_slot_accepts_only_core():
+    game = load_catalog(REPO / "games")["tictactoe"]
+    assert resolve_selector(game, "1") == "core"
+    assert resolve_selector(game, "CORE") == "core"
+    assert resolve_selector(game, "2") is None
+
+
+def test_list_interpretations_output(nested_games_dir):
+    game = load_catalog(nested_games_dir)["chess"]
+    assert list_interpretations_text(game) == "CHESS\n1. CORE\n2. MINIMAL - DANIEL"
+
+
+def test_list_interpretations_flat_slot():
+    game = load_catalog(REPO / "games")["tictactoe"]
+    assert list_interpretations_text(game) == "TIC-TAC-TOE\n1. CORE"
+
+
+def test_interpretation_dir_flat_nested_and_vanished(nested_games_dir):
+    flat = load_catalog(REPO / "games")["tictactoe"]
+    nested = load_catalog(nested_games_dir)["chess"]
+    assert interpretation_dir(flat, "core") is None
+    assert interpretation_dir(nested, "minimal") == "minimal"
+    with pytest.raises(KeyError):
+        interpretation_dir(nested, "gone")
