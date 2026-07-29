@@ -5,7 +5,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
-for s in games/*/harness/selfplay.sh games/*/harness/convergence.sh; do
+for s in games/*/harness/selfplay.sh games/*/*/harness/selfplay.sh \
+         games/*/harness/convergence.sh games/*/*/harness/convergence.sh; do
   [ -x "$s" ] || continue
   echo "== $s =="
   if ! "$s"; then echo "BEHAVIOR FAILED: $s" >&2; fail=1; fi

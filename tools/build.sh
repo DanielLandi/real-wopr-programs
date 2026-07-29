@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0
 shopt -s nullglob
-for h in games/*/harness systems/*/harness joshua/harness; do
+for h in games/*/harness games/*/*/harness systems/*/harness joshua/harness; do
   [ -x "$h/build.sh" ] || continue
   if ! "$h/build.sh"; then echo "BUILD FAILED: $h/build.sh" >&2; fail=1; fi
 done

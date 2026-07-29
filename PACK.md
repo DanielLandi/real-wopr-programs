@@ -20,6 +20,9 @@ Each program is a directory with its **source at the top** and a `harness/` besi
 - `build.sh` runs from its own directory, reads the source from `..`, and writes an executable
   to `bin/<binary>`. Interpreted or emulated programs (BASIC, 6502) ship a small wrapper as
   `bin/<binary>` that runs the source under its interpreter or emulator.
+- A **game slot with several interpretations** nests one complete program per reconstruction —
+  `games/<id>/<interpretation>/` with this same layout inside each — instead of the flat
+  `games/<id>/`. See CONTRIBUTING.md "Reinterpret an existing game".
 - A program may keep committed, read-only **data files** under `data/` — fixed-width flat
   records, the era's file technology — and re-read them at every spawn. The program never
   writes them (mutations travel in the `STATE` block like everything else), nothing outside

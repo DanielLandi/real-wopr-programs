@@ -556,7 +556,8 @@ def test_attach_query_core_failures_are_graceful():
     class FailQueryRunner(CoreRunner):
         exc: Exception | None = None
 
-        async def run(self, game_id, command, state=None, move=None, timeout_s=None):
+        async def run(self, game_id, command, state=None, move=None, timeout_s=None,
+                      interp_dir=None):
             if command == "QUERY" and self.exc is not None:
                 raise self.exc
             return await super().run(game_id, command, state, move, timeout_s=timeout_s)
@@ -589,7 +590,8 @@ def test_new_game_core_busy_gets_in_world_line():
     catalog = load_catalog(GAMES_DIR)
 
     class BusyRunner(CoreRunner):
-        async def run(self, game_id, command, state=None, move=None, timeout_s=None):
+        async def run(self, game_id, command, state=None, move=None, timeout_s=None,
+                      interp_dir=None):
             raise CoreBusy("core queue full")
 
     store = MemoryStore()

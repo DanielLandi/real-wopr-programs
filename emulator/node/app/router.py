@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .attachment import Attachment, FRONT_DOOR, GAME, JOSHUA, NORAD_OPS, prompt_for
-from .games import Game, list_games_text
+from .games import (Game, interpretation_dir, list_games_text,
+                    list_interpretations_text, match_slot, resolve_selector)
 from .gtwfeed import display_to_feed, tracks_text
 from .joshua import Joshua
 from .operators import Operator
@@ -283,6 +284,15 @@ class Router:
             return logon
         if upper in ("LIST GAMES", "HELP GAMES"):
             return RouteResult(text=list_games_text(self.catalog), route="bridge")
+        if upper.startswith("LIST "):
+            # LIST <TITLE> is the one door into a slot's interpretations (§8).
+            # Anything that names no slot falls through — the attached program
+            # or Joshua owns the line, exactly as before.
+            slot = match_slot(self.catalog, upper[5:])
+            if slot is not None:
+                if slot.status != "implemented":
+                    return RouteResult(text=f"{slot.title}\n{NOT_IMPLEMENTED}", route="bridge")
+                return RouteResult(text=list_interpretations_text(slot), route="bridge")
         if upper == "HELP" or upper.startswith("HELP "):
             return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
         if upper.startswith("NEW "):
@@ -293,7 +303,11 @@ class Router:
             if att.mode == NORAD_OPS:
                 return None
             room = await self._session_room(session_id)
-            return await self._new_game(session_id, upper[4:].strip().lower(), room)
+            # An optional trailing token picks an interpretation: NEW <id> <n>
+            # or <name>/<author>. Bare NEW <id> is always core (§8).
+            game_arg, _, sel = upper[4:].strip().partition(" ")
+            return await self._new_game(session_id, game_arg.lower(), room,
+                                        selector=sel.strip() or None)
         if upper == "QUIT":
             room = await self._session_room(session_id)
             active = await self._active_game(session_id, room)
@@ -380,11 +394,29 @@ class Router:
 
     # -- destinations ---------------------------------------------------------
 
+    @staticmethod
+    def _pinned_dir(game_meta: Game | None, row: GameState) -> str | None:
+        """The runner subdirectory for this row's pinned interpretation.
+
+        Raises KeyError when the pin names a reconstruction the catalog no
+        longer has — refused loudly upstream, never run under the wrong binary
+        (§8: STATE is not portable across interpretations).
+        """
+        if game_meta is None:
+            return None
+        return interpretation_dir(game_meta, row.interpretation)
+
     async def _core_move(self, session_id: str, game: GameState, move: str | None) -> RouteResult:
         game_meta = self.catalog.get(game.game_id)
         timeout = game_meta.timeout_s if game_meta else None
         try:
-            resp = await self.runner.run(game.game_id, "MOVE", game.state, move, timeout_s=timeout)
+            idir = self._pinned_dir(game_meta, game)
+        except KeyError:
+            return RouteResult(text=f"UNKNOWN INTERPRETATION: {game.interpretation.upper()}",
+                               route="core", detail={"error": "unknown interpretation"})
+        try:
+            resp = await self.runner.run(game.game_id, "MOVE", game.state, move, timeout_s=timeout,
+                                         interp_dir=idir)
         except CoreTimeout:
             await self.store.log_event(session_id, "error", "system",
                                        {"game": game.game_id, "error": "timeout"})
@@ -418,7 +450,7 @@ class Router:
 
         await self.store.upsert_game(GameState(
             session_id=game.session_id, game_id=game.game_id, state=resp.state,
-            status=resp.status, turn=game.turn + 1,
+            status=resp.status, turn=game.turn + 1, interpretation=game.interpretation,
         ))
         await self.store.log_event(session_id, "core", "wopr",
                                    {"game": game.game_id, "status": resp.status, "move": move})
@@ -435,7 +467,7 @@ class Router:
         if move is not None and status == "PLAYING" and not self_resolving:
             follow = await self._core_move(session_id, GameState(
                 session_id=game.session_id, game_id=game.game_id, state=resp.state,
-                status=resp.status, turn=game.turn + 1,
+                status=resp.status, turn=game.turn + 1, interpretation=game.interpretation,
             ), None)
             texts.append(follow.text)
             status = follow.detail.get("status", status)
@@ -463,7 +495,13 @@ class Router:
         game_meta = self.catalog.get(game.game_id)
         timeout = game_meta.timeout_s if game_meta else None
         try:
-            resp = await self.runner.run(game.game_id, "QUERY", game.state, None, timeout_s=timeout)
+            idir = self._pinned_dir(game_meta, game)
+        except KeyError:
+            return RouteResult(text=f"UNKNOWN INTERPRETATION: {game.interpretation.upper()}",
+                               route="core", detail={"error": "unknown interpretation"})
+        try:
+            resp = await self.runner.run(game.game_id, "QUERY", game.state, None, timeout_s=timeout,
+                                         interp_dir=idir)
         except CoreTimeout:
             return RouteResult(text=CORE_TIMEOUT_TEXT, route="core", detail={"error": "timeout"})
         except CoreBusy:
@@ -473,20 +511,36 @@ class Router:
         return RouteResult(text=resp.display, route="core",
                            detail={"game": game.game_id, "status": game.status})
 
-    async def _new_game(self, session_id: str, game_id: str, room: str | None) -> RouteResult:
+    async def _new_game(self, session_id: str, game_id: str, room: str | None,
+                        selector: str | None = None) -> RouteResult:
         game = self.catalog.get(game_id)
         if game is None:
             return RouteResult(text=f"UNKNOWN GAME: {game_id.upper()}", route="bridge")
         if game.status != "implemented":
             return RouteResult(text=f"{game.title}\n{NOT_IMPLEMENTED}", route="bridge")
+        # Bare start is always the core interpretation (§8); a selector — the
+        # number, name, or author LIST <TITLE> printed — picks another.
+        pin = "core" if selector is None else resolve_selector(game, selector)
+        if pin is None:
+            return RouteResult(text=f"UNKNOWN INTERPRETATION: {selector}", route="bridge")
+        idir = interpretation_dir(game, pin)
 
         async with self.locks.lock(room_key(room)):
             if room is not None:
                 existing = await self.store.get_latest_game(game_id, room)
                 if existing is not None:
+                    # The room's game was started under its own pin; attaching
+                    # must run THAT reconstruction — its STATE is not portable.
+                    try:
+                        existing_dir = interpretation_dir(game, existing.interpretation)
+                    except KeyError:
+                        return RouteResult(
+                            text=f"UNKNOWN INTERPRETATION: {existing.interpretation.upper()}",
+                            route="core", detail={"error": "unknown interpretation"})
                     try:
                         resp = await self.runner.run(game_id, "QUERY", existing.state, None,
-                                                     timeout_s=game.timeout_s)
+                                                     timeout_s=game.timeout_s,
+                                                     interp_dir=existing_dir)
                     except CoreTimeout:
                         return RouteResult(text=CORE_TIMEOUT_TEXT, route="core",
                                            detail={"error": "timeout"})
@@ -504,7 +558,8 @@ class Router:
                         route="bridge", detail={"game": game_id, "attached": True})
 
             try:
-                resp = await self.runner.run(game_id, "NEW", None, None, timeout_s=game.timeout_s)
+                resp = await self.runner.run(game_id, "NEW", None, None, timeout_s=game.timeout_s,
+                                             interp_dir=idir)
             except CoreTimeout:
                 return RouteResult(text=CORE_TIMEOUT_TEXT, route="core", detail={"error": "timeout"})
             except CoreBusy:
@@ -514,6 +569,7 @@ class Router:
 
             await self.store.upsert_game(GameState(
                 session_id=session_id, game_id=game_id, state=resp.state, status=resp.status, turn=0,
+                interpretation=pin,
             ))
             await self.store.log_event(session_id, "core", "wopr", {"game": game_id, "event": "NEW"})
             hint = f"\n\n{game.title}. INPUT: {game.input_syntax.upper()}" if game.input_syntax else ""
