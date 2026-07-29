@@ -62,6 +62,10 @@ class GameState:
     state: str
     status: str
     turn: int = 0
+    # Which reconstruction of the title wrote this STATE (games.md §8). STATE
+    # is not portable across interpretations, so every resume — including
+    # after a host restart — must run this one. "core" covers flat slots.
+    interpretation: str = "core"
     # Update recency stamp — the ordering key for get_latest_game in BOTH
     # stores (SupabaseStore's `updated_at` column; MemoryStore stamps it in
     # upsert_game). Dev and prod must pick the same "latest" game.
@@ -276,6 +280,7 @@ class SupabaseStore:
         r = rows[0]
         return GameState(session_id=r["session_id"], game_id=r["game_id"], state=r["state"],
                          status=r["status"], turn=r["turn"],
+                         interpretation=r.get("interpretation") or "core",
                          updated_at=r.get("updated_at", ""))
 
     async def get_latest_game(self, game_id: str | None, room_code: str | None = None,
@@ -307,6 +312,7 @@ class SupabaseStore:
         r = rows[0]
         return GameState(session_id=r["session_id"], game_id=r["game_id"], state=r["state"],
                          status=r["status"], turn=r["turn"],
+                         interpretation=r.get("interpretation") or "core",
                          updated_at=r.get("updated_at", ""))
 
     async def upsert_game(self, gs: GameState) -> None:
@@ -316,7 +322,8 @@ class SupabaseStore:
             .order("updated_at", desc=True).limit(1).execute().data
         )
         values = {"session_id": gs.session_id, "game_id": gs.game_id, "state": gs.state,
-                  "status": gs.status, "turn": gs.turn, "updated_at": "now()"}
+                  "status": gs.status, "turn": gs.turn,
+                  "interpretation": gs.interpretation, "updated_at": "now()"}
         if existing:
             self._client.table("game_states").update(values).eq("id", existing[0]["id"]).execute()
         else:

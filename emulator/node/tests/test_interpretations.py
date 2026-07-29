@@ -159,3 +159,26 @@ def test_run_dispatches_to_the_pinned_interpretation(nested_games_dir):
         assert alt.state == "ALT-STUB"
 
     asyncio.run(flow())
+
+
+# -- persisted pin (Task 4) ---------------------------------------------------
+
+from app.store import GameState, MemoryStore
+
+
+def test_game_row_pin_survives_store_round_trip():
+    store = MemoryStore()
+
+    async def flow():
+        gs = GameState(session_id="s1", game_id="chess", state="ALT-STUB",
+                       status="PLAYING", turn=1, interpretation="minimal")
+        await store.upsert_game(gs)
+        back = await store.get_active_game("s1")
+        assert back.interpretation == "minimal"
+
+    asyncio.run(flow())
+
+
+def test_game_row_pin_defaults_to_core():
+    gs = GameState(session_id="s", game_id="g", state="", status="PLAYING")
+    assert gs.interpretation == "core"
