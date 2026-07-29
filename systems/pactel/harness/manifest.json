@@ -11,6 +11,7 @@
         "address": "(311) 555-0100",
         "protocol": "SYSTEM/1"
       }
-    }
+    },
+    "state": "persistent"
   }
 }

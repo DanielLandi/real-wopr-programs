@@ -47,6 +47,7 @@ class SystemResponse:
     display: str    # human-facing teletype text
     line: str       # UP | DROP
     call: Call | None = None
+    prompt: str | None = None   # what the system is asking, for the input line
 
 
 def build_system_request(system_id: str, command: str, state: str | None,
@@ -114,6 +115,18 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         call = Call(peer=parts[1], payload="\n".join(take() for _ in range(int(parts[2]))))
         peeked = take()
 
+    # Optional PROMPT: what the system is asking, delivered on the input line
+    # rather than in the transcript. A continuation (CALL) is not ready for
+    # input, and a dropped line asks nothing — both are rejected.
+    prompt: str | None = None
+    if peeked.startswith("PROMPT "):
+        if call is not None:
+            raise SystemWireError("PROMPT may not accompany CALL")
+        prompt = peeked[len("PROMPT "):]
+        if not prompt.strip():
+            raise SystemWireError("empty PROMPT")
+        peeked = take()
+
     line_hdr = peeked.split()
     if len(line_hdr) != 2 or line_hdr[0] != "LINE" or line_hdr[1] not in LINE_STATES:
         raise SystemWireError("bad LINE status")
@@ -124,8 +137,11 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         # line cannot be going away underneath it.
         raise SystemWireError("CALL requires LINE UP")
 
+    if prompt is not None and line != "UP":
+        raise SystemWireError("PROMPT requires LINE UP")
+
     if take().strip() != "END":
         raise SystemWireError("missing END")
 
     return SystemResponse(system_id=system_id, state=state, display=display,
-                          line=line, call=call)
+                          line=line, call=call, prompt=prompt)

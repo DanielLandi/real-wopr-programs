@@ -81,11 +81,18 @@ def test_ws_system_session_connects_and_echoes(system_client):
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         greeting = ws.receive_text()
         assert "REFERENCE SYSTEM READY" in greeting
+        # reference.cob now speaks "PROMPT >" ahead of every LINE UP (Task 9),
+        # delivered as its own "prompt" frame separate from the "output"
+        # frame carrying the DISPLAY block (app/main.py) — consume it before
+        # the next turn's input, same pattern as the school test above.
+        assert ">" in ws.receive_text()                       # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PING","eom":true}')
         echo = ws.receive_text()
         assert "[1] YOU SAID: PING" in echo
+        assert ">" in ws.receive_text()                       # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"BYE","eom":true}')
-        # GOODBYE (the system's own display) followed by NO CARRIER, then close.
+        # GOODBYE (the system's own display) followed by NO CARRIER, then
+        # close. BYE is a LINE DROP path, so it carries no PROMPT frame.
         assert "GOODBYE" in ws.receive_text()
         assert "NO CARRIER" in ws.receive_text()
 
@@ -133,19 +140,28 @@ def test_ws_system_session_dials_airline_and_books_paris(system_client):
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         greeting = ws.receive_text()
         assert "PANAMAC" in greeting
+        # airline.cob now speaks "PROMPT READY:" ahead of every LINE UP
+        # (Task 9), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school test above.
+        assert "READY:" in ws.receive_text()                  # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"AJFKPAR","eom":true}')
         avail = ws.receive_text()
         assert "AVAILABILITY" in avail
         assert "PA 002" in avail
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"02Y1","eom":true}')
         assert "SEGMENT ADDED" in ws.receive_text()
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"-LIGHTMAN/DAVID","eom":true}')
         ws.receive_text()
+        ws.receive_text()                                     # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"-MACK/JENNIFER","eom":true}')
         ws.receive_text()
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"E","eom":true}')
         end = ws.receive_text()
@@ -163,21 +179,29 @@ def test_ws_system_session_dials_school_and_changes_grade(system_client):
     assert r.status_code == 201
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        assert "PASSWORD:" in ws.receive_text()
+        # school.bas now speaks its asking-lines as a PROMPT frame, separate
+        # from the DISPLAY frame that precedes it (Task 5) — a non-empty
+        # DISPLAY yields an "output" frame, and any PROMPT yields its own
+        # "prompt" frame (app/main.py). DISPLAY 0 turns emit only the prompt.
+        ws.receive_text()                                     # display: GOOSE LAKE banner
+        assert "PASSWORD:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
-        assert "SELECT:" in ws.receive_text()
+        ws.receive_text()                                     # display: welcome + menu
+        assert "SELECT:" in ws.receive_text()                  # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"2","eom":true}')
-        assert "STUDENT NAME:" in ws.receive_text()
+        assert "STUDENT NAME:" in ws.receive_text()            # DISPLAY 0: prompt only
         ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
-        assert "COURSE:" in ws.receive_text()
+        assert "COURSE:" in ws.receive_text()                  # DISPLAY 0: prompt only
         ws.send_text('{"v":1,"kind":"input","payload":"BIOLOGY 2","eom":true}')
-        assert "NEW GRADE:" in ws.receive_text()
+        assert "NEW GRADE:" in ws.receive_text()                # DISPLAY 0: prompt only
         ws.send_text('{"v":1,"kind":"input","payload":"A","eom":true}')
-        assert "RECORD UPDATED." in ws.receive_text()
+        assert "RECORD UPDATED." in ws.receive_text()          # display: RECORD UPDATED. + menu
+        assert "SELECT:" in ws.receive_text()                  # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"1","eom":true}')
-        ws.receive_text()
+        assert "STUDENT NAME:" in ws.receive_text()            # DISPLAY 0: prompt only
         ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
-        shown = ws.receive_text()
+        shown = ws.receive_text()                              # display: STUDENT: ... + menu
+        ws.receive_text()                                      # prompt: SELECT:
         # Same-line check: BIOLOGY 2 specifically must now read A. A bare
         # `" A" in shown` would pass on LIGHTMAN's pre-existing COMPUTER LAB A
         # even if the F->A change silently failed — this proves the STATE
@@ -196,11 +220,18 @@ def test_ws_system_session_dials_protovision_and_queues(system_client):
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         assert "PROTOVISION" in ws.receive_text()
+        # protovision.s now speaks "PROMPT COMMAND:" ahead of every LINE UP
+        # (Task 8), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school/airline/reference tests.
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"L","eom":true}')
         listing = ws.receive_text()
         assert "ZYPHON" in listing and "* VELDRAX" in listing
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"Q 1","eom":true}')
         assert "QUEUED: ZYPHON" in ws.receive_text()
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"Q","eom":true}')
         shown = ws.receive_text()
         assert "YOUR QUEUE:" in shown and "ZYPHON" in shown  # persisted via STATE
@@ -280,10 +311,17 @@ def test_ws_system_session_dials_pactel_and_verifies_line(system_client):
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         assert "PACIFIC TELEPHONE" in ws.receive_text()
+        # pactel.c now speaks "PROMPT TEST:" ahead of every LINE UP
+        # (Task 6/7), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school/airline/reference tests.
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"ANAC","eom":true}')
         assert "206 555 0137" in ws.receive_text()
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"LINE 2065551234","eom":true}')
         assert "206 555 1234" in ws.receive_text()
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"VERIFY","eom":true}')
         shown = ws.receive_text()
         assert "206 555 1234" in shown and "IDLE" in shown  # selected line persisted via STATE
@@ -303,31 +341,39 @@ def test_two_sessions_do_not_share_a_store(system_client):
     who dialled in afterwards — and the film's moment only works if each
     visitor finds the F themselves."""
     def grade_for(session_json):
+        # See test_ws_system_session_dials_school_and_changes_grade: a
+        # non-empty DISPLAY and any PROMPT are now separate frames, so a
+        # DISPLAY 0 turn (the name/course/grade asks) yields only one frame
+        # while a non-empty-DISPLAY turn (banner, menu, record) yields two.
         sid, token = session_json["session_id"], session_json["token"]
         with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-            ws.receive_text()                                    # PASSWORD:
+            ws.receive_text()                                    # display: banner
+            ws.receive_text()                                    # prompt: PASSWORD:
             ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
-            ws.receive_text()                                    # menu
+            ws.receive_text()                                    # display: menu
+            ws.receive_text()                                    # prompt: SELECT:
             ws.send_text('{"v":1,"kind":"input","payload":"1","eom":true}')
-            ws.receive_text()                                    # STUDENT NAME:
+            ws.receive_text()                                    # prompt: STUDENT NAME: (DISPLAY 0)
             ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
-            return ws.receive_text()
+            return ws.receive_text()                              # display: STUDENT: ... record
 
     first = system_client.post("/api/session",
                                json={"surface": "home-terminal", "system": "school"}).json()
     sid, token = first["session_id"], first["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        ws.receive_text()
+        ws.receive_text()                                        # display: banner
+        ws.receive_text()                                        # prompt: PASSWORD:
         ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
-        ws.receive_text()
+        ws.receive_text()                                        # display: menu
+        ws.receive_text()                                        # prompt: SELECT:
         ws.send_text('{"v":1,"kind":"input","payload":"2","eom":true}')
-        ws.receive_text()
+        ws.receive_text()                                        # prompt: GRADE ENTRY - STUDENT NAME: (DISPLAY 0)
         ws.send_text('{"v":1,"kind":"input","payload":"LIGHTMAN","eom":true}')
-        ws.receive_text()
+        ws.receive_text()                                        # prompt: COURSE: (DISPLAY 0)
         ws.send_text('{"v":1,"kind":"input","payload":"BIOLOGY 2","eom":true}')
-        ws.receive_text()
+        ws.receive_text()                                        # prompt: NEW GRADE: (DISPLAY 0)
         ws.send_text('{"v":1,"kind":"input","payload":"A","eom":true}')
-        assert "RECORD UPDATED." in ws.receive_text()
+        assert "RECORD UPDATED." in ws.receive_text()             # display: RECORD UPDATED. + menu
 
     # A different visitor entirely.
     second = system_client.post("/api/session",

@@ -1,9 +1,9 @@
 # Surface — Home Terminal
 
-David Lightman's bedroom. Dial-up, ~300 baud, full handshake. Slow, intimate, text-only.
+David Lightman's bedroom. Dial-up, ~1200 baud, full handshake. Slow, intimate, text-only.
 Spec: the engine repo's `docs/surfaces.md`.
 
-Everything renders at link speed — the comms layer's `dialup-300` profile owns the cadence;
+Everything renders at link speed — the comms layer's `dialup-1200` profile owns the cadence;
 this page only appends what arrives.
 
 - **Phone book** — if `phonebook.json` is served next to the export, the terminal lists
@@ -13,7 +13,7 @@ this page only appends what arrives.
   entirely in-page: a school district data net (password from the office list, student
   records, grade edits) and an airline reservation system (availability, seat booking).
   [`app/sims.ts`](./app/sims.ts) — its `LocalSimLink` speaks WoprLink's event surface, so
-  the dial ritual, modem audio, and 300-baud reveal are the real ones.
+  the dial ritual, modem audio, and 1200-baud reveal are the real ones.
 - **VOICE toggle (S10)** — top-right; feeds completed output lines to crt-kit's
   `JoshuaVoice` (Web Speech, pitched down). Off by default; the click is the enabling
   user gesture.

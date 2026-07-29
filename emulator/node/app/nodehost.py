@@ -224,6 +224,10 @@ class NodeHost:
             if resp.display:
                 await self._say(conn, call, resp.display)
 
+            if resp.prompt:
+                await conn.send(json.dumps(
+                    {"t": "PROMPT", "call": call, "data": resp.prompt}))
+
             if resp.line == "DROP":
                 await self._drop(conn, call, "NO CARRIER")
                 return

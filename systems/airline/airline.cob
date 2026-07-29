@@ -364,6 +364,7 @@
            DISPLAY "PAN AMERICAN WORLD AIRWAYS"
            DISPLAY "PANAMAC RESERVATIONS"
            DISPLAY "AGENT SET READY - TYPE HELP FOR COMMANDS"
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
        DO-INPUT.
@@ -471,6 +472,7 @@
                        DISPLAY WS-AVAIL-LINE(1:WS-AVAIL-LEN)
                    END-IF
                END-PERFORM
+               DISPLAY "PROMPT READY:"
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.
@@ -546,6 +548,7 @@
                    DISPLAY "DISPLAY 2"
                    DISPLAY "SEGMENT ADDED"
                    DISPLAY WS-SELL-LINE
+                   DISPLAY "PROMPT READY:"
                    DISPLAY "LINE UP"
                    DISPLAY "END"
                END-IF
@@ -561,6 +564,7 @@
                PERFORM EMIT-STATE
                DISPLAY "DISPLAY 1"
                DISPLAY "NAME LIMIT REACHED"
+               DISPLAY "PROMPT READY:"
                DISPLAY "LINE UP"
                DISPLAY "END"
            ELSE
@@ -579,6 +583,7 @@
                DISPLAY "DISPLAY 1"
                DISPLAY "NAME ADDED - "
                    WS-NAME(WS-NUM-NAMES)(1:WS-NAME-L(WS-NUM-NAMES))
+               DISPLAY "PROMPT READY:"
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.
@@ -640,6 +645,7 @@
                DISPLAY "  " WS-FMT-STR(1:WS-FMT-LEN) ". "
                    WS-NAME(WS-I)(1:WS-NAME-L(WS-I))
            END-PERFORM
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
        DO-ENDXN.
@@ -655,6 +661,7 @@
                DISPLAY "DISPLAY 2"
                DISPLAY "END OF TRANSACTION"
                DISPLAY "RECORD LOCATOR: " WS-LOCATOR
+               DISPLAY "PROMPT READY:"
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.
@@ -703,6 +710,7 @@
            PERFORM EMIT-STATE
            DISPLAY "DISPLAY 1"
            DISPLAY "IGNORED"
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
        DO-SIGNOFF.
@@ -728,6 +736,7 @@
            DISPLAY "E                    END, GET LOCATOR"
            DISPLAY "I                    IGNORE"
            DISPLAY "SO                   SIGN OFF"
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
       *-----------------------------------------------------------
@@ -898,6 +907,7 @@
                    DISPLAY "END OF LIST"
                END-IF
            END-IF
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
        DISPLAY-LIST-TITLE.
@@ -911,6 +921,7 @@
            PERFORM EMIT-STATE
            DISPLAY "DISPLAY 1"
            DISPLAY "INVALID ENTRY"
+           DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
        COMMON-HEADER.

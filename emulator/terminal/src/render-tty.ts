@@ -23,14 +23,11 @@ export async function runTerminal(
   const input = opts.input ?? process.stdin;
 
   out.write("RINGING...\n");
-  let shown = "";
   const line = await dial(relay, address, {
     ...opts,
-    onPrompt: (next) => {
-      if (next === shown) return;
-      shown = next;
-      out.write(`\n${next} `);
-    },
+    // Repaint on every arrival: a system asks TEST: after each command, and
+    // the question belongs on the input line each time, not only the first.
+    onPrompt: (next) => { out.write(`\n${next} `); },
   });
 
   const rl = createInterface({ input, terminal: false });

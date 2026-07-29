@@ -14,7 +14,9 @@ import { resolve } from "node:path";
 import { rmSync } from "node:fs";
 import { loadTopology } from "../../src/topology.ts";
 import { up, type Supervised } from "../../src/up.ts";
-import { dial } from "../../../terminal/src/protocol.ts";
+import { dial, type DialOpts } from "../../../terminal/src/protocol.ts";
+
+type DialedLine = Awaited<ReturnType<typeof dial>>;
 
 const PACK = resolve(import.meta.dirname, "../../../..");
 const QUIET = (process.env.WOPR_TEST_VERBOSE
@@ -36,20 +38,85 @@ function flat(s: string): string {
   return s.replace(/\s+/g, " ");
 }
 
-async function until(line: Awaited<ReturnType<typeof dial>>, needle: string, ms = 20_000) {
-  let seen = "";
+type Tracked = DialedLine & {
+  /** Every prompt seen so far, in arrival order — for debugging a timeout. */
+  prompts: string[];
+  /** Everything on the transcript (display text) so far. */
+  transcript: () => string;
+  /**
+   * Wait for the *next* prompt this line has not yet asserted on, and
+   * confirm it is exactly `text`.
+   *
+   * PASSWORD:, SELECT:, and the rest of the school's prompts arrive on the
+   * prompt channel now, not in `line.output`'s display text (protocol.ts).
+   * Equality, not substring: "STUDENT NAME:" is a substring of two different
+   * prompts the school sends ("STUDENT NAME:" itself and "GRADE ENTRY -
+   * STUDENT NAME:"), so substring matching would not actually confirm which
+   * one arrived. A cursor (not "has this prompt ever appeared") matters too:
+   * the school re-shows "SELECT:" more than once in a session, and a test
+   * that re-dials the same already-seen prompt would pass without the far
+   * end having said anything new.
+   */
+  untilPrompt: (text: string, ms?: number) => Promise<void>;
+};
+
+/**
+ * Dial, and continuously drain everything the far end sends into two logs a
+ * test can poll independently: `transcript()` for display text, `prompts`
+ * for every prompt in arrival order.
+ *
+ * `line.output` is a single AsyncIterableIterator, and pulling on it is the
+ * only thing that ever notices a prompt at all — protocol.ts's queue is one
+ * FIFO for text and prompts both, and a prompt is processed (not yielded) as
+ * a side effect of draining that queue. A single background pump owns that
+ * pull for the life of the line, so every wait below is a plain poll of data
+ * already collected, rather than juggling the live generator against a
+ * per-call timeout (which is its own bug: a `.next()` call that processes a
+ * prompt and then finds the queue empty does not resolve until more data
+ * arrives, so racing it against a timeout can let a prompt that already
+ * landed sit unnoticed until the whole wait times out).
+ */
+async function dialTracked(relay: string, address: string, opts: DialOpts = {}): Promise<Tracked> {
+  const prompts: string[] = [];
+  let text = "";
+  let cursor = 0;
+  const line = await dial(relay, address, { ...opts, onPrompt: (p) => prompts.push(p) });
+  (async () => {
+    for await (const chunk of line.output) text += chunk;
+  })().catch(() => {});
+  const untilPrompt = async (want: string, ms = 20_000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      if (cursor < prompts.length) {
+        const got = prompts[cursor++];
+        if (got !== want) {
+          throw new Error(`expected prompt ${JSON.stringify(want)}; got ${JSON.stringify(got)}`);
+        }
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`never saw prompt ${JSON.stringify(want)}; prompts so far: ${JSON.stringify(prompts)}`);
+  };
+  return Object.assign(line, { prompts, transcript: () => text, untilPrompt });
+}
+
+/**
+ * Poll a line's transcript until `needle` shows up, or give up.
+ *
+ * Whitespace is flattened before matching. The shaper delivers a message as
+ * byte-sized fragments so it arrives at the line\'s real rate, and a fragment
+ * boundary lands wherever 64 bytes happen to fall — mid-word, mid-run of
+ * spaces. Asserting on exact spacing would be asserting on the frame size.
+ */
+async function until(line: Tracked, needle: string, ms = 20_000): Promise<string> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const next = await Promise.race([
-      line.output.next(),
-      new Promise<{ done: true; value: undefined }>((r) =>
-        setTimeout(() => r({ done: true, value: undefined }), Math.max(0, deadline - Date.now()))),
-    ]);
-    if (next.done) break;
-    seen += next.value ?? "";
+    const seen = line.transcript();
     if (flat(seen).includes(flat(needle))) return seen;
+    await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(`never saw ${JSON.stringify(needle)}; got:\n${seen}`);
+  throw new Error(`never saw ${JSON.stringify(needle)}; got:\n${line.transcript()}`);
 }
 
 test("the federation, end to end", async (t) => {
@@ -74,27 +141,27 @@ test("the federation, end to end", async (t) => {
 });
 
   await t.test("dialling the school reaches the school", async () => {
-  const line = await dial(relays.pstn, "(206) 555-0142");
-  const seen = await until(line, "PASSWORD:");
-  assert.match(seen, /GOOSE LAKE UNIFIED SCHOOL DISTRICT/);
+  const line = await dialTracked(relays.pstn, "(206) 555-0142");
+  await line.untilPrompt("PASSWORD:");
+  assert.match(flat(line.transcript()), /GOOSE LAKE UNIFIED SCHOOL DISTRICT/);
   line.hangUp();
 });
 
   await t.test("a phone number reaches the same line however it is punctuated", async () => {
-  const line = await dial(relays.pstn, "2065550142");
-  await until(line, "PASSWORD:");
+  const line = await dialTracked(relays.pstn, "2065550142");
+  await line.untilPrompt("PASSWORD:");
   line.hangUp();
 });
 
   await t.test("asking for a record fetches it from another process", async () => {
   // The claim this whole sub-project exists to make good: these grades are not
   // in the school. They come out of school-db, across the bus.
-  const line = await dial(relays.pstn, "(206) 555-0142");
-  await until(line, "PASSWORD:");
+  const line = await dialTracked(relays.pstn, "(206) 555-0142");
+  await line.untilPrompt("PASSWORD:");
   line.send("PENCIL");
-  await until(line, "SELECT:");
+  await line.untilPrompt("SELECT:");
   line.send("1");
-  await until(line, "STUDENT NAME:");
+  await line.untilPrompt("STUDENT NAME:");
   line.send("LIGHTMAN");
   const seen = await until(line, "COMPUTER LAB");
   assert.match(flat(seen), /SEARCHING\.\.\./);
@@ -104,27 +171,27 @@ test("the federation, end to end", async (t) => {
 });
 
   await t.test("a grade set on one call is there on the next — the store remembers", async () => {
-  const first = await dial(relays.pstn, "(206) 555-0142");
-  await until(first, "PASSWORD:");
+  const first = await dialTracked(relays.pstn, "(206) 555-0142");
+  await first.untilPrompt("PASSWORD:");
   first.send("PENCIL");
-  await until(first, "SELECT:");
+  await first.untilPrompt("SELECT:");
   first.send("2");
-  await until(first, "STUDENT NAME:");
+  await first.untilPrompt("GRADE ENTRY - STUDENT NAME:");
   first.send("LIGHTMAN");
-  await until(first, "COURSE:");
+  await first.untilPrompt("COURSE:");
   first.send("BIOLOGY 2");
-  await until(first, "NEW GRADE:");
+  await first.untilPrompt("NEW GRADE:");
   first.send("A");
   await until(first, "RECORD UPDATED.");
   first.hangUp();
 
   // A separate call, and for the school a separate session entirely.
-  const second = await dial(relays.pstn, "(206) 555-0142");
-  await until(second, "PASSWORD:");
+  const second = await dialTracked(relays.pstn, "(206) 555-0142");
+  await second.untilPrompt("PASSWORD:");
   second.send("PENCIL");
-  await until(second, "SELECT:");
+  await second.untilPrompt("SELECT:");
   second.send("1");
-  await until(second, "STUDENT NAME:");
+  await second.untilPrompt("STUDENT NAME:");
   second.send("LIGHTMAN");
   const seen = await until(second, "COMPUTER LAB");
   assert.match(flat(seen), /BIOLOGY 2 A/, "the F->A change did not survive the call");
@@ -140,11 +207,11 @@ test("the federation, end to end", async (t) => {
     // one side, the missiles on the other — but it has no period source yet,
     // so it is skipped rather than faked (#112). reference proves the runtime
     // can carry it.
-    const overPhone = await dial(relays.pstn, "(311) 555-0101");
+    const overPhone = await dialTracked(relays.pstn, "(311) 555-0101");
     const a = await until(overPhone, "REFERENCE SYSTEM READY");
     overPhone.hangUp();
 
-    const overNorad = await dial(relays.norad, "REFERENCE");
+    const overNorad = await dialTracked(relays.norad, "REFERENCE");
     const b = await until(overNorad, "REFERENCE SYSTEM READY");
     overNorad.hangUp();
 
@@ -176,21 +243,22 @@ test("the federation, end to end", async (t) => {
 });
 
   await t.test("with the store gone, the school says so and keeps the line up", async () => {
-  const line = await dial(relays.pstn, "(206) 555-0142");
-  await until(line, "PASSWORD:");
+  const line = await dialTracked(relays.pstn, "(206) 555-0142");
+  await line.untilPrompt("PASSWORD:");
   line.send("PENCIL");
-  await until(line, "SELECT:");
+  await line.untilPrompt("SELECT:");
 
   // Take the records store away mid-call.
   fed.nodes.get("school-db")?.kill("SIGKILL");
   await new Promise((r) => setTimeout(r, 1500));
 
   line.send("1");
-  await until(line, "STUDENT NAME:");
+  await line.untilPrompt("STUDENT NAME:");
   line.send("LIGHTMAN");
   // Wait for the menu, which comes *after* the message — reaching it at all
   // proves the line stayed up.
-  const seen = await until(line, "SELECT:");
+  const seen = await until(line, "RECORDS UNAVAILABLE");
+  await line.untilPrompt("SELECT:");
   assert.match(flat(seen), /RECORDS UNAVAILABLE/);
   line.hangUp();
 });

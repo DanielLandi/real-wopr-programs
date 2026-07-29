@@ -51,7 +51,7 @@ export const DEFAULT_CONFIG: CommsConfig = {
     },
   },
   surface_links: {
-    "home-terminal": "dialup-300",
+    "home-terminal": "dialup-1200",
     "norad-terminal": "leased-9600",
     "norad-bigboard": "internal-bus",
     "wopr-panel": "internal-bus",

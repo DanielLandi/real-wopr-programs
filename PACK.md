@@ -130,6 +130,23 @@ nothing else running, and a golden fixture just carries a canned `REPLY`.
 `systems/school-db` is the worked example — the school district's records as a separate
 program, reached over the local bus rather than a phone line.
 
+### Asking the user for something
+
+A SYSTEM/1 response may end with one optional `PROMPT` line, between the
+`DISPLAY` block and `LINE`:
+
+```
+PROMPT <text>            <- optional: what the system is asking
+LINE UP
+```
+
+The harness delivers it out-of-band to the terminal's input line (the way game
+monitors already deliver `[TTT]>`), so the cursor rests after the question the
+way a real remote host left it. At most one per response; it may not accompany
+`LINE DROP` (a dropped line asks nothing) or a `CALL` continuation (a program
+mid-continuation is not ready for input). A response without `PROMPT` renders
+exactly as before, so old-style programs are untouched.
+
 ## pack.json
 
 The pack index at the repository root:
