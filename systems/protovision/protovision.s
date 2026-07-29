@@ -305,6 +305,9 @@ build_ok_state:
 ; ---------------------------------------------------------------------------
 ; LINE / END tails.
 ; ---------------------------------------------------------------------------
+emit_prompt:
+        SET_SPTR S_PROMPT
+        jmp     emitz
 emit_lineup:
         SET_SPTR S_LINEUP
         jmp     emitz
@@ -316,7 +319,8 @@ emit_end:
         jmp     emitz
 
 ; ---------------------------------------------------------------------------
-; set_sptr_title / set_sptr_blurb: sptr = catalog entry for index X (1..5).
+; set_sptr_title / set_sptr_info: sptr = catalog entry for index X (1..5).
+; The info entry is one multi-line block (embedded $0A).
 ; ---------------------------------------------------------------------------
 set_sptr_title:
         lda     titlelo-1,x
@@ -324,10 +328,10 @@ set_sptr_title:
         lda     titlehi-1,x
         sta     sptr+1
         rts
-set_sptr_blurb:
-        lda     blurblo-1,x
+set_sptr_info:
+        lda     infolo-1,x
         sta     sptr
-        lda     blurbhi-1,x
+        lda     infohi-1,x
         sta     sptr+1
         rts
 
@@ -423,18 +427,22 @@ parse_input:
         bne     @n2
         jmp     do_info
 @n2:
-        cmp     #'Q'
+        cmp     #'A'
         bne     @n3
+        jmp     do_about
+@n3:
+        cmp     #'Q'
+        bne     @n4
         lda     argd
         bne     @qarg
         jmp     do_qshow
 @qarg:
         jmp     do_queue
-@n3:
-        cmp     #'G'
-        bne     @n4
-        jmp     do_goodbye
 @n4:
+        cmp     #'G'
+        bne     @n5
+        jmp     do_goodbye
+@n5:
         jmp     do_redo
 
 ; ---------------------------------------------------------------------------
@@ -531,22 +539,21 @@ queue_add:
 ; CONNECT: greeting, empty queue, LINE UP.
 do_connect:
         jsr     build_ok_state
-        lda     #3
+        lda     #2
         jsr     emit_display
         SET_SPTR S_G1
         jsr     emitz
         SET_SPTR S_G2
         jsr     emitz
-        SET_SPTR S_COMMAND
-        jsr     emitz
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
 
-; L: the catalog listing (8 lines), STATE unchanged.
+; L: the catalog listing (7 lines), STATE unchanged.
 do_list:
         jsr     build_ok_state
-        lda     #8
+        lda     #7
         jsr     emit_display
         SET_SPTR S_RELEASED
         jsr     emitz
@@ -586,13 +593,13 @@ do_list:
         inx
         jmp     @ll
 @cmd:
-        SET_SPTR S_COMMAND
-        jsr     emitz
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
 
-; I <n>: title + blurb, or NO SUCH TITLE. STATE unchanged.
+; I <n>: the title's info page (a multi-line RODATA block, DISPLAY count from
+; infoct), or NO SUCH TITLE for a missing/out-of-range n. STATE unchanged.
 do_info:
         jsr     build_ok_state
         lda     argd
@@ -604,29 +611,36 @@ do_info:
         cmp     #6
         bcs     @notitle
         sta     idx                    ; valid 1..5
-        lda     #3
+        ldx     idx
+        lda     infoct-1,x             ; lines in this title's info block
         jsr     emit_display
         ldx     idx
-        jsr     set_sptr_title
+        jsr     set_sptr_info
         jsr     emitz
-        lda     #$0A
+        lda     #$0A                   ; the block's last line carries no \n
         jsr     emitc
-        ldx     idx
-        jsr     set_sptr_blurb
-        jsr     emitz
-        lda     #$0A
-        jsr     emitc
-        SET_SPTR S_COMMAND
-        jsr     emitz
         jmp     @up
 @notitle:
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_NOTITLE
         jsr     emitz
-        SET_SPTR S_COMMAND
-        jsr     emitz
 @up:
+        jsr     emit_prompt
+        jsr     emit_lineup
+        jsr     emit_end
+        jmp     finish
+
+; A: the company screen (5 lines). STATE unchanged.
+do_about:
+        jsr     build_ok_state
+        lda     #5
+        jsr     emit_display
+        SET_SPTR SA
+        jsr     emitz
+        lda     #$0A                   ; the block's last line carries no \n
+        jsr     emitc
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
@@ -645,26 +659,22 @@ do_queue:
         bcc     @locked                ; 4..5
 @notitle:
         jsr     build_ok_state         ; STATE unchanged
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_NOTITLE
-        jsr     emitz
-        SET_SPTR S_COMMAND
         jsr     emitz
         jmp     @up
 @locked:
         jsr     build_ok_state         ; STATE unchanged
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_PENDING
-        jsr     emitz
-        SET_SPTR S_COMMAND
         jsr     emitz
         jmp     @up
 @released:
         jsr     queue_add              ; mutate the queue first...
         jsr     build_ok_state         ; ...so STATE reflects it
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_QUEUED
         jsr     emitz
@@ -673,9 +683,8 @@ do_queue:
         jsr     emitz
         lda     #$0A
         jsr     emitc
-        SET_SPTR S_COMMAND
-        jsr     emitz
 @up:
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
@@ -685,24 +694,22 @@ do_qshow:
         jsr     build_ok_state         ; STATE unchanged
         lda     qlen
         bne     @has
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_QEMPTY
         jsr     emitz
-        SET_SPTR S_COMMAND
-        jsr     emitz
         jmp     @up
 @has:
-        lda     qlen                   ; DISPLAY = qlen + 2
+        lda     qlen                   ; DISPLAY = qlen + 1
         clc
-        adc     #2
+        adc     #1
         jsr     emit_display
         SET_SPTR S_YOURQ
         jsr     emitz
         ldx     #0
 @lp:
         cpx     qlen
-        beq     @cmd
+        beq     @up
         txa
         pha                            ; save loop index
         lda     qlist,x
@@ -718,10 +725,8 @@ do_qshow:
         tax
         inx
         jmp     @lp
-@cmd:
-        SET_SPTR S_COMMAND
-        jsr     emitz
 @up:
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
@@ -740,12 +745,11 @@ do_goodbye:
 ; any other command: stay up.
 do_redo:
         jsr     build_ok_state
-        lda     #2
+        lda     #1
         jsr     emit_display
         SET_SPTR S_REDO
         jsr     emitz
-        SET_SPTR S_COMMAND
-        jsr     emitz
+        jsr     emit_prompt
         jsr     emit_lineup
         jsr     emit_end
         jmp     finish
@@ -815,12 +819,12 @@ S_OK:            .byte "SYSTEM/1 protovision OK", $0A, 0
 S_DISPLAY:       .byte "DISPLAY ", 0            ; + digit + \n
 S_CONN:          .byte "CONN 1", $0A, 0
 S_Q:             .byte "Q", 0                   ; + " <d>"... + \n
-S_COMMAND:       .byte "COMMAND:", $0A, 0
+S_PROMPT:        .byte "PROMPT COMMAND:", $0A, 0
 S_LINEUP:        .byte "LINE UP", $0A, 0
 S_LINEDROP:      .byte "LINE DROP", $0A, 0
 S_ENDNL:         .byte "END", $0A, 0
 S_G1:            .byte "PROTOVISION DEVELOPMENT BBS - SUNNYVALE CA", $0A, 0
-S_G2:            .byte "DEV ACCESS ONLY - TYPE L TO LIST", $0A, 0
+S_G2:            .byte "DEV ACCESS ONLY - L LIST / I <N> INFO / A ABOUT", $0A, 0
 S_RELEASED:      .byte "RELEASED", $0A, 0
 S_PRELOCK:       .byte "PRE-RELEASE (LOCKED)", $0A, 0
 S_STARSEP:       .byte " * ", 0                 ; between locked index and title
@@ -836,8 +840,6 @@ S_PROTOERR:      .byte "PROTOCOL ERROR", $0A, 0
 ; --- catalog (fixed, deterministic) ---
 titlelo: .byte <T1, <T2, <T3, <T4, <T5
 titlehi: .byte >T1, >T2, >T3, >T4, >T5
-blurblo: .byte <B1, <B2, <B3, <B4, <B5
-blurbhi: .byte >B1, >B2, >B3, >B4, >B5
 
 T1: .byte "ZYPHON", 0
 T2: .byte "COMET JOCKEY", 0
@@ -845,8 +847,34 @@ T3: .byte "IRON WEDGE", 0
 T4: .byte "VELDRAX", 0
 T5: .byte "OBLICON", 0
 
-B1: .byte "SIDE-SCROLLING SPACE SHOOTER. 1 PLAYER.", 0
-B2: .byte "DODGE THE BELT. HI-SCORE SAVE.", 0
-B3: .byte "TOP-DOWN TANK COMBAT. 2 PLAYER.", 0
-B4: .byte "PRE-RELEASE. SLATED Q4.", 0
-B5: .byte "PRE-RELEASE. UNANNOUNCED.", 0
+; --- info pages (I <n>): one multi-line block each, no trailing $0A (the
+; caller appends it); infoct is the DISPLAY line count of each block ---
+infolo: .byte <I1, <I2, <I3, <I4, <I5
+infohi: .byte >I1, >I2, >I3, >I4, >I5
+infoct: .byte 4, 4, 4, 3, 3
+
+I1: .byte "ZYPHON - SIDE-SCROLLING SPACE SHOOTER", $0A
+    .byte "1 PLAYER. JOYSTICK. 48K.", $0A
+    .byte "STATUS: RELEASED", $0A
+    .byte "REV C - WAVE 9 BOSS REWORK", 0
+I2: .byte "COMET JOCKEY - DODGE THE BELT", $0A
+    .byte "1 PLAYER. HI-SCORE SAVE TO TAPE.", $0A
+    .byte "STATUS: RELEASED", $0A
+    .byte "REV B - SPLIT-SCREEN BONUS ROUND", 0
+I3: .byte "IRON WEDGE - TOP-DOWN TANK COMBAT", $0A
+    .byte "2 PLAYER SIMULTANEOUS.", $0A
+    .byte "STATUS: RELEASED", $0A
+    .byte "REV A - TOURNAMENT TABLE SHIPPED", 0
+I4: .byte "VELDRAX - PRE-RELEASE (LOCKED)", $0A
+    .byte "SLATED Q4 1983.", $0A
+    .byte "DEV ACCESS ONLY - RELEASE PENDING", 0
+I5: .byte "OBLICON - PRE-RELEASE (LOCKED)", $0A
+    .byte "UNANNOUNCED.", $0A
+    .byte "DEV ACCESS ONLY - RELEASE PENDING", 0
+
+; --- A: the company screen ---
+SA: .byte "PROTOVISION INC", $0A
+    .byte "1200 ORCHARD PKWY - SUNNYVALE CA 94086", $0A
+    .byte "DIAL-IN (408) 555-0163", $0A
+    .byte "DISTRIBUTION - WESTERN MICRO SALES CO", $0A
+    .byte "NOW HIRING 6502 PROGRAMMERS", 0
