@@ -357,6 +357,8 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                                    "line": resp.line})
             if resp.display != "":  # DISPLAY 0: nothing to paint
                 await ws.send_text(envelope("output", f"\n{resp.display}\n"))
+            if resp.prompt:
+                await ws.send_text(envelope("prompt", resp.prompt))
             if resp.line == "DROP":
                 await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                 await ws.close()
@@ -431,6 +433,8 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                                            "line": resp.line})
                     if resp.display != "":  # DISPLAY 0: nothing to paint
                         await ws.send_text(envelope("output", f"\n{resp.display}\n"))
+                    if resp.prompt:
+                        await ws.send_text(envelope("prompt", resp.prompt))
                     if resp.line == "DROP":
                         await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                         await ws.close()

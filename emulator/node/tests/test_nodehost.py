@@ -192,6 +192,35 @@ def test_the_program_can_end_the_call_itself():
     asyncio.run(flow())
 
 
+def test_a_prompt_follows_the_display_frame():
+    """A response carrying `prompt` sends a PROMPT frame after the FRAME that
+    delivers the display, so the input line can repaint the question."""
+    from app.systemwire import SystemResponse
+
+    class PromptingRunner:
+        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
+            return SystemResponse(sid, "", "WELCOME", "UP", prompt="TEST:")
+
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url},
+                            system_runner=PromptingRunner())
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(3)
+
+            assert [f["t"] for f in relay.frames] == ["ANSWER", "FRAME", "PROMPT"]
+            prompt = next(f for f in relay.frames if f["t"] == "PROMPT")
+            assert prompt["call"] == 1
+            assert prompt["data"] == "TEST:"
+            await host.stop()
+
+    asyncio.run(flow())
+
+
 def test_a_node_that_is_not_declared_refuses_to_start():
     with pytest.raises(NodeHostError, match="not a declared node"):
         NodeHost.for_node("ghost", PACK, {})
