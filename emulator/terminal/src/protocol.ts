@@ -128,7 +128,8 @@ export async function dial(relay: string, address: string, opts: DialOpts = {}):
   return {
     output: output(),
     send: (text: string) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(text);
+      // A caps-only 1983 terminal: everything typed goes out uppercase.
+      if (ws.readyState === WebSocket.OPEN) ws.send(text.toUpperCase());
     },
     closed,
     hangUp: () => ws.close(),

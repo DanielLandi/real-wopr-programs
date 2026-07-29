@@ -198,3 +198,16 @@ test("dial: the prompt starts bare", async () => {
   line.hangUp();
   await relay.close();
 });
+
+test("send() uppercases outgoing text like a caps-only terminal", async () => {
+  let received = "";
+  const relay = await fakeRelay((ws) => {
+    ws.on("message", (d: Buffer) => { received = d.toString(); });
+  });
+  const line = await dial(relay.url, "(206) 555-0142");
+  line.send("pencil");
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(received, "PENCIL");
+  line.hangUp();
+  await relay.close();
+});
