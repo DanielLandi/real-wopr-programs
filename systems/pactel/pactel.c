@@ -77,10 +77,11 @@ static void format_line(char *out, const char *digits10)
 }
 
 /* Emit a well-formed SYSTEM/1 OK response. STATE is always the single
-   "LINE <state_line>" tag; DISPLAY is the k lines in "lines"; LINE is
-   line_status ("UP" or "DROP"). */
+   "LINE <state_line>" tag; DISPLAY is the k lines in "lines"; prompt, when
+   non-NULL, is emitted as the PROMPT block (never on a dropped line); LINE
+   is line_status ("UP" or "DROP"). */
 static void emit_ok(const char *state_line, const char *lines[], int nlines,
-    const char *line_status)
+    const char *prompt, const char *line_status)
 {
     int i;
     printf("SYSTEM/1 pactel OK\n");
@@ -89,6 +90,9 @@ static void emit_ok(const char *state_line, const char *lines[], int nlines,
     printf("DISPLAY %d\n", nlines);
     for (i = 0; i < nlines; i++) {
         printf("%s\n", lines[i]);
+    }
+    if (prompt != NULL) {
+        printf("PROMPT %s\n", prompt);
     }
     printf("LINE %s\n", line_status);
     printf("END\n");
@@ -212,11 +216,10 @@ int main(void)
     }
 
     if (is_connect) {
-        const char *lines[3];
+        const char *lines[2];
         lines[0] = "PACIFIC TELEPHONE";
         lines[1] = "AUTOMATIC TEST BOARD - AUTHORIZED USE ONLY";
-        lines[2] = "TEST:";
-        emit_ok(DEFAULT_LINE, lines, 3, "UP");
+        emit_ok(DEFAULT_LINE, lines, 2, "TEST:", "UP");
         return 0;
     }
 
@@ -239,33 +242,28 @@ int main(void)
 
         if (strcmp(cmdtok, "ANAC") == 0) {
             char formatted[16];
-            const char *lines[3];
+            const char *lines[2];
             format_line(formatted, current_line);
             lines[0] = "ANAC - NUMBER READBACK";
             lines[1] = formatted;
-            lines[2] = "TEST:";
-            emit_ok(current_line, lines, 3, "UP");
+            emit_ok(current_line, lines, 2, "TEST:", "UP");
         } else if (strcmp(cmdtok, "MILLIWATT") == 0) {
-            const char *lines[3];
+            const char *lines[2];
             lines[0] = "MILLIWATT TEST";
             lines[1] = "1004 HZ TONE AT 0 DBM";
-            lines[2] = "TEST:";
-            emit_ok(current_line, lines, 3, "UP");
+            emit_ok(current_line, lines, 2, "TEST:", "UP");
         } else if (strcmp(cmdtok, "QT") == 0) {
-            const char *lines[2];
+            const char *lines[1];
             lines[0] = "QUIET TERMINATION - LINE SILENT";
-            lines[1] = "TEST:";
-            emit_ok(current_line, lines, 2, "UP");
+            emit_ok(current_line, lines, 1, "TEST:", "UP");
         } else if (strcmp(cmdtok, "LOOP") == 0) {
-            const char *lines[2];
+            const char *lines[1];
             lines[0] = "LOOPBACK ENGAGED";
-            lines[1] = "TEST:";
-            emit_ok(current_line, lines, 2, "UP");
+            emit_ok(current_line, lines, 1, "TEST:", "UP");
         } else if (strcmp(cmdtok, "RING") == 0 || strcmp(cmdtok, "RINGBACK") == 0) {
-            const char *lines[2];
+            const char *lines[1];
             lines[0] = "RINGBACK - LINE WILL RING";
-            lines[1] = "TEST:";
-            emit_ok(current_line, lines, 2, "UP");
+            emit_ok(current_line, lines, 1, "TEST:", "UP");
         } else if (strcmp(cmdtok, "LINE") == 0) {
             int restlen = (int) strlen(rest);
             char newline10[16];
@@ -281,23 +279,21 @@ int main(void)
 
             if (valid) {
                 char formatted[16];
-                const char *lines[3];
+                const char *lines[2];
                 format_line(formatted, newline10);
                 lines[0] = "LINE UNDER TEST SET";
                 lines[1] = formatted;
-                lines[2] = "TEST:";
-                emit_ok(newline10, lines, 3, "UP");
+                emit_ok(newline10, lines, 2, "TEST:", "UP");
             } else {
-                const char *lines[2];
+                const char *lines[1];
                 lines[0] = "?INVALID LINE";
-                lines[1] = "TEST:";
-                emit_ok(current_line, lines, 2, "UP");
+                emit_ok(current_line, lines, 1, "TEST:", "UP");
             }
         } else if (strcmp(cmdtok, "VERIFY") == 0) {
             char formatted[16];
             char linebuf[24];
             char statusbuf[16];
-            const char *lines[3];
+            const char *lines[2];
             int last_digit;
 
             format_line(formatted, current_line);
@@ -306,24 +302,21 @@ int main(void)
             sprintf(statusbuf, "STATUS: %s", (last_digit % 2 == 0) ? "IDLE" : "BUSY");
             lines[0] = linebuf;
             lines[1] = statusbuf;
-            lines[2] = "TEST:";
-            emit_ok(current_line, lines, 3, "UP");
+            emit_ok(current_line, lines, 2, "TEST:", "UP");
         } else if (strcmp(cmdtok, "HELP") == 0) {
-            const char *lines[4];
+            const char *lines[3];
             lines[0] = "COMMANDS:";
             lines[1] = "ANAC MILLIWATT QT LOOP RING";
             lines[2] = "VERIFY  LINE <NUM>  HELP  BYE";
-            lines[3] = "TEST:";
-            emit_ok(current_line, lines, 4, "UP");
+            emit_ok(current_line, lines, 3, "TEST:", "UP");
         } else if (strcmp(cmdtok, "BYE") == 0) {
             const char *lines[1];
             lines[0] = "TEST BOARD CLEARED.";
-            emit_ok(current_line, lines, 1, "DROP");
+            emit_ok(current_line, lines, 1, NULL, "DROP");
         } else {
-            const char *lines[2];
+            const char *lines[1];
             lines[0] = "?TEST NOT RECOGNIZED";
-            lines[1] = "TEST:";
-            emit_ok(current_line, lines, 2, "UP");
+            emit_ok(current_line, lines, 1, "TEST:", "UP");
         }
     }
 
