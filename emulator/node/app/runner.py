@@ -45,12 +45,18 @@ class CoreRunner:
         self._sem = asyncio.Semaphore(cfg.pool_size)
         self._waiting = 0
 
-    def binary_for(self, game_id: str) -> Path:
-        # game ids come from manifests, but never trust them as paths
-        if not game_id.replace("-", "").replace("_", "").isalnum():
-            raise CoreError(None, f"invalid game id {game_id!r}")
+    def binary_for(self, game_id: str, interp_dir: str | None = None) -> Path:
+        # ids and interpretation names come from manifests, but never trust
+        # them as paths
+        for part in (game_id,) + ((interp_dir,) if interp_dir else ()):
+            if not part.replace("-", "").replace("_", "").isalnum():
+                raise CoreError(None, f"invalid path component {part!r}")
+        base = self.cfg.bin_dir / game_id
+        if interp_dir:
+            # nested slot (§8): games/<id>/<interpretation>/harness/bin/<id>
+            return base / interp_dir / "harness" / "bin" / game_id
         # bin_dir is the pack's games/ dir; each game builds to <id>/harness/bin/<id>.
-        return self.cfg.bin_dir / game_id / "harness" / "bin" / game_id
+        return base / "harness" / "bin" / game_id
 
     async def run(
         self,
@@ -59,6 +65,7 @@ class CoreRunner:
         state: str | None = None,
         move: str | None = None,
         timeout_s: float | None = None,
+        interp_dir: str | None = None,
     ) -> CoreResponse:
         if self._waiting >= self.cfg.queue_size:
             raise CoreBusy("core queue full")
@@ -72,14 +79,16 @@ class CoreRunner:
             self._waiting -= 1
 
         try:
-            return await self._invoke(game_id, command, state, move, timeout_s or self.cfg.timeout_s)
+            return await self._invoke(game_id, command, state, move,
+                                      timeout_s or self.cfg.timeout_s, interp_dir)
         finally:
             self._sem.release()
 
     async def _invoke(
-        self, game_id: str, command: str, state: str | None, move: str | None, timeout_s: float
+        self, game_id: str, command: str, state: str | None, move: str | None,
+        timeout_s: float, interp_dir: str | None = None
     ) -> CoreResponse:
-        binary = self.binary_for(game_id)
+        binary = self.binary_for(game_id, interp_dir)
         if not binary.exists():
             raise CoreError(None, f"no binary for game {game_id!r} (run tools/import-programs.sh)")
 

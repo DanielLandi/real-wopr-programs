@@ -126,3 +126,36 @@ def test_interpretation_dir_flat_nested_and_vanished(nested_games_dir):
     assert interpretation_dir(nested, "minimal") == "minimal"
     with pytest.raises(KeyError):
         interpretation_dir(nested, "gone")
+
+
+# -- runner dispatch (Task 3) -------------------------------------------------
+
+import asyncio
+
+from app.runner import CoreError, CoreRunner, RunnerConfig
+
+
+def test_binary_for_nested_and_flat(nested_games_dir):
+    r = CoreRunner(RunnerConfig(bin_dir=nested_games_dir))
+    assert r.binary_for("chess", "minimal") == (
+        nested_games_dir / "chess" / "minimal" / "harness" / "bin" / "chess")
+    assert r.binary_for("chess") == (
+        nested_games_dir / "chess" / "harness" / "bin" / "chess")
+
+
+def test_binary_for_rejects_unsafe_interp_dir(nested_games_dir):
+    r = CoreRunner(RunnerConfig(bin_dir=nested_games_dir))
+    with pytest.raises(CoreError):
+        r.binary_for("chess", "../joshua")
+
+
+def test_run_dispatches_to_the_pinned_interpretation(nested_games_dir):
+    r = CoreRunner(RunnerConfig(bin_dir=nested_games_dir))
+
+    async def flow():
+        core = await r.run("chess", "NEW", None, None, interp_dir="core")
+        alt = await r.run("chess", "NEW", None, None, interp_dir="minimal")
+        assert core.state == "CORE-STUB"
+        assert alt.state == "ALT-STUB"
+
+    asyncio.run(flow())
