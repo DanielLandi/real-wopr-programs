@@ -135,3 +135,38 @@ def test_a_request_without_a_reply_is_byte_identical_to_before():
     """The extension is additive: nothing changes for a frame that has no REPLY."""
     assert build_system_request("reference", "CONNECT", None, None) == (
         "SYSTEM/1 reference CONNECT\nSTATE 0\nEND\n")
+
+
+# ---- PROMPT (asking the user for something) ---------------------------------
+
+def test_parse_optional_prompt():
+    raw = ("SYSTEM/1 school OK\nSTATE 1\nAUTH 1\nDISPLAY 1\nWELCOME\n"
+           "PROMPT SELECT:\nLINE UP\nEND\n")
+    resp = parse_system_response(raw, "school")
+    assert resp.prompt == "SELECT:"
+    assert resp.display == "WELCOME"
+
+
+def test_prompt_absent_is_none():
+    raw = "SYSTEM/1 school OK\nSTATE 0\nDISPLAY 1\nBYE\nLINE DROP\nEND\n"
+    assert parse_system_response(raw, "school").prompt is None
+
+
+def test_prompt_with_line_drop_rejected():
+    raw = ("SYSTEM/1 school OK\nSTATE 0\nDISPLAY 1\nBYE\n"
+           "PROMPT SELECT:\nLINE DROP\nEND\n")
+    with pytest.raises(SystemWireError):
+        parse_system_response(raw, "school")
+
+
+def test_prompt_with_call_rejected():
+    raw = ("SYSTEM/1 school OK\nSTATE 0\nDISPLAY 1\nSEARCHING...\n"
+           "CALL school-db 1\nRECORD 12\nPROMPT SELECT:\nLINE UP\nEND\n")
+    with pytest.raises(SystemWireError):
+        parse_system_response(raw, "school")
+
+
+def test_empty_prompt_rejected():
+    raw = "SYSTEM/1 school OK\nSTATE 0\nDISPLAY 0\nPROMPT \nLINE UP\nEND\n"
+    with pytest.raises(SystemWireError):
+        parse_system_response(raw, "school")

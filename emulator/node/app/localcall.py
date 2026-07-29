@@ -77,4 +77,5 @@ async def run_resolving_calls(
         display="\n".join(displays),
         line=resp.line,
         call=None,
+        prompt=resp.prompt,
     )
