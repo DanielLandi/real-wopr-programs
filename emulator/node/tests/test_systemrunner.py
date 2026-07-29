@@ -81,11 +81,18 @@ def test_ws_system_session_connects_and_echoes(system_client):
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         greeting = ws.receive_text()
         assert "REFERENCE SYSTEM READY" in greeting
+        # reference.cob now speaks "PROMPT >" ahead of every LINE UP (Task 9),
+        # delivered as its own "prompt" frame separate from the "output"
+        # frame carrying the DISPLAY block (app/main.py) — consume it before
+        # the next turn's input, same pattern as the school test above.
+        assert ">" in ws.receive_text()                       # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PING","eom":true}')
         echo = ws.receive_text()
         assert "[1] YOU SAID: PING" in echo
+        assert ">" in ws.receive_text()                       # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"BYE","eom":true}')
-        # GOODBYE (the system's own display) followed by NO CARRIER, then close.
+        # GOODBYE (the system's own display) followed by NO CARRIER, then
+        # close. BYE is a LINE DROP path, so it carries no PROMPT frame.
         assert "GOODBYE" in ws.receive_text()
         assert "NO CARRIER" in ws.receive_text()
 
@@ -133,19 +140,28 @@ def test_ws_system_session_dials_airline_and_books_paris(system_client):
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         greeting = ws.receive_text()
         assert "PANAMAC" in greeting
+        # airline.cob now speaks "PROMPT READY:" ahead of every LINE UP
+        # (Task 9), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school test above.
+        assert "READY:" in ws.receive_text()                  # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"AJFKPAR","eom":true}')
         avail = ws.receive_text()
         assert "AVAILABILITY" in avail
         assert "PA 002" in avail
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"02Y1","eom":true}')
         assert "SEGMENT ADDED" in ws.receive_text()
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"-LIGHTMAN/DAVID","eom":true}')
         ws.receive_text()
+        ws.receive_text()                                     # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"-MACK/JENNIFER","eom":true}')
         ws.receive_text()
+        ws.receive_text()                                     # prompt
 
         ws.send_text('{"v":1,"kind":"input","payload":"E","eom":true}')
         end = ws.receive_text()

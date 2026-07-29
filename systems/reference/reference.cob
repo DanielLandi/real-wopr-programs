@@ -84,6 +84,7 @@
            DISPLAY "DISPLAY 2"
            DISPLAY "REFERENCE SYSTEM READY"
            DISPLAY "TYPE ANYTHING; BYE TO HANG UP."
+           DISPLAY "PROMPT >"
            DISPLAY "LINE UP"
            DISPLAY "END".
        DO-INPUT.
@@ -113,6 +114,7 @@
                DISPLAY "DISPLAY 1"
                DISPLAY "[" WS-NEXT-D(WS-CTR-START:WS-CTR-LEN)
                    "] YOU SAID: " WS-INPUT(1:WS-INPUT-LEN)
+               DISPLAY "PROMPT >"
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.

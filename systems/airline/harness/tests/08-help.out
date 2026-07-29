@@ -10,5 +10,6 @@ LIST PSGR/FLTS PFX*  LIST FILE
 E                    END, GET LOCATOR
 I                    IGNORE
 SO                   SIGN OFF
+PROMPT READY:
 LINE UP
 END
