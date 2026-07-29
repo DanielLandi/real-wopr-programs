@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parent.parent.parent.parent
 REAL_BIN = REPO / "games"
 
 needs_core = pytest.mark.skipif(
-    not (REAL_BIN / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
+    not (REAL_BIN / "tictactoe" / "core" / "harness" / "bin" / "tictactoe").exists(),
     reason="core not built (run tools/import-programs.sh)",
 )
 
@@ -35,12 +35,12 @@ def test_real_core_new_and_move():
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
 
     async def flow():
-        new = await runner.run("tictactoe", "NEW")
+        new = await runner.run("tictactoe", "NEW", interp_dir="core")
         assert new.status == "PLAYING"
         assert new.state == ".........\nTURN X"
-        moved = await runner.run("tictactoe", "MOVE", new.state, "5")
+        moved = await runner.run("tictactoe", "MOVE", new.state, "5", interp_dir="core")
         assert moved.state == "....X....\nTURN O"
-        engine = await runner.run("tictactoe", "MOVE", moved.state, None)
+        engine = await runner.run("tictactoe", "MOVE", moved.state, None, interp_dir="core")
         assert engine.state == "O...X....\nTURN X"  # deterministic corner reply
 
     asyncio.run(flow())
@@ -51,9 +51,9 @@ def test_real_core_error_frame_maps_to_core_error():
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
 
     async def flow():
-        new = await runner.run("tictactoe", "NEW")
+        new = await runner.run("tictactoe", "NEW", interp_dir="core")
         with pytest.raises(CoreError) as exc:
-            await runner.run("tictactoe", "MOVE", new.state, "Q" )
+            await runner.run("tictactoe", "MOVE", new.state, "Q", interp_dir="core")
         assert "INVALID MOVE" in str(exc.value)
 
     asyncio.run(flow())

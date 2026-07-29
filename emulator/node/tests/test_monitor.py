@@ -143,7 +143,7 @@ def test_no_game_may_claim_a_reserved_word():
 
 
 needs_core = pytest.mark.skipif(
-    not (GAMES_DIR / "tictactoe" / "harness" / "bin" / "tictactoe").exists(),
+    not (GAMES_DIR / "tictactoe" / "core" / "harness" / "bin" / "tictactoe").exists(),
     reason="core not built (run make build)",
 )
 

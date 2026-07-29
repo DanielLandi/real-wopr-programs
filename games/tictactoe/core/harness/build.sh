@@ -5,4 +5,4 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p bin
 gfortran -std=f2008 -O2 -o "bin/tictactoe" ../main.f90
-echo "built games/tictactoe -> harness/bin/tictactoe"
+echo "built games/tictactoe/core -> harness/bin/tictactoe"
