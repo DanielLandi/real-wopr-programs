@@ -182,3 +182,116 @@ def test_game_row_pin_survives_store_round_trip():
 def test_game_row_pin_defaults_to_core():
     gs = GameState(session_id="s", game_id="g", state="", status="PLAYING")
     assert gs.interpretation == "core"
+
+
+# -- router surface (Task 5) --------------------------------------------------
+
+from app.joshua import ScriptedJoshua
+from app.rooms import RoomLocks
+from app.router import Router
+from app.runner import RunnerConfig as _RC
+
+
+def make_nested_router(nested_games_dir, store):
+    catalog = load_catalog(nested_games_dir)
+    runner = CoreRunner(_RC(bin_dir=nested_games_dir))
+    joshua = ScriptedJoshua({g.id: g.title for g in catalog.values()
+                             if g.status == "implemented"})
+    return Router(runner, store, {"scripted": joshua}, catalog, locks=RoomLocks())
+
+
+async def _joshua_session(router, store):
+    s = await store.create_session("home-terminal", "dialup-300", None)
+    await router.handle(s.id, "JOSHUA")  # through the front door
+    return s.id
+
+
+def test_list_slot_lists_interpretations(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        r = await router.handle(sid, "LIST CHESS")
+        assert r.text == "CHESS\n1. CORE\n2. MINIMAL - DANIEL"
+
+    asyncio.run(flow())
+
+
+def test_list_placeholder_slot_says_not_implemented(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        r = await router.handle(sid, "LIST POKER")
+        assert "NOT YET IMPLEMENTED" in r.text
+
+    asyncio.run(flow())
+
+
+def test_unknown_list_argument_falls_through(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        r = await router.handle(sid, "LIST WEATHER")
+        assert r.route == "joshua"  # not intercepted by the monitor
+
+    asyncio.run(flow())
+
+
+def test_bare_new_starts_core_and_pins(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        await router.handle(sid, "NEW CHESS")
+        row = await store.get_active_game(sid)
+        assert row.interpretation == "core"
+        assert row.state == "CORE-STUB"
+
+    asyncio.run(flow())
+
+
+def test_new_with_selector_starts_and_pins_that_one(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        await router.handle(sid, "NEW CHESS 2")
+        row = await store.get_active_game(sid)
+        assert row.interpretation == "minimal"
+        assert row.state == "ALT-STUB"
+
+    asyncio.run(flow())
+
+
+def test_moves_keep_running_the_pinned_binary(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        await router.handle(sid, "NEW CHESS DANIEL")
+        await router.handle(sid, "E4")  # attached: the line is the game's
+        row = await store.get_active_game(sid)
+        assert row.state == "ALT-STUB"  # the stub echoes its identity as STATE
+
+    asyncio.run(flow())
+
+
+def test_bad_selector_is_refused(nested_games_dir):
+    store = MemoryStore()
+    router = make_nested_router(nested_games_dir, store)
+
+    async def flow():
+        sid = await _joshua_session(router, store)
+        r = await router.handle(sid, "NEW CHESS 9")
+        assert r.text == "UNKNOWN INTERPRETATION: 9"
+        assert await store.get_active_game(sid) is None
+
+    asyncio.run(flow())

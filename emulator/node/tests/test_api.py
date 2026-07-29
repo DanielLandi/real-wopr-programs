@@ -110,7 +110,8 @@ class _AlwaysPlayingRunner:
     """Fake CoreRunner: every command reports a PLAYING game, deterministically,
     with no built binary needed — used for WS tests of the OBSERVE GTW gate."""
 
-    async def run(self, game_id, command, state, move, timeout_s=None) -> CoreResponse:
+    async def run(self, game_id, command, state, move, timeout_s=None,
+                  interp_dir=None) -> CoreResponse:
         return CoreResponse(game_id=game_id, state=state or "STATE",
                             display="ZULU 00:00  DEFCON 5", status="PLAYING", result=None)
 

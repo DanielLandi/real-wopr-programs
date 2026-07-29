@@ -85,7 +85,8 @@ class GtwRoomHub:
                                                  timeout_s=self.catalog["gtw"].timeout_s)
                     await self.store.upsert_game(GameState(
                         session_id=game.session_id, game_id="gtw", state=resp.state,
-                        status=resp.status, turn=game.turn + 1))
+                        status=resp.status, turn=game.turn + 1,
+                        interpretation=game.interpretation))
                     status = resp.status
                 else:
                     # No live war. If the room's latest war just ended (a

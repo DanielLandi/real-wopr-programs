@@ -38,7 +38,8 @@ class CountingFakeRunner:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def run(self, game_id, command, state, move, timeout_s=None) -> CoreResponse:
+    async def run(self, game_id, command, state, move, timeout_s=None,
+                  interp_dir=None) -> CoreResponse:
         self.calls += 1
         return CoreResponse(game_id=game_id, state=state or "STATE",
                             display="ZULU 00:00  DEFCON 5", status="PLAYING", result=None)
@@ -50,7 +51,8 @@ class FlakyFirstCallRunner:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def run(self, game_id, command, state, move, timeout_s=None) -> CoreResponse:
+    async def run(self, game_id, command, state, move, timeout_s=None,
+                  interp_dir=None) -> CoreResponse:
         self.calls += 1
         if self.calls == 1:
             raise CoreBusy("core queue full")
@@ -413,7 +415,8 @@ class TerminalWarRunner:
     def __init__(self) -> None:
         self.commands: list[str] = []
 
-    async def run(self, game_id, command, state, move, timeout_s=None) -> CoreResponse:
+    async def run(self, game_id, command, state, move, timeout_s=None,
+                  interp_dir=None) -> CoreResponse:
         self.commands.append(command)
         return CoreResponse(game_id=game_id, state=state or "STATE",
                             display="ZULU 01:06  DEFCON 1", status="NO-WIN", result=None)
