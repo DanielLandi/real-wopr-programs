@@ -220,11 +220,18 @@ def test_ws_system_session_dials_protovision_and_queues(system_client):
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         assert "PROTOVISION" in ws.receive_text()
+        # protovision.s now speaks "PROMPT COMMAND:" ahead of every LINE UP
+        # (Task 8), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school/airline/reference tests.
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"L","eom":true}')
         listing = ws.receive_text()
         assert "ZYPHON" in listing and "* VELDRAX" in listing
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"Q 1","eom":true}')
         assert "QUEUED: ZYPHON" in ws.receive_text()
+        assert "COMMAND:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"Q","eom":true}')
         shown = ws.receive_text()
         assert "YOUR QUEUE:" in shown and "ZYPHON" in shown  # persisted via STATE
@@ -304,10 +311,17 @@ def test_ws_system_session_dials_pactel_and_verifies_line(system_client):
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         assert "PACIFIC TELEPHONE" in ws.receive_text()
+        # pactel.c now speaks "PROMPT TEST:" ahead of every LINE UP
+        # (Task 6/7), delivered as its own "prompt" frame separate from the
+        # "output" frame carrying the DISPLAY block (app/main.py) — consume
+        # it every turn, same pattern as the school/airline/reference tests.
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"ANAC","eom":true}')
         assert "206 555 0137" in ws.receive_text()
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"LINE 2065551234","eom":true}')
         assert "206 555 1234" in ws.receive_text()
+        assert "TEST:" in ws.receive_text()                   # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"VERIFY","eom":true}')
         shown = ws.receive_text()
         assert "206 555 1234" in shown and "IDLE" in shown  # selected line persisted via STATE
