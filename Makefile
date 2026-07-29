@@ -12,4 +12,4 @@ up: build              ## bring the whole federation up (relays + nodes)
 map:                   ## print the topology without starting anything
 	@node emulator/cli/src/main.ts map --pack .
 clean:                 ## remove build output and packages
-	@rm -rf games/*/harness/bin systems/*/harness/bin joshua/harness/bin dist
+	@rm -rf games/*/harness/bin games/*/*/harness/bin systems/*/harness/bin joshua/harness/bin dist

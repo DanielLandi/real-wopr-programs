@@ -7,20 +7,22 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 # Optional args filter by category (games | systems | joshua); no args = all.
 cats=("$@"); [ ${#cats[@]} -eq 0 ] && cats=(games systems joshua)
+shopt -s nullglob
 mans=()
 for c in "${cats[@]}"; do
   case "$c" in
-    games)   mans+=(games/*/harness/manifest.json) ;;
+    # A slot is flat (games/<id>/harness) or nested per interpretation
+    # (games/<id>/<interpretation>/harness) — docs/games.md §8.
+    games)   mans+=(games/*/harness/manifest.json games/*/*/harness/manifest.json) ;;
     systems) mans+=(systems/*/harness/manifest.json) ;;
     joshua)  mans+=(joshua/harness/manifest.json) ;;
     *) echo "unknown category: $c" >&2; exit 2 ;;
   esac
 done
 pass=0; fail=0
-shopt -s nullglob
 for man in "${mans[@]}"; do
   hd="$(dirname "$man")"
-  prog="$(basename "$(dirname "$hd")")"
+  prog="${man#systems/}"; prog="${prog#games/}"; prog="${prog%/harness/manifest.json}"
   bin_name="$(sed -n 's/.*"binary"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$man")"
   bin="$hd/bin/$bin_name"
   for fin in "$hd"/tests/*.in; do
