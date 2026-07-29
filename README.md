@@ -74,7 +74,8 @@ games/hearts/harness/bin/hearts < games/hearts/harness/tests/01-new.in
 See [CONTRIBUTING.md](./CONTRIBUTING.md). In short: the golden fixtures are the contract — a
 change is done when the program still reproduces them (or you regenerate them and review the
 diff). To add your own program, follow the same source + `harness/` shape and one of the wire
-protocols in [PACK.md](./PACK.md).
+protocols in [PACK.md](./PACK.md). A catalog slot can also hold competing reconstructions of
+one title — interpretations — credited per slot in [CREDITS.md](./CREDITS.md).
 
 ## Using these with the engine
 
