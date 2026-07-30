@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { NoradFrameHandler } from "./frames.ts";
+import { NoradFrameHandler, type FrameEvent } from "../src/frames.ts";
 
 // Shape a payload the way the relay does on the wire: emission quanta of
 // floor(baud / bits_per_char / 15) bytes — floor(300/10/15) = 2 bytes at
@@ -19,8 +19,8 @@ import { NoradFrameHandler } from "./frames.ts";
 // separate modules of the federation and share only the wire spec, so this
 // test reproduces the shape from the spec instead of importing the relay's
 // shaper. ASCII payloads only, so slicing by character equals slicing by byte.
-function shaped(kind, payload, quantum = 2) {
-  const frames = [];
+function shaped(kind: string, payload: string, quantum = 2): FrameEvent[] {
+  const frames: FrameEvent[] = [];
   for (let i = 0; i < payload.length; i += quantum) {
     frames.push({
       type: "frame",
@@ -33,7 +33,7 @@ function shaped(kind, payload, quantum = 2) {
         payload: payload.slice(i, i + quantum),
         eom: i + quantum >= payload.length,
       },
-    });
+    } as FrameEvent);
   }
   return frames;
 }
@@ -44,7 +44,7 @@ function harness() {
     phase: "connecting",
     text: "",
     prompt: "WOPR>",
-    prompts: [],
+    prompts: [] as string[],
     reconnectsScheduled: 0,
     redialsScheduled: 0,
     recoveriesReset: 0,
@@ -84,10 +84,10 @@ test("regression: a chunked CONNECTED handshake still connects", () => {
   // console would sit at SYNC forever.
   const { state, handler } = harness();
   const frames = shaped("handshake", "CONNECTED NORAD TIE LINE");
-  assert.ok(frames.every((e) => !e.frame.payload.includes("CONNECTED")));
+  assert.ok(frames.every((e) => !(e as { frame: { payload: string } }).frame.payload.includes("CONNECTED")));
   for (const e of frames.slice(0, -1)) handler.onEvent(e);
   assert.equal(state.phase, "connecting"); // nothing acts before eom
-  handler.onEvent(frames.at(-1));
+  handler.onEvent(frames.at(-1)!);
   assert.equal(state.phase, "connected");
   assert.equal(state.recoveriesReset, 1);
 });
@@ -162,6 +162,6 @@ test("a control NO CARRIER prints on its own line", () => {
   handler.onEvent({
     type: "frame",
     frame: { v: 1, session: "s1", seq: 9, kind: "control", link: "dialup-300", payload: "NO CARRIER", eom: true },
-  });
+  } as FrameEvent);
   assert.equal(state.text, "LOGON: \nNO CARRIER\n");
 });

@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HomeFrameHandler } from "./frames.ts";
+import { HomeFrameHandler, type FrameEvent, type Phase } from "../src/frames.ts";
 
 // Shape a payload the way the relay does on the wire: emission quanta of
 // floor(baud / bits_per_char / 15) bytes — floor(300/10/15) = 2 bytes at
@@ -18,8 +18,8 @@ import { HomeFrameHandler } from "./frames.ts";
 // share only the wire spec, so this test reproduces the shape from the spec
 // instead of importing the relay's shaper. ASCII payloads only, so slicing
 // by character equals slicing by byte.
-function shaped(kind, payload, quantum = 2) {
-  const frames = [];
+function shaped(kind: string, payload: string, quantum = 2): FrameEvent[] {
+  const frames: FrameEvent[] = [];
   for (let i = 0; i < payload.length; i += quantum) {
     frames.push({
       type: "frame",
@@ -32,14 +32,21 @@ function shaped(kind, payload, quantum = 2) {
         payload: payload.slice(i, i + quantum),
         eom: i + quantum >= payload.length,
       },
-    });
+    } as FrameEvent);
   }
   return frames;
 }
 
 /** A recorder standing where page.tsx's React state and peripherals stand. */
-function harness(phase = "connected") {
-  const state = { phase, text: "", prompt: ">", prompts: [], modem: [], spoken: [] };
+function harness(phase: Phase = "connected") {
+  const state = {
+    phase,
+    text: "",
+    prompt: ">",
+    prompts: [] as string[],
+    modem: [] as string[],
+    spoken: [] as string[],
+  };
   const handler = new HomeFrameHandler({
     getPhase: () => state.phase,
     setPhase: (p) => {
@@ -80,7 +87,7 @@ test("a chunked handshake reassembles before the state is parsed", () => {
   // Nothing acts until the message completes.
   assert.deepEqual(state.modem, []);
   assert.equal(state.phase, "dialing");
-  handler.onEvent(frames.at(-1));
+  handler.onEvent(frames.at(-1)!);
   assert.deepEqual(state.modem, ["CONNECTED"]);
   assert.equal(state.phase, "connected");
   assert.equal(state.text, "\nWOPR EXCHANGE - SAO PAULO\n");
@@ -140,10 +147,10 @@ test("a control NO CARRIER prints once; the WS close behind it stays silent", ()
   handler.onEvent({
     type: "frame",
     frame: { v: 1, session: "s1", seq: 0, kind: "control", link: "dialup-300", payload: "NO CARRIER", eom: true },
-  });
+  } as FrameEvent);
   assert.equal(state.phase, "no-carrier");
   handler.onEvent({ type: "close" }); // the comms layer closes right after
-  assert.equal(state.text.match(/NO CARRIER/g).length, 1);
+  assert.equal(state.text.match(/NO CARRIER/g)!.length, 1);
 });
 
 test("an unexpected close with no control frame announces NO CARRIER itself", () => {

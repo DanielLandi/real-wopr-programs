@@ -3,19 +3,25 @@
 // Amber phosphor, persistent status header, leased-9600 (carrier handshake
 // only — no dial ritual). Command grammar is a constrained superset of the
 // home terminal's; everything still goes through the bridge router.
+//
+// Screen and keyboard are the shared xterm terminal, and the arriving frames
+// are the shared handler beside it (#108 §4). The retry policy stays split
+// exactly where it was: the handler decides (budgets, what to announce), this
+// page schedules (the 750 ms timers, the session poll) — the shared code owns
+// no timers.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  CRTScreen,
-  Teletype,
-  CommandLine,
   StatusPanel,
   WoprLink,
   endpointFromQuery,
   type LinkEvent,
 } from "@real-wopr/crt-kit";
+// By path, not through the barrel: the barrel is shared with the feed surfaces,
+// which must not pull xterm in behind it.
+import { TerminalScreen, type XtermMount } from "@real-wopr/crt-kit/src/TerminalScreen";
 import { awaitingAccessCode, clearanceFromText, wallUrl } from "./logon";
-import { NoradFrameHandler, type Phase } from "./frames";
+import { NoradFrameHandler, type NoradPhase as Phase } from "@real-wopr/terminal/frames";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -33,14 +39,22 @@ function roomCodeFromLocation(): { code?: string; malformed?: string } {
   return valid ? { code } : { malformed: code.slice(0, 24) };
 }
 
+/** Append starting on a fresh line — the rule the transcript has always used,
+ *  and the one the shared renderer's appendText applies, so the mirror below
+ *  and the screen stay identical. */
+function onFreshLine(t: string, s: string): string {
+  return `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}${s}`;
+}
+
 export default function NoradTerminal() {
   const [phase, setPhase] = useState<Phase>("connecting");
+  // A mirror of the transcript, not the thing on screen. The console reads its
+  // own scrollback to know two things the wire never states outright: whether
+  // the machine is waiting for an access code (mask the echo) and which
+  // clearance was last accepted (the CLR readout). Both are contract strings
+  // (api-contract.md §4), so the text has to be kept even though xterm draws it.
   const [text, setText] = useState("");
   const [defcon, setDefcon] = useState(5);
-  // Resting default is this console's own "WOPR>" — the router's prompt frame
-  // only arrives once attached, and until then the console shows what it
-  // always has.
-  const [prompt, setPrompt] = useState("WOPR>");
   const link = useRef<WoprLink | null>(null);
   const sessionRef = useRef<string>("");
   const tokenRef = useRef<string>("");
@@ -50,18 +64,47 @@ export default function NoradTerminal() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectLinkRef = useRef<() => void>(() => undefined);
 
-  // The DOM-free frame-handling core (app/frames.ts) — it owns the
+  // The screen. xterm exists only in the browser, so during the static
+  // export's prerender — and between first paint and the terminal loading —
+  // there is nothing to write to; anything written then waits here and lands
+  // in order once there is.
+  const screen = useRef<XtermMount | null>(null);
+  const pending = useRef<Array<(m: XtermMount) => void>>([]);
+  const write = useCallback((fn: (m: XtermMount) => void) => {
+    if (screen.current) fn(screen.current);
+    else pending.current.push(fn);
+  }, []);
+  const onScreen = useCallback((m: XtermMount | null) => {
+    screen.current = m;
+    if (!m) return;
+    const queued = pending.current;
+    pending.current = [];
+    for (const fn of queued) fn(m);
+  }, []);
+
+  const appendLine = useCallback(
+    (s: string) => {
+      setText((t) => onFreshLine(t, s));
+      write((m) => m.sinks.appendText(s));
+    },
+    [write],
+  );
+
+  // The DOM-free frame-handling core (@real-wopr/terminal) — it owns the
   // reassembly buffers and the WS-close retry budget; this page only wires
-  // its sinks onto React state, the refs, and the retry timers. Built once:
-  // every sink closes over stable setters and refs.
+  // its sinks onto the screen, React state, the refs, and the retry timers.
+  // Built once: every sink closes over stable setters and refs.
   const frames = useRef<NoradFrameHandler | null>(null);
   if (frames.current === null) {
     frames.current = new NoradFrameHandler({
       isDisposed: () => disposed.current,
       setPhase,
-      appendLine: (s) => setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}${s}`),
-      appendRaw: (s) => setText((t) => t + s),
-      setPrompt,
+      appendLine,
+      appendRaw: (s) => {
+        setText((t) => t + s);
+        write((m) => m.sinks.appendRaw(s));
+      },
+      setPrompt: (p) => write((m) => m.setPrompt(p)),
       scheduleReconnect: () => {
         reconnectTimer.current = setTimeout(() => connectLinkRef.current(), 750);
       },
@@ -86,7 +129,7 @@ export default function NoradTerminal() {
     if (room.malformed !== undefined) {
       // Refuse to sync with a bad ?room= — connecting roomless would
       // silently strand the console outside the room it asked for.
-      setText(
+      appendLine(
         `INVALID ROOM CODE "${room.malformed}"\n` +
           `ROOM CODES ARE 6 CHARACTERS FROM ${ROOM_ALPHABET}\n` +
           "CORRECT THE ?room= PARAMETER AND RELOAD CONSOLE\n",
@@ -104,7 +147,7 @@ export default function NoradTerminal() {
     sessionRef.current = s.session_id;
     tokenRef.current = s.token;
     return true;
-  }, []);
+  }, [appendLine]);
 
   const onLinkEvent = useCallback((e: LinkEvent) => {
     frames.current?.onEvent(e);
@@ -161,10 +204,10 @@ export default function NoradTerminal() {
           if (recoveries.current < 3) {
             recoveries.current += 1;
             setPhase("reconnecting");
-            setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}SESSION LOST - REDIALING\n`);
+            appendLine("SESSION LOST - REDIALING\n");
             if (await mintSession()) connectLink();
           } else {
-            setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}LINK DOWN - RELOAD CONSOLE\n`);
+            appendLine("LINK DOWN - RELOAD CONSOLE\n");
             setPhase("down");
             pollStopped.current = true;
           }
@@ -181,31 +224,50 @@ export default function NoradTerminal() {
       clearInterval(poll);
       link.current?.hangup();
     };
-  }, [connectLink, mintSession]);
+  }, [connectLink, mintSession, appendLine]);
+
+  const masked = awaitingAccessCode(text);
 
   const submit = (line: string) => {
     const cmd = line.toUpperCase();
-    const masked = awaitingAccessCode(text);
     if (!masked && cmd === "WALL") {
       const base =
         process.env.NEXT_PUBLIC_WALL_URL ?? `${window.location.origin}/warroom/`;
       const url = wallUrl(base, roomCodeFromLocation().code);
-      setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}WOPR> WALL\nSCREEN WALL: ${url}\n`);
+      appendLine(`WOPR> WALL\nSCREEN WALL: ${url}\n`);
       return;
     }
     // Never echo an access code — the prompt line stays bare.
-    setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}WOPR> ${masked ? "" : cmd}\n`);
+    appendLine(`WOPR> ${masked ? "" : cmd}\n`);
     link.current?.sendInput(cmd);
   };
 
+  // The terminal keeps its keystroke handler for the life of the page, so it
+  // reads the submit closure through a ref rather than capturing the render it
+  // was created in — otherwise an access code typed after the prompt arrives
+  // would still be judged against a transcript that had not seen it.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+
+  const clearance = clearanceFromText(text);
+
   return (
-    <CRTScreen theme="amber" flicker={false} columns={80}>
+    <TerminalScreen
+      theme="amber"
+      flicker={false}
+      prompt="WOPR>"
+      uppercase
+      // No command line until the leased line is up — the console used to
+      // render one only when connected, and this is the same rule.
+      enabled={phase === "connected"}
+      mask={masked}
+      onLine={(line) => submitRef.current(line)}
+      onBreak={() => link.current?.sendControl("BREAK")}
+      onMount={onScreen}
+    >
       <StatusPanel
         items={[
-          { label: "CLR", value: (() => {
-              const c = clearanceFromText(text);
-              return c ? `${c.callsign} L${c.level}` : "----";
-            })() },
+          { label: "CLR", value: clearance ? `${clearance.callsign} L${clearance.level}` : "----" },
           { label: "DEFCON", value: String(defcon) },
           {
             label: "LINK",
@@ -220,18 +282,7 @@ export default function NoradTerminal() {
           },
         ]}
       />
-      {/* When connected the CommandLine owns the one cursor (on its prompt
-          line); don't also blink one at the output tail. */}
-      <Teletype text={text} cursor={phase !== "connected"} />
-      {phase === "connected" && (
-        <CommandLine
-          prompt={prompt}
-          mask={awaitingAccessCode(text)}
-          onSubmit={submit}
-          onBreak={() => link.current?.sendControl("BREAK")}
-        />
-      )}
       {phase === "down" && <div>LINK DOWN — RELOAD CONSOLE</div>}
-    </CRTScreen>
+    </TerminalScreen>
   );
 }
