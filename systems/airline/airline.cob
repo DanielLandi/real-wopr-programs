@@ -93,7 +93,9 @@
       *---------------------------------------------------------------
       * Listing in progress (LST <kind> <pattern|-> <next>): which
       * file is being listed, the starts-with pattern (empty = all),
-      * and the 1-based table index the next page starts at.
+      * and the 1-based table index the next page starts at. Kind
+      * MNFT is a flight manifest: the passenger file filtered on an
+      * exact flight key carried in the pattern field.
       *---------------------------------------------------------------
        01  WS-HAVE-LST         PIC X VALUE "N".
        01  WS-LST-KIND         PIC X(4) VALUE SPACES.
@@ -390,6 +392,7 @@
                WHEN "SIGNOFF"  PERFORM DO-SIGNOFF
                WHEN "HELP"     PERFORM DO-HELP
                WHEN "LIST"     PERFORM DO-LIST
+               WHEN "MANIFEST" PERFORM DO-MANIFEST
                WHEN "MORE"     PERFORM DO-MORE
                WHEN OTHER      PERFORM DO-INVALID
            END-EVALUATE.
@@ -419,6 +422,8 @@
                    MOVE "HELP" TO WS-CMD-TYPE
                WHEN WS-INPUT-LEN >= 9 AND WS-INPUT(1:5) = "LIST "
                    MOVE "LIST" TO WS-CMD-TYPE
+               WHEN WS-INPUT-LEN >= 10 AND WS-INPUT(1:9) = "MANIFEST "
+                   MOVE "MANIFEST" TO WS-CMD-TYPE
                WHEN WS-INPUT-LEN >= 7 AND WS-INPUT(1:1) = "A"
                    MOVE "AVAIL" TO WS-CMD-TYPE
                WHEN WS-INPUT-LEN = 4 AND WS-INPUT(1:2) IS NUMERIC
@@ -726,13 +731,14 @@
        DO-HELP.
            PERFORM COMMON-HEADER
            PERFORM EMIT-STATE
-           DISPLAY "DISPLAY 9"
+           DISPLAY "DISPLAY 10"
            DISPLAY "PANAMAC COMMANDS"
            DISPLAY "A<DATE><ORIG><DEST>  AVAILABILITY"
            DISPLAY "<N><CLASS><LINE>     SELL SEATS"
            DISPLAY "-SURNAME/FIRST       ADD NAME"
            DISPLAY "*R                   DISPLAY RECORD"
            DISPLAY "LIST PSGR/FLTS PFX*  LIST FILE"
+           DISPLAY "MANIFEST <FLT>       FLIGHT MANIFEST"
            DISPLAY "E                    END, GET LOCATOR"
            DISPLAY "I                    IGNORE"
            DISPLAY "SO                   SIGN OFF"
@@ -777,6 +783,34 @@
                PERFORM SCAN-LISTING
                PERFORM EMIT-LIST-RESPONSE
            END-IF.
+      *-----------------------------------------------------------
+      * MANIFEST <FLT> — the passengers booked on one flight, by
+      * exact flight key (e.g. MANIFEST PA222), 15 rows to a page
+      * through the same listing cursor as LIST (MORE is a bare M
+      * here too). An unknown or empty flight is a clean NO MATCH,
+      * same as a LIST prefix without matches; a key longer than
+      * the 5-column flight-key field can never match and is
+      * rejected as INVALID rather than silently truncated.
+      *-----------------------------------------------------------
+       DO-MANIFEST.
+           MOVE SPACES TO WS-TOK WS-TOK2
+           UNSTRING WS-INPUT(1:WS-INPUT-LEN) DELIMITED BY ALL SPACES
+               INTO WS-TOK WS-TOK2
+           END-UNSTRING
+           MOVE SPACES TO WS-TRIM-SRC
+           MOVE WS-TOK2 TO WS-TRIM-SRC
+           PERFORM RTRIM-GENERIC
+           IF WS-TRIM-SRC = SPACES OR WS-TRIM-LEN > 5
+               PERFORM DO-INVALID
+           ELSE
+               MOVE "MNFT" TO WS-LST-KIND
+               MOVE SPACES TO WS-LST-PAT
+               MOVE WS-TRIM-SRC(1:WS-TRIM-LEN) TO WS-LST-PAT
+               MOVE WS-TRIM-LEN TO WS-LST-PAT-LEN
+               MOVE 1 TO WS-LST-NEXT
+               PERFORM SCAN-LISTING
+               PERFORM EMIT-LIST-RESPONSE
+           END-IF.
        DO-MORE.
            IF WS-HAVE-LST NOT = "Y"
                PERFORM DO-INVALID
@@ -793,7 +827,7 @@
        SCAN-LISTING.
            MOVE 0 TO WS-LROWS-CNT
            MOVE "N" TO WS-HAVE-LST
-           IF WS-LST-KIND = "PSGR"
+           IF WS-LST-KIND = "PSGR" OR WS-LST-KIND = "MNFT"
                MOVE WS-PSG-CNT TO WS-LBOUND
            ELSE
                MOVE WS-FLT-CNT TO WS-LBOUND
@@ -816,37 +850,46 @@
            END-PERFORM.
       *-----------------------------------------------------------
       * Does table row WS-I match the pattern? Passengers match on
-      * the name; flights on the city pair or the flight key. An
-      * empty pattern matches everything.
+      * the name; flights on the city pair or the flight key; a
+      * manifest row on its exact flight key (space-padded to the
+      * full 5 columns, so a partial key is no match rather than a
+      * prefix). An empty pattern matches everything (LIST only).
       *-----------------------------------------------------------
        MATCH-LIST-ROW.
            MOVE "N" TO WS-LMATCH
-           IF WS-LST-PAT-LEN = 0
-               MOVE "Y" TO WS-LMATCH
+           IF WS-LST-KIND = "MNFT"
+               IF WS-PSG-FLT(WS-I) = WS-LST-PAT(1:5)
+                   MOVE "Y" TO WS-LMATCH
+               END-IF
            ELSE
-               IF WS-LST-KIND = "PSGR"
-                   IF WS-PSG-NAME(WS-I)(1:WS-LST-PAT-LEN)
-                       = WS-LST-PAT(1:WS-LST-PAT-LEN)
-                       MOVE "Y" TO WS-LMATCH
-                   END-IF
+               IF WS-LST-PAT-LEN = 0
+                   MOVE "Y" TO WS-LMATCH
                ELSE
-                   IF WS-LST-PAT-LEN <= 6
-                       AND WS-FLT-PAIR(WS-I)(1:WS-LST-PAT-LEN)
-                       = WS-LST-PAT(1:WS-LST-PAT-LEN)
-                       MOVE "Y" TO WS-LMATCH
-                   END-IF
-                   IF WS-LST-PAT-LEN <= 5
-                       AND WS-FLT-KEY(WS-I)(1:WS-LST-PAT-LEN)
-                       = WS-LST-PAT(1:WS-LST-PAT-LEN)
-                       MOVE "Y" TO WS-LMATCH
+                   IF WS-LST-KIND = "PSGR"
+                       IF WS-PSG-NAME(WS-I)(1:WS-LST-PAT-LEN)
+                           = WS-LST-PAT(1:WS-LST-PAT-LEN)
+                           MOVE "Y" TO WS-LMATCH
+                       END-IF
+                   ELSE
+                       IF WS-LST-PAT-LEN <= 6
+                           AND WS-FLT-PAIR(WS-I)(1:WS-LST-PAT-LEN)
+                           = WS-LST-PAT(1:WS-LST-PAT-LEN)
+                           MOVE "Y" TO WS-LMATCH
+                       END-IF
+                       IF WS-LST-PAT-LEN <= 5
+                           AND WS-FLT-KEY(WS-I)(1:WS-LST-PAT-LEN)
+                           = WS-LST-PAT(1:WS-LST-PAT-LEN)
+                           MOVE "Y" TO WS-LMATCH
+                       END-IF
                    END-IF
                END-IF
            END-IF.
       *-----------------------------------------------------------
       * Format table row WS-I into WS-LROW(WS-LROWS-CNT). Passenger
       * rows keep the name field's fixed 26 columns so the flight
-      * column lines up; flight rows are the availability line
-      * without the leading sell digit.
+      * column lines up; manifest rows drop the flight column (the
+      * title's key covers the page); flight rows are the
+      * availability line without the leading sell digit.
       *-----------------------------------------------------------
        BUILD-LIST-ROW.
            MOVE SPACES TO WS-LROW-TXT(WS-LROWS-CNT)
@@ -863,21 +906,32 @@
                    WITH POINTER WS-LROW-PTR
                END-STRING
            ELSE
-               STRING WS-FLT-DISP(WS-I) DELIMITED BY SIZE
-                   "  " DELIMITED BY SIZE
-                   WS-FLT-ORIG(WS-I) DELIMITED BY SIZE
-                   " " DELIMITED BY SIZE
-                   WS-FLT-DEP(WS-I) DELIMITED BY SIZE
-                   "  " DELIMITED BY SIZE
-                   WS-FLT-DEST(WS-I) DELIMITED BY SIZE
-                   " " DELIMITED BY SIZE
-                   WS-FLT-ARR(WS-I)
-                       (1:WS-FLT-ARR-LEN(WS-I)) DELIMITED BY SIZE
-                   "  " DELIMITED BY SIZE
-                   WS-FLT-SEATS(WS-I) DELIMITED BY SIZE
-                   INTO WS-LROW-TXT(WS-LROWS-CNT)
-                   WITH POINTER WS-LROW-PTR
-               END-STRING
+               IF WS-LST-KIND = "MNFT"
+                   STRING WS-PSG-NAME(WS-I) DELIMITED BY SIZE
+                       " " DELIMITED BY SIZE
+                       WS-PSG-CLASS(WS-I) DELIMITED BY SIZE
+                       " " DELIMITED BY SIZE
+                       WS-PSG-DATE(WS-I) DELIMITED BY SIZE
+                       INTO WS-LROW-TXT(WS-LROWS-CNT)
+                       WITH POINTER WS-LROW-PTR
+                   END-STRING
+               ELSE
+                   STRING WS-FLT-DISP(WS-I) DELIMITED BY SIZE
+                       "  " DELIMITED BY SIZE
+                       WS-FLT-ORIG(WS-I) DELIMITED BY SIZE
+                       " " DELIMITED BY SIZE
+                       WS-FLT-DEP(WS-I) DELIMITED BY SIZE
+                       "  " DELIMITED BY SIZE
+                       WS-FLT-DEST(WS-I) DELIMITED BY SIZE
+                       " " DELIMITED BY SIZE
+                       WS-FLT-ARR(WS-I)
+                           (1:WS-FLT-ARR-LEN(WS-I)) DELIMITED BY SIZE
+                       "  " DELIMITED BY SIZE
+                       WS-FLT-SEATS(WS-I) DELIMITED BY SIZE
+                       INTO WS-LROW-TXT(WS-LROWS-CNT)
+                       WITH POINTER WS-LROW-PTR
+                   END-STRING
+               END-IF
            END-IF
            COMPUTE WS-LROW-LEN(WS-LROWS-CNT) = WS-LROW-PTR - 1.
       *-----------------------------------------------------------
@@ -914,7 +968,20 @@
            IF WS-LST-KIND = "PSGR"
                DISPLAY "** PANAMAC PASSENGER LIST **"
            ELSE
-               DISPLAY "** PANAMAC FLIGHT LIST **"
+               IF WS-LST-KIND = "MNFT"
+      *            DO-MANIFEST always stores a key, but a state
+      *            block could carry "LST MNFT - n"; floor the
+      *            length so the reference modification below can
+      *            never be the undefined (1:0).
+                   MOVE WS-LST-PAT-LEN TO WS-K
+                   IF WS-K = 0
+                       MOVE 1 TO WS-K
+                   END-IF
+                   DISPLAY "** PANAMAC MANIFEST "
+                       WS-LST-PAT(1:WS-K) " **"
+               ELSE
+                   DISPLAY "** PANAMAC FLIGHT LIST **"
+               END-IF
            END-IF.
        DO-INVALID.
            PERFORM COMMON-HEADER
