@@ -50,3 +50,39 @@ export function parseFeed(payload: string): GtwFeed | null {
     return null;
   }
 }
+
+/** Structural mirror of a crt-kit link frame (spec-level duplicate on
+ *  purpose, like the parser itself): keeping this module free of runtime
+ *  imports is what lets bare `node --test` load it (real-wopr#123). */
+export interface FeedFrame {
+  kind: string;
+  payload: string;
+  eom: boolean;
+}
+
+/** The accumulate-until-eom half of the feed, extracted from the page's
+ *  frame handler so it is testable without a DOM. Feed messages arrive
+ *  chunked by the link shaper; only a complete message may reach
+ *  parseFeed() — a fragment stranded by a mid-message drop corrupts a JSON
+ *  parse, not just a cosmetic prefix, so the page calls reset() right
+ *  before it constructs a new WoprLink. */
+export class FeedAssembler {
+  private buffer = "";
+
+  /** Drop any fragment stranded by a mid-message carrier loss. */
+  reset(): void {
+    this.buffer = "";
+  }
+
+  /** Feed one frame; returns the parsed feed when a complete `output`
+   *  message lands, null otherwise. Non-output frames are ignored and do
+   *  not disturb the buffer. */
+  push(f: FeedFrame): GtwFeed | null {
+    if (f.kind !== "output") return null;
+    this.buffer += f.payload;
+    if (!f.eom) return null;
+    const message = this.buffer;
+    this.buffer = "";
+    return parseFeed(message);
+  }
+}
