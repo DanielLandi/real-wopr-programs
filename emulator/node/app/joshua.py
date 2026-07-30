@@ -11,9 +11,14 @@ Two engines behind one interface:
 
 from __future__ import annotations
 
+import logging
+import textwrap
+
 from . import sandbox
 from dataclasses import dataclass
 from typing import Protocol
+
+log = logging.getLogger("wopr.joshua")
 
 PERSONA_PROMPT = (
     "You are W.O.P.R. (War Operation Plan Response), a United States military "
@@ -44,6 +49,38 @@ START_GAME_TOOL = {
 }
 
 FALLBACK_LINE = "SYSTEM RESOURCES TEMPORARILY COMMITTED. STAND BY."
+
+# The teletype contract (AGENTS.md, non-negotiable): everything Joshua says is
+# uppercase, at most MAX_LINES lines, at most MAX_COLS characters per line.
+# The 300-baud shaper and every surface downstream are written against 4x60.
+MAX_LINES = 4
+MAX_COLS = 60
+
+
+def normalise_teletype(text: str) -> tuple[str, bool]:
+    """Enforce the 4x60 uppercase teletype contract on a reply.
+
+    The deterministic engines comply by construction; the claude engine is only
+    *asked* to comply by its persona prompt and overruns non-deterministically
+    (real-wopr#128: 14 of 50 replies over 4 lines). Policy, owner-decided:
+    uppercase, collapse blank lines, word-aware wrap at MAX_COLS (a single word
+    longer than a line is the only mid-word split), and hard-truncate to
+    MAX_LINES only if the reply still overruns after all of that. An
+    already-compliant reply passes through byte-identical.
+
+    Returns (normalised_text, truncated). Truncation is lossy — it can amputate
+    a closing SHALL WE PLAY A GAME? — which is why callers must count it.
+    """
+    lines: list[str] = []
+    for raw in text.upper().splitlines():
+        if not raw.strip():
+            continue  # collapse blank lines: a large share of the excess
+        lines.extend(textwrap.wrap(
+            raw, width=MAX_COLS, break_long_words=True, break_on_hyphens=False))
+    truncated = len(lines) > MAX_LINES
+    if truncated:
+        lines = lines[:MAX_LINES]
+    return "\n".join(lines), truncated
 
 
 @dataclass(frozen=True)
@@ -171,7 +208,11 @@ class LispJoshua:
 
 
 class ClaudeJoshua:
-    """The modern substitution (feasibility.md §Module 5), with D5 guardrails."""
+    """The modern substitution (feasibility.md §Module 5), with D5 guardrails.
+
+    The persona prompt asks for the 4x60 teletype contract but the model
+    overruns non-deterministically, so every output path — including the
+    in-character API-error fallback — runs through normalise_teletype()."""
 
     def __init__(self, model: str, max_tokens: int, timeout_s: float, api_key: str | None = None):
         import anthropic  # lazy: dev/tests run without the dependency
@@ -186,6 +227,19 @@ class ClaudeJoshua:
         self._client = anthropic.AsyncAnthropic(api_key=key, timeout=timeout_s, max_retries=1)
         self._model = model
         self._max_tokens = max_tokens
+        # How many replies the normaliser has hard-truncated to MAX_LINES on
+        # this instance. Truncation can cut off SHALL WE PLAY A GAME? — an
+        # accepted trade-off (real-wopr#128), but one worth watching.
+        self.truncations = 0
+
+    def _normalise(self, session_id: str, text: str) -> str:
+        normalised, truncated = normalise_teletype(text)
+        if truncated:
+            self.truncations += 1
+            log.warning(
+                "joshua reply truncated to %d lines (session=%s, total=%d)",
+                MAX_LINES, session_id, self.truncations)
+        return normalised
 
     async def chat(self, session_id: str, history: list[dict], user_text: str) -> JoshuaReply:
         import anthropic
@@ -205,7 +259,7 @@ class ClaudeJoshua:
             )
         except anthropic.APIError:
             # One retry already happened inside the SDK; fail in character.
-            return JoshuaReply(text=FALLBACK_LINE)
+            return JoshuaReply(text=self._normalise(session_id, FALLBACK_LINE))
 
         text_parts: list[str] = []
         start_game_id: str | None = None
@@ -214,5 +268,5 @@ class ClaudeJoshua:
                 text_parts.append(block.text)
             elif block.type == "tool_use" and block.name == "start_game":
                 start_game_id = str(block.input.get("game_id", "")) or None
-        return JoshuaReply(text="\n".join(text_parts).strip() or FALLBACK_LINE,
-                           start_game_id=start_game_id)
+        text = self._normalise(session_id, "\n".join(text_parts).strip() or FALLBACK_LINE)
+        return JoshuaReply(text=text, start_game_id=start_game_id)
