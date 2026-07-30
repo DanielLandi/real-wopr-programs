@@ -15,7 +15,7 @@ import {
   type LinkEvent,
 } from "@real-wopr/crt-kit";
 import { awaitingAccessCode, clearanceFromText, wallUrl } from "./logon";
-import { NoradFrameHandler, type Phase } from "./frames";
+import { NoradFrameHandler, type NoradPhase as Phase } from "@real-wopr/terminal/frames";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 

@@ -4,6 +4,11 @@
   "private": true,
   "description": "The console terminal — one protocol, two renderers (TTY here, xterm.js on the web)",
   "type": "module",
+  "//exports": "Subpaths the web surfaces import (they consume raw TS source and transpile it, the way they already consume crt-kit). The CLI reaches the TTY renderer by relative path and is unaffected.",
+  "exports": {
+    "./frames": "./src/frames.ts",
+    "./render-xterm": "./src/render-xterm.ts"
+  },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --test-force-exit \"tests/*.test.ts\""

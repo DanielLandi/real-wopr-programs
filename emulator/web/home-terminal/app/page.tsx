@@ -26,7 +26,7 @@ import { loadExchanges, probe, type Exchange } from "./exchanges";
 import { isSystem, DIAL_SYSTEMS } from "./sims";
 import { buildSweep, type SweepEntry } from "./wardial";
 import { parse, initialText, sessionBody, type DialTarget, type ConsoleContext } from "./console";
-import { HomeFrameHandler, type Phase } from "./frames";
+import { HomeFrameHandler, type Phase } from "@real-wopr/terminal/frames";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
