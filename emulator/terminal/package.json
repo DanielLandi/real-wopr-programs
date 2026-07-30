@@ -13,11 +13,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test --test-force-exit \"tests/*.test.ts\""
   },
-  "dependencies": { "ws": "^8.18.0" },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.12",
+    "@xterm/headless": "^5.5.0",
     "typescript": "^5.7.0"
   },
-  "engines": { "node": ">=23.6" }
+  "engines": {
+    "node": ">=23.6"
+  }
 }
