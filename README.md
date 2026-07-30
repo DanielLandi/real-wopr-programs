@@ -88,3 +88,13 @@ period-language programs and have it hosted the same way. See [PACK.md](./PACK.m
 
 *WarGames* is © MGM/UA. This is a fan reconstruction: it contains no film assets, audio, or
 transcripts. The short canonical lines that appear are the ones already spoken on screen.
+
+## License
+
+Copyright (C) 2026 Daniel Landi and contributors.
+
+This repository — the period programs, the `emulator/` harness, and the pack
+tooling — is licensed under the GNU General Public License v3.0 **or later**
+(SPDX: `GPL-3.0-or-later`). See [LICENSE](./LICENSE). Forks and modified
+packs must stay under the same license, which keeps every reconstruction
+re-importable by any exchange, including this one's.
