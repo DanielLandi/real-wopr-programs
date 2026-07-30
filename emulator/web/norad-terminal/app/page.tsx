@@ -15,6 +15,7 @@ import {
   type LinkEvent,
 } from "@real-wopr/crt-kit";
 import { awaitingAccessCode, clearanceFromText, wallUrl } from "./logon";
+import { NoradFrameHandler, type Phase } from "./frames";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -32,8 +33,6 @@ function roomCodeFromLocation(): { code?: string; malformed?: string } {
   return valid ? { code } : { malformed: code.slice(0, 24) };
 }
 
-type Phase = "connecting" | "connected" | "reconnecting" | "down";
-
 export default function NoradTerminal() {
   const [phase, setPhase] = useState<Phase>("connecting");
   const [text, setText] = useState("");
@@ -46,13 +45,34 @@ export default function NoradTerminal() {
   const sessionRef = useRef<string>("");
   const tokenRef = useRef<string>("");
   const disposed = useRef(false);
-  const reconnects = useRef(0);
   const recoveries = useRef(0);
   const pollStopped = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectLinkRef = useRef<() => void>(() => undefined);
-  const promptBuf = useRef("");
-  const handshakeBuf = useRef("");
+
+  // The DOM-free frame-handling core (app/frames.ts) — it owns the
+  // reassembly buffers and the WS-close retry budget; this page only wires
+  // its sinks onto React state, the refs, and the retry timers. Built once:
+  // every sink closes over stable setters and refs.
+  const frames = useRef<NoradFrameHandler | null>(null);
+  if (frames.current === null) {
+    frames.current = new NoradFrameHandler({
+      isDisposed: () => disposed.current,
+      setPhase,
+      appendLine: (s) => setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}${s}`),
+      appendRaw: (s) => setText((t) => t + s),
+      setPrompt,
+      scheduleReconnect: () => {
+        reconnectTimer.current = setTimeout(() => connectLinkRef.current(), 750);
+      },
+      scheduleRedial: () => {
+        reconnectTimer.current = setTimeout(() => link.current?.sendControl("DIAL"), 750);
+      },
+      resetRecoveries: () => {
+        recoveries.current = 0;
+      },
+    });
+  }
 
   /** Mint a fresh bridge session for this console. Shared by first mount and
    *  by 404-recovery after a bridge restart wipes the in-memory session store.
@@ -87,80 +107,15 @@ export default function NoradTerminal() {
   }, []);
 
   const onLinkEvent = useCallback((e: LinkEvent) => {
-    if (e.type === "close") {
-      if (disposed.current) return;
-      if (reconnects.current < 3) {
-        reconnects.current += 1;
-        setPhase("reconnecting");
-        setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}LINK INTERRUPT - RESYNCHRONIZING\n`);
-        reconnectTimer.current = setTimeout(() => connectLinkRef.current(), 750);
-      } else {
-        setPhase("down");
-      }
-      return;
-    }
-    if (e.type !== "frame") return;
-    const f = e.frame;
-    if (f.kind === "handshake") {
-      // Handshake payloads may arrive chunked; reassemble per message before
-      // testing its content — inert at leased-9600's wide quantum, but
-      // COMMS_BAUD can override any profile, and a test against a single
-      // frame's payload would only ever see the last quantum (the same class
-      // of bug the prompt frame had, fixed in home-terminal).
-      handshakeBuf.current += f.payload;
-      if (!f.eom) return;
-      const msg = handshakeBuf.current;
-      handshakeBuf.current = "";
-      if (msg.includes("CONNECTED")) {
-        // A live handshake means the (re)connect — including a post-restart
-        // re-mint — took. Clear both retry budgets so future faults start fresh.
-        reconnects.current = 0;
-        recoveries.current = 0;
-        setPhase("connected");
-      } else if (msg.startsWith("NO_CARRIER") || msg.startsWith("BUSY")) {
-        // Carrier didn't come up on this (re)connect. The comms layer keeps
-        // the line open and waits for a control DIAL retry (comms-protocol
-        // §4); without one the console would sit at RESYNC forever.
-        if (reconnects.current < 3) {
-          reconnects.current += 1;
-          setPhase("reconnecting");
-          setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}CARRIER LOST - RETRYING\n`);
-          reconnectTimer.current = setTimeout(() => link.current?.sendControl("DIAL"), 750);
-        } else {
-          setPhase("down");
-        }
-      }
-      return;
-    }
-    if (f.kind === "control" && f.payload === "NO CARRIER") {
-      setText((t) => `${t}${t.endsWith("\n") || t === "" ? "" : "\n"}NO CARRIER\n`);
-      return;
-    }
-    if (f.kind === "prompt") {
-      // The mode indicator lives on the input line, not in the transcript.
-      // Reassemble first: a prompt REPLACES where output appends, so a chunked
-      // "[NORAD]>" would land as its last quantum alone. leased-9600's quantum
-      // is wide enough today, but COMMS_BAUD overrides every profile.
-      promptBuf.current += f.payload;
-      if (!f.eom) return;
-      const p = promptBuf.current;
-      promptBuf.current = "";
-      setPrompt(p || "WOPR>");
-      return;
-    }
-    if (f.kind === "output") setText((t) => t + f.payload);
+    frames.current?.onEvent(e);
   }, []);
 
   const connectLink = useCallback(() => {
     if (!sessionRef.current || !tokenRef.current || disposed.current) return;
     link.current?.hangup();
-    // A line drop between a prompt's or handshake's first and last chunk on
-    // the old link strands a fragment that would otherwise prefix the new
-    // link's first one (self-correcting on the next turn, but wrong until
-    // then — and here a leaked prefix could make a later handshake's
-    // includes("CONNECTED") match early or not at all).
-    promptBuf.current = "";
-    handshakeBuf.current = "";
+    // A fresh link must not inherit a prompt or handshake fragment stranded
+    // by a drop on the old one — the buffers live in the frame handler.
+    frames.current?.resetLink();
     const l = new WoprLink({
       url: endpointFromQuery("link", process.env.NEXT_PUBLIC_COMMS_URL),
       surface: "norad-terminal",

@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { WoprLink, endpointFromQuery, type LinkEvent } from "@real-wopr/crt-kit";
-import { parseFeed, type GtwFeed } from "./feed";
+import { FeedAssembler, type GtwFeed } from "./feed";
 
 export const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -30,7 +30,10 @@ export function useGtwFeed(): {
   const [feed, setFeed] = useState<GtwFeed | null>(null);
   const [linkUp, setLinkUp] = useState(false);
   const [roomFault, setRoomFault] = useState<string | null>(null);
-  const buffer = useRef("");
+  // The DOM-free accumulate-until-eom core (app/feed.ts): only a complete
+  // message may reach parseFeed().
+  const assembler = useRef<FeedAssembler | null>(null);
+  if (assembler.current === null) assembler.current = new FeedAssembler();
 
   const onLinkEvent = useCallback((e: LinkEvent) => {
     if (e.type === "close") {
@@ -42,14 +45,7 @@ export function useGtwFeed(): {
       return;
     }
     if (e.type !== "frame") return;
-    const f = e.frame;
-    if (f.kind === "handshake") return; // internal-bus has no ritual
-    if (f.kind !== "output") return;
-    buffer.current += f.payload;
-    if (!f.eom) return;
-    const message = buffer.current;
-    buffer.current = "";
-    const parsed = parseFeed(message);
+    const parsed = assembler.current?.push(e.frame) ?? null;
     if (parsed) setFeed(parsed);
   }, []);
 
@@ -76,7 +72,7 @@ export function useGtwFeed(): {
       // fragment that would otherwise prefix the next connection's first
       // message — here that corrupts a JSON parseFeed() call, not just a
       // cosmetic prefix, so it must not survive a reconnect.
-      buffer.current = "";
+      assembler.current?.reset();
       link = new WoprLink({
         url: endpointFromQuery("link", process.env.NEXT_PUBLIC_COMMS_URL),
         surface: "norad-bigboard",

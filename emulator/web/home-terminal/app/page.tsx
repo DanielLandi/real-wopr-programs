@@ -26,6 +26,7 @@ import { loadExchanges, probe, type Exchange } from "./exchanges";
 import { isSystem, DIAL_SYSTEMS } from "./sims";
 import { buildSweep, type SweepEntry } from "./wardial";
 import { parse, initialText, sessionBody, type DialTarget, type ConsoleContext } from "./console";
+import { HomeFrameHandler, type Phase } from "./frames";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -60,27 +61,12 @@ function joshuaFromLocation(): string | undefined {
   return name ? name.slice(0, 32) : undefined;
 }
 
-type Phase = "idle" | "scanning" | "dialing" | "connected" | "no-carrier";
-
 const BOOT_TEXT = `IMSAI 8080  SELF TEST OK
 64K RAM     CP/M 2.2
 MODEM: BELL 103 COMPATIBLE  300 BAUD
 
 READY.
 `;
-
-/** The dial-up FSM states as displayed teletype lines (docs/comms-protocol.md
- *  §4). Surface-local copy of the labels the crt-kit HandshakeView renders —
- *  here the sequence is folded into the single scrollback so it interleaves
- *  correctly with command echoes and session output. */
-const HANDSHAKE_LABELS: Record<string, string> = {
-  DIALING: "DIALING...",
-  RINGING: "RINGING",
-  CARRIER_DETECT: "CARRIER DETECTED",
-  HANDSHAKE: "░▒▓ HANDSHAKE ▓▒░",
-  NO_CARRIER: "NO CARRIER",
-  BUSY: "BUSY",
-};
 
 export default function HomeTerminal() {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -97,17 +83,11 @@ export default function HomeTerminal() {
   // Mirror of `phase` for the event handlers, which run outside render and must
   // read the live phase synchronously (issue #88 close defense).
   const phaseRef = useRef<Phase>("idle");
-  // Set when a control NO CARRIER frame has already been printed for this drop,
-  // so the WS close that follows it does not print a second NO CARRIER.
-  const sawNoCarrierFrame = useRef(false);
-  const handshakeBuf = useRef("");
-  const promptBuf = useRef("");
   const sweepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modem = useRef<ModemAudio | null>(null);
   // S10 — the machine speaks: completed output lines are fed to Web Speech
   // when VOICE is ON (crt-kit JoshuaVoice, fidelity-notes.md §5).
   const voice = useRef<JoshuaVoice | null>(null);
-  const voiceLine = useRef("");
   const booted = useRef(false);
   // Set on unmount so an in-flight session mint / retry abandons silently
   // instead of touching state on a torn-down component.
@@ -119,6 +99,26 @@ export default function HomeTerminal() {
   const appendText = useCallback((s: string) => {
     setText((t) => `${t}${t === "" || t.endsWith("\n") ? "" : "\n"}${s}`);
   }, []);
+
+  // The DOM-free frame-handling core (app/frames.ts) — it owns the
+  // reassembly buffers and the carrier-loss bookkeeping; this page only
+  // wires its sinks onto React state and the audio/speech peripherals.
+  // Built once: every sink closes over stable setters and refs.
+  const frames = useRef<HomeFrameHandler | null>(null);
+  if (frames.current === null) {
+    frames.current = new HomeFrameHandler({
+      getPhase: () => phaseRef.current,
+      setPhase,
+      appendText,
+      appendRaw: (s) => setText((t) => t + s),
+      setPrompt,
+      playModem: (state) => {
+        if (!modem.current) modem.current = new ModemAudio();
+        modem.current.play(state);
+      },
+      speakLine: (l) => voice.current?.speak(l),
+    });
+  }
 
   useEffect(() => {
     void loadExchanges().then((list) => {
@@ -135,69 +135,8 @@ export default function HomeTerminal() {
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   const onLinkEvent = useCallback((e: LinkEvent) => {
-    if (e.type === "close") {
-      // An unexpected carrier loss mid-session must announce itself on the line;
-      // the old handler flipped phase silently and left a dead prompt (#88).
-      // Skip the print when the comms layer already delivered a control NO
-      // CARRIER for this drop (sawNoCarrierFrame), and when the close is our own
-      // deliberate hangup (the link is detached first, so this never fires).
-      const unexpected = phaseRef.current === "connected" || phaseRef.current === "dialing";
-      if (unexpected && !sawNoCarrierFrame.current) {
-        setText((t) => `${t}\n\nNO CARRIER\n`);
-      }
-      sawNoCarrierFrame.current = false;
-      setPhase((p) => (p === "connected" || p === "dialing" ? "no-carrier" : p));
-      return;
-    }
-    if (e.type !== "frame") return;
-    const f = e.frame;
-    if (f.kind === "handshake") {
-      // Handshake payloads may arrive chunked; reassemble per message.
-      handshakeBuf.current += f.payload;
-      if (!f.eom) return;
-      const msg = handshakeBuf.current;
-      handshakeBuf.current = "";
-      const state = msg.split(" ")[0];
-      if (!modem.current) modem.current = new ModemAudio();
-      modem.current.play(state);
-      if (state === "CONNECTED") {
-        appendText(`\n${msg.slice(msg.indexOf(" ") + 1)}\n`);
-        setPhase("connected");
-      } else {
-        appendText(`${HANDSHAKE_LABELS[state] ?? state}\n`);
-        if (state === "NO_CARRIER" || state === "BUSY") setPhase("no-carrier");
-      }
-      return;
-    }
-    if (f.kind === "prompt") {
-      // The mode indicator lives on the input line, not in the transcript.
-      // Reassemble first: output frames survive chunking because they append,
-      // but a prompt REPLACES, so at dialup-300's two-byte quantum "[TTT]>"
-      // would land as "]>" — the last quantum only.
-      promptBuf.current += f.payload;
-      if (!f.eom) return;
-      const p = promptBuf.current;
-      promptBuf.current = "";
-      setPrompt(p || ">");
-      return;
-    }
-    if (f.kind === "output") {
-      // Raw append — payloads stream mid-line, so no fresh-line guard here.
-      setText((t) => t + f.payload);
-      voiceLine.current += f.payload;
-      const lines = voiceLine.current.split("\n");
-      voiceLine.current = lines.pop() ?? "";
-      for (const l of lines) voice.current?.speak(l);
-      return;
-    }
-    if (f.kind === "control" && f.payload === "NO CARRIER") {
-      // Mark it so the WS close that the comms layer sends right after this
-      // frame does not print a duplicate NO CARRIER (#88).
-      sawNoCarrierFrame.current = true;
-      setText((t) => `${t}\n\nNO CARRIER\n`);
-      setPhase("no-carrier");
-    }
-  }, [appendText]);
+    frames.current?.onEvent(e);
+  }, []);
 
   // Mint a session token, absorbing one transient failure. During an exchange
   // redeploy the tunnel 502s for a few seconds; without this a dial that lands
@@ -272,11 +211,8 @@ export default function HomeTerminal() {
     // and any prompt or handshake fragment stranded by a drop between a
     // message's first and last chunk on the old line — otherwise it
     // prefixes the new line's first one (self-correcting on the next turn,
-    // but wrong until then).
-    sawNoCarrierFrame.current = false;
-    promptBuf.current = "";
-    handshakeBuf.current = "";
-    voiceLine.current = "";
+    // but wrong until then). The buffers live in the frame handler.
+    frames.current?.resetCall();
     voice.current?.cancel();
     appendText(`\nDIALING ${target ? target.name : "UNKNOWN"}\n`);
     if (link.current && active.current?.id === target?.id) {

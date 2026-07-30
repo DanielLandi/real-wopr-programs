@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CRTScreen, StatusPanel, WoprLink, endpointFromQuery, type LinkEvent } from "@real-wopr/crt-kit";
-import { parseFeed, type GtwFeed } from "./feed";
+import { FeedAssembler, type GtwFeed } from "./feed";
 import { boardAt, gamesCompleted, GAMES, type Board } from "./selfplay";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -275,7 +275,10 @@ export default function WoprPanel() {
   const [tick, setTick] = useState(0);
   const [demoStart, setDemoStart] = useState<number | null>(null);
   const [lessonStart, setLessonStart] = useState<number | null>(null);
-  const buffer = useRef("");
+  // The DOM-free accumulate-until-eom core (app/feed.ts): only a complete
+  // message may reach parseFeed().
+  const assembler = useRef<FeedAssembler | null>(null);
+  if (assembler.current === null) assembler.current = new FeedAssembler();
   const mounted = useRef(0);
 
   // Ticks are derived from elapsed time, not counted interval fires, so the
@@ -299,13 +302,7 @@ export default function WoprPanel() {
       return;
     }
     if (e.type !== "frame") return;
-    const f = e.frame;
-    if (f.kind !== "output") return;
-    buffer.current += f.payload;
-    if (!f.eom) return;
-    const message = buffer.current;
-    buffer.current = "";
-    const parsed = parseFeed(message);
+    const parsed = assembler.current?.push(e.frame) ?? null;
     if (parsed) setLive(parsed);
   }, []);
 
@@ -333,7 +330,7 @@ export default function WoprPanel() {
         // fragment that would otherwise prefix the next connection's first
         // message — here that corrupts a JSON parseFeed() call, not just a
         // cosmetic prefix, so it must not survive a reconnect.
-        buffer.current = "";
+        assembler.current?.reset();
         link = new WoprLink({
           url: endpointFromQuery("link", process.env.NEXT_PUBLIC_COMMS_URL),
           surface: "wopr-panel",
