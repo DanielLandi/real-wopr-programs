@@ -117,11 +117,19 @@ const css = `
 .crt-fill {
   /* The terminal is a fixed 80 columns and never reflows, so a narrow window
      scrolls sideways past it, exactly as the DOM renderer did. Vertically it
-     does not scroll at all: xterm owns the scrollback. */
+     does not scroll at all: xterm owns the scrollback. A column so that fixed
+     chrome above the screen (the NORAD status panel) takes its own height and
+     the terminal gets the rest — it has to be told how many rows it has, and
+     a wrong answer clips the line being typed. */
   overflow-x: auto;
   overflow-y: hidden;
+  display: flex;
+  flex-direction: column;
 }
-.crt-term,
+.crt-term {
+  flex: 1;
+  min-height: 0;
+}
 .crt-term .xterm,
 .crt-term .xterm-screen {
   height: 100%;

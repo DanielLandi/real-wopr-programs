@@ -59,6 +59,13 @@ export interface TerminalScreenProps {
   /** Ctrl+C — the period BREAK interrupt. */
   onBreak?: () => void;
   /**
+   * While false there is no command line on screen and keystrokes go nowhere
+   * — the NORAD console before its leased line comes up. Defaults to true.
+   */
+  enabled?: boolean;
+  /** Echo asterisks instead of characters: operator access codes. */
+  mask?: boolean;
+  /**
    * Handed the live mount once the terminal is on screen, and null when it
    * goes away. The page keeps it in a ref and feeds its frame handler's sinks
    * through it; the terminal exists only in the browser, so there is no mount
@@ -71,10 +78,20 @@ export interface TerminalScreenProps {
 
 export function TerminalScreen(props: TerminalScreenProps) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const mountRef = useRef<XtermMount | null>(null);
   // The effect runs once per mount; callbacks are read through this so a
   // re-render with fresh closures does not tear the terminal down.
   const latest = useRef(props);
   latest.current = props;
+
+  // The terminal arrives asynchronously, so these are applied both here and at
+  // mount time — whichever happens second is the one that takes.
+  useEffect(() => {
+    mountRef.current?.setEnabled(props.enabled ?? true);
+  }, [props.enabled]);
+  useEffect(() => {
+    mountRef.current?.setMask(props.mask ?? false);
+  }, [props.mask]);
 
   useEffect(() => {
     let gone = false;
@@ -130,6 +147,9 @@ export function TerminalScreen(props: TerminalScreenProps) {
         onLine: (line) => latest.current.onLine(line),
         onBreak: () => latest.current.onBreak?.(),
       });
+      mountRef.current = mount;
+      mount.setMask(latest.current.mask ?? false);
+      mount.setEnabled(latest.current.enabled ?? true);
       latest.current.onMount(mount);
 
       // Only the rows follow the window — the columns are fixed at 80.
@@ -138,6 +158,7 @@ export function TerminalScreen(props: TerminalScreenProps) {
       dispose = () => {
         window.removeEventListener("resize", fit);
         mount.dispose();
+        mountRef.current = null;
         latest.current.onMount(null);
         term.dispose();
       };
