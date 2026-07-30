@@ -18,13 +18,26 @@ export interface CRTScreenProps {
    * surfaces (Big Board, panel), which keep the fluid wrapping default.
    */
   columns?: number;
+  /**
+   * The child manages its own scrolling and fills the frame — the terminal
+   * surfaces, where xterm owns the viewport and the scrollback. Without this
+   * the CRT's own scroller and xterm's would fight over the same content.
+   */
+  fill?: boolean;
   children?: ReactNode;
 }
 
-const PHOSPHOR: Record<CRTTheme, { fg: string; dim: string; bg: string }> = {
+export const PHOSPHOR: Record<CRTTheme, { fg: string; dim: string; bg: string }> = {
   green: { fg: "#33ff66", dim: "#1a8038", bg: "#020a04" },
   amber: { fg: "#ffb000", dim: "#805800", bg: "#0a0602" },
 };
+
+/** The CRT typeface, in the one place both the DOM chrome and the terminal
+ *  read it from — xterm needs it as a string, not as inherited CSS. */
+export const CRT_FONT_FAMILY =
+  '"VT323", "IBM Plex Mono", ui-monospace, "Menlo", "Courier New", monospace';
+export const CRT_FONT_SIZE = 20;
+export const CRT_LINE_HEIGHT = 1.35;
 
 const css = `
 .crt-root {
@@ -97,6 +110,27 @@ const css = `
   97.5% { opacity: 0.86; }
   98% { opacity: 1; }
 }
+/* Terminal mode: xterm fills the frame and owns the scrollback, so the CRT's
+   own scroller steps aside. xterm 5's default renderer is DOM, not canvas, so
+   the phosphor glow above reaches the characters as ordinary inherited
+   text-shadow and the scanline/vignette layers sit over them untouched. */
+.crt-fill {
+  /* The terminal is a fixed 80 columns and never reflows, so a narrow window
+     scrolls sideways past it, exactly as the DOM renderer did. Vertically it
+     does not scroll at all: xterm owns the scrollback. */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.crt-term,
+.crt-term .xterm,
+.crt-term .xterm-screen {
+  height: 100%;
+}
+.crt-term .xterm-viewport {
+  background-color: transparent !important;
+  scrollbar-width: none;
+}
+.crt-term .xterm-viewport::-webkit-scrollbar { display: none; }
 .crt-cursor {
   display: inline-block;
   width: 0.6em;
@@ -119,7 +153,7 @@ export function scrollToTerminalBottom(
   return nextScrollHeight;
 }
 
-export function CRTScreen({ theme = "green", flicker = true, columns, children }: CRTScreenProps) {
+export function CRTScreen({ theme = "green", flicker = true, columns, fill, children }: CRTScreenProps) {
   const innerRef = useRef<HTMLDivElement>(null);
   const scrollHeightRef = useRef(-1);
   const c = PHOSPHOR[theme];
@@ -130,7 +164,8 @@ export function CRTScreen({ theme = "green", flicker = true, columns, children }
   } as CSSProperties;
 
   useLayoutEffect(() => {
-    if (!innerRef.current) return;
+    // In fill mode the child scrolls itself; reaching in would fight it.
+    if (!innerRef.current || fill) return;
     scrollHeightRef.current = scrollToTerminalBottom(
       innerRef.current,
       scrollHeightRef.current,
@@ -140,7 +175,7 @@ export function CRTScreen({ theme = "green", flicker = true, columns, children }
   return (
     <div className={`crt-root${flicker ? " crt-flicker" : ""}`} style={vars}>
       <style>{css}</style>
-      <div ref={innerRef} className="crt-inner">
+      <div ref={innerRef} className={`crt-inner${fill ? " crt-fill" : ""}`}>
         {columns
           ? <div className="crt-cols" style={{ "--crt-cols": `${columns}ch` } as CSSProperties}>{children}</div>
           : children}

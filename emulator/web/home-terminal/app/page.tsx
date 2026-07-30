@@ -8,20 +8,26 @@
 // the comms layer's dialup-300 profile owns the cadence, this page only
 // appends what arrives.
 //
+// The terminal itself is not here. Screen and keyboard belong to the shared
+// xterm renderer in @real-wopr/terminal, and the arriving frames belong to the
+// shared handler beside it (#108 §4); what is left in this file is this
+// surface's own machinery — the phone book, the war-dialer, the modem
+// speaker, the voice, and the dial ritual that ties them together.
+//
 // Phone-book mode: if an exchange directory (phonebook.json) is served next
 // to this export, the terminal lists community-run exchanges and can war-dial
 // them. Without a directory it dials the same-origin/default exchange (D3).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  CRTScreen,
-  Teletype,
-  CommandLine,
   JoshuaVoice,
   ModemAudio,
   WoprLink,
   type LinkEvent,
 } from "@real-wopr/crt-kit";
+// By path, not through the barrel: the barrel is shared with the feed surfaces,
+// which must not pull xterm in behind it.
+import { TerminalScreen, type XtermMount } from "@real-wopr/crt-kit/src/TerminalScreen";
 import { loadExchanges, probe, type Exchange } from "./exchanges";
 import { isSystem, DIAL_SYSTEMS } from "./sims";
 import { buildSweep, type SweepEntry } from "./wardial";
@@ -70,8 +76,6 @@ READY.
 
 export default function HomeTerminal() {
   const [phase, setPhase] = useState<Phase>("idle");
-  const [text, setText] = useState("");
-  const [prompt, setPrompt] = useState(">");
   const [exchanges, setExchanges] = useState<Exchange[] | null>(null);
   const [hits, setHits] = useState<SweepEntry[] | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
@@ -93,16 +97,36 @@ export default function HomeTerminal() {
   // instead of touching state on a torn-down component.
   const disposed = useRef(false);
 
+  // The screen. xterm exists only in the browser, so during the static
+  // export's prerender — and for the moment between first paint and the
+  // terminal loading — there is nothing to write to; anything written in that
+  // window waits here and lands in order once there is. The boot banner is
+  // usually the first thing through.
+  const screen = useRef<XtermMount | null>(null);
+  const pending = useRef<Array<(m: XtermMount) => void>>([]);
+  const write = useCallback((fn: (m: XtermMount) => void) => {
+    if (screen.current) fn(screen.current);
+    else pending.current.push(fn);
+  }, []);
+  const onScreen = useCallback((m: XtermMount | null) => {
+    screen.current = m;
+    if (!m) return;
+    const queued = pending.current;
+    pending.current = [];
+    for (const fn of queued) fn(m);
+  }, []);
+
   /** Append a complete, newline-terminated chunk to the scrollback, starting
    *  it on a fresh line. Used for command echoes, the handshake FSM, and the
    *  scan/war-dial montage — never for raw streamed link output. */
-  const appendText = useCallback((s: string) => {
-    setText((t) => `${t}${t === "" || t.endsWith("\n") ? "" : "\n"}${s}`);
-  }, []);
+  const appendText = useCallback(
+    (s: string) => write((m) => m.sinks.appendText(s)),
+    [write],
+  );
 
-  // The DOM-free frame-handling core (app/frames.ts) — it owns the
+  // The DOM-free frame-handling core (@real-wopr/terminal) — it owns the
   // reassembly buffers and the carrier-loss bookkeeping; this page only
-  // wires its sinks onto React state and the audio/speech peripherals.
+  // wires its sinks onto the screen and the audio/speech peripherals.
   // Built once: every sink closes over stable setters and refs.
   const frames = useRef<HomeFrameHandler | null>(null);
   if (frames.current === null) {
@@ -110,8 +134,8 @@ export default function HomeTerminal() {
       getPhase: () => phaseRef.current,
       setPhase,
       appendText,
-      appendRaw: (s) => setText((t) => t + s),
-      setPrompt,
+      appendRaw: (s) => write((m) => m.sinks.appendRaw(s)),
+      setPrompt: (p) => write((m) => m.setPrompt(p)),
       playModem: (state) => {
         if (!modem.current) modem.current = new ModemAudio();
         modem.current.play(state);
@@ -127,9 +151,9 @@ export default function HomeTerminal() {
       booted.current = true;
       // First paint: the IMSAI banner, the directory, and the HELP hint —
       // everything the old buttons used to convey, now as plain text.
-      setText(BOOT_TEXT + initialText({ exchanges: list, systems: DIAL_SYSTEMS, hits: null }));
+      appendText(BOOT_TEXT + initialText({ exchanges: list, systems: DIAL_SYSTEMS, hits: null }));
     });
-  }, []);
+  }, [appendText]);
 
   // Keep phaseRef in step with phase for the out-of-render link handlers.
   useEffect(() => { phaseRef.current = phase; }, [phase]);
@@ -411,8 +435,21 @@ export default function HomeTerminal() {
     runLocalCommand(line);
   };
 
+  // The terminal is mounted once and keeps its keystroke handler for the life
+  // of the page, so it reads the submit closure through a ref rather than
+  // capturing the render it was created in — otherwise a command typed after
+  // the phone book loads would still be judged against an empty one.
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+
   return (
-    <CRTScreen theme="green" columns={80}>
+    <TerminalScreen
+      theme="green"
+      uppercase
+      onLine={(line) => submitRef.current(line)}
+      onBreak={() => link.current?.sendControl("BREAK")}
+      onMount={onScreen}
+    >
       <div
         aria-hidden="true"
         style={{
@@ -422,6 +459,7 @@ export default function HomeTerminal() {
           color: "var(--crt-dim)",
           letterSpacing: "0.05em",
           pointerEvents: "none",
+          zIndex: 4,
         }}
       >
         IMSAI 8080
@@ -436,14 +474,11 @@ export default function HomeTerminal() {
           letterSpacing: "0.05em",
           pointerEvents: "none",
           opacity: voiceOn ? 1 : 0.6,
+          zIndex: 4,
         }}
       >
         VOICE {voiceOn ? "ON" : "OFF"}
       </div>
-      {/* The CommandLine owns the one cursor (on the > prompt line) in every
-          phase; the Teletype never blinks a second one. */}
-      <Teletype text={text} cursor={false} />
-      <CommandLine prompt={prompt} onSubmit={submit} onBreak={() => link.current?.sendControl("BREAK")} />
-    </CRTScreen>
+    </TerminalScreen>
   );
 }
