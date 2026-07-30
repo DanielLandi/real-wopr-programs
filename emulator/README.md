@@ -23,6 +23,12 @@ make build          # every period program
 make up             # three relays, one process per node
 ```
 
+`make up` installs what the harness itself needs the first time it runs — the
+relay's and terminal's node modules, and a Python virtualenv for the node host
+— because a repository that says you can clone it and run it should not stop
+at a missing package. `make deps` does that step alone; `tools/deps.sh --force`
+reinstalls.
+
 Then, in another terminal:
 
 ```bash
