@@ -8,6 +8,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# A `.env` at the pack root is the file host.html tells operators to write, and
+# nothing else in the pack reads one — config.py sees the environment and only
+# the environment. Read it here, before the guards, so what it sets is checked
+# like anything else. `set -a` exports every assignment, so both `KEY=val` and
+# `export KEY=val` lines work, and the file wins over the surrounding shell.
+if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
 die() { echo "host: $*" >&2; exit 1; }
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 

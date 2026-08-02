@@ -68,4 +68,7 @@ TIELINE_SLOT=SCHOOL TIELINE_NAME="CHEYENNE ANNEX" TIELINE_REGION="SAO PAULO BR" 
 | `TRUNK_HUB_URL` | defaults to `wss://wopr.realwopr.ai/trunk` |
 | `BRIDGE_LOGON_BANNER`, `WOPR_OPERATORS` | your exchange's banner and operator roster — local to your machine, never sent anywhere |
 
+Anything in that table can live in a `.env` file at the pack root instead of on
+the command line — `make host` sources it (it is gitignored).
+
 `https://realwopr.ai/host.html` generates this command from a form.
