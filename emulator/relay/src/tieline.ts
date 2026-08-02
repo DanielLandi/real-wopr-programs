@@ -9,10 +9,14 @@ import { decodeTrunkFrame, restAllowed, type TrunkFrame } from "./trunk.ts";
 export interface TielineOpts {
   hubUrl: string;          // wss://wopr.realwopr.ai/trunk
   name: string; region: string; joshua: "claude" | "period"; operator?: string;
+  // What to ask the switchboard for. Both are requests, not facts: the hub
+  // places the exchange and answers with the placement it actually made.
+  slot?: string;           // WOPR, SCHOOL, ... ; omitted = next free wildcard
+  world?: number | "NEW";  // a specific world, or a fresh one
   localComms: string;      // ws://127.0.0.1:8081
   localBridge: string;     // http://127.0.0.1:8000
   reconnect?: boolean;     // default true; tests pass false
-  onAssigned?: (exchange: string) => void;
+  onAssigned?: (exchange: string, world: number, slot: string) => void;
 }
 
 export function startTieline(opts: TielineOpts): { stop: () => void } {
@@ -58,12 +62,13 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
     hub.on("open", () => {
       backoffMs = 5_000;
       send({ t: "REGISTER", v: 1, name: opts.name, region: opts.region,
-             joshua: opts.joshua, operator: opts.operator });
+             joshua: opts.joshua, operator: opts.operator,
+             slot: opts.slot, world: opts.world });
     });
     hub.on("message", (data) => {
       let f: TrunkFrame;
       try { f = decodeTrunkFrame(data.toString()); } catch { return; }
-      if (f.t === "ASSIGNED") opts.onAssigned?.(f.exchange);
+      if (f.t === "ASSIGNED") opts.onAssigned?.(f.exchange, f.world, f.slot);
       else if (f.t === "OPEN") openChannel(f);
       else if (f.t === "FRAME") {
         const c = channels.get(f.chan);
@@ -81,7 +86,16 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
       setTimeout(connect, backoffMs);
       backoffMs = Math.min(backoffMs * 2, 60_000);
     };
-    hub.on("close", retry);
+    hub.on("close", (closeCode: number, reason: Buffer) => {
+      // A refusal is an answer, not an outage: NO CIRCUITS (4460), SLOT TAKEN
+      // (4461), switchboard full (4409). Redialling would spam the hub with a
+      // REGISTER it just refused, so stop for good and say why.
+      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461) {
+        stopped = true;
+        console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
+      }
+      retry();
+    });
     hub.on("error", (err) => {
       // close fires after error and drives the reconnect; without this line a
       // refused/reset hub connection is invisible to the operator.
@@ -101,10 +115,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     region: process.env.TIELINE_REGION ?? "SOMEWHERE",
     joshua: (process.env.TIELINE_JOSHUA as "claude" | "period") ?? "period",
     operator: process.env.TIELINE_OPERATOR,
+    slot: process.env.TIELINE_SLOT ? process.env.TIELINE_SLOT.toUpperCase() : undefined,
+    world: process.env.TIELINE_WORLD === "NEW" ? "NEW"
+         : process.env.TIELINE_WORLD ? Number(process.env.TIELINE_WORLD) : undefined,
     localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
     localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
-    onAssigned: (exchange) => {
-      console.log(`TIE LINE UP — EXCHANGE ${exchange} — LISTED IN THE DIRECTORY`);
+    onAssigned: (exchange, world, slot) => {
+      console.log(`TIE LINE UP — YOU ARE WORLD ${world} / ${slot} — EXCHANGE ${exchange}`);
       console.log(`share: https://realwopr.ai/war-room.html?exch=${exchange}`);
     },
   });
