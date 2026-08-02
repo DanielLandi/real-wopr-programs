@@ -184,8 +184,9 @@ test("trunk e2e: visitor -> hub -> tieline -> real comms -> bridge and back, byt
   // before listen and would read :0 (see switchboard-server.test.ts).
   const hub = await startServer({ port: 0, publicBase: "https://hub.example" });
 
-  let resolveAssigned!: (exchange: string) => void;
-  const assigned = new Promise<string>((resolve) => { resolveAssigned = resolve; });
+  interface Placement { code: string; world: number; slot: string }
+  let resolveAssigned!: (p: Placement) => void;
+  const assigned = new Promise<Placement>((resolve) => { resolveAssigned = resolve; });
   const tieline = startTieline({
     hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
     name: "BASEMENT EXCH",
@@ -194,19 +195,29 @@ test("trunk e2e: visitor -> hub -> tieline -> real comms -> bridge and back, byt
     localComms: `ws://127.0.0.1:${hostComms.port}`,
     localBridge: `http://127.0.0.1:${bridge.port}`,
     reconnect: false,
-    onAssigned: resolveAssigned,
+    onAssigned: (exchange, world, slot) => resolveAssigned({ code: exchange, world, slot }),
   });
 
   try {
-    const code = await assigned;
+    const { code, world, slot } = await assigned;
     const hubBase = `http://127.0.0.1:${hub.port}`;
     const hubWs = `ws://127.0.0.1:${hub.port}`;
 
-    // The exchange is listed, with URLs pointing at the hub's public base.
+    // ASSIGNED carries the placement the hub actually made: no world or slot
+    // was requested, so it lands in the pinned world 1 on the first wildcard.
+    assert.equal(world, 1);
+    assert.equal(slot, "OTHER-1");
+
+    // The exchange is listed under its world, with URLs pointing at the hub's
+    // public base.
     const dir = JSON.parse((await httpJson("GET", `${hubBase}/trunk/directory`)).body);
-    assert.equal(dir.exchanges.length, 1);
-    assert.equal(dir.exchanges[0].name, "BASEMENT EXCH");
-    assert.equal(dir.exchanges[0].link, `wss://hub.example/x/${code}/link`);
+    assert.equal(dir.worlds.length, 1);
+    assert.equal(dir.worlds[0].n, 1);
+    assert.equal(dir.worlds[0].slots.length, 1);
+    assert.equal(dir.worlds[0].slots[0].name, "BASEMENT EXCH");
+    assert.equal(dir.worlds[0].slots[0].slot, "OTHER-1");
+    assert.equal(dir.worlds[0].slots[0].world, 1);
+    assert.equal(dir.worlds[0].slots[0].link, `wss://hub.example/x/${code}/link`);
 
     // Session provisioning through the REST relay: hub -> tieline -> stub bridge HTTP.
     const post = await httpJson("POST", `${hubBase}/x/${code}/api/session`, JSON.stringify({ surface: "home-terminal" }));
@@ -259,10 +270,83 @@ test("trunk e2e: visitor -> hub -> tieline -> real comms -> bridge and back, byt
     const c = await closed;
     assert.equal(c.code, 1001);
     assert.equal(c.reason, "trunk dropped");
+    // The board is empty again — but world 1 stays pinned, never absent.
     const dirAfter = JSON.parse((await httpJson("GET", `${hubBase}/trunk/directory`)).body);
-    assert.deepEqual(dirAfter.exchanges, []);
+    assert.deepEqual(dirAfter, { worlds: [{ n: 1, slots: [] }] });
   } finally {
     tieline.stop();
+    await hub.close();
+    await hostComms.close();
+    await bridge.close();
+  }
+});
+
+// Worlds, end to end: two independent machines dial the same switchboard and
+// land in one shared world on different slots — the placement is the hub's
+// answer (ASSIGNED), not something either host asserted for itself. Hanging up
+// one tie line frees its slot for the next caller while the world stays live.
+//
+// Neither tieline places a call here, so the host comms and stub bridge are
+// only present because a tieline requires local endpoints to exist; nothing
+// crosses them. The subject is the switchboard's occupancy board.
+test("two tielines share world 1 in different slots; hangup frees the slot", { timeout: 10_000 }, async () => {
+  const bridge = await startStubBridge();
+  const hostComms = await startServer({
+    port: 0,
+    bridgeUrl: `ws://127.0.0.1:${bridge.port}`,
+    config: DEFAULT_CONFIG,
+    publicBase: "http://host.invalid",
+  });
+  // The hub relays only; its own bridgeUrl points at a closed port on purpose,
+  // so a stray /link would fail loudly rather than borrow the host's bridge.
+  const hub = await startServer({
+    port: 0,
+    bridgeUrl: "ws://127.0.0.1:9",
+    config: DEFAULT_CONFIG,
+    publicBase: "http://hub.invalid",
+  });
+
+  // Resolve on ASSIGNED — the hub's placement, reported back to the host.
+  const mk = (slot: string) => new Promise<{ tie: { stop: () => void }; world: number; slot: string }>((resolve) => {
+    const tie = startTieline({
+      hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+      name: `${slot} EXCH`,
+      region: "PORTLAND US",
+      joshua: "period",
+      slot,
+      localComms: `ws://127.0.0.1:${hostComms.port}`,
+      localBridge: `http://127.0.0.1:${bridge.port}`,
+      reconnect: false,
+      onAssigned: (_exchange, world, assignedSlot) => resolve({ tie, world, slot: assignedSlot }),
+    });
+  });
+
+  const dirSlots = async (): Promise<string[]> => {
+    const dir = JSON.parse((await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`)).body);
+    assert.deepEqual(dir.worlds.map((w: { n: number }) => w.n), [1]);
+    return dir.worlds[0].slots.map((s: { slot: string }) => s.slot);
+  };
+
+  // Sequential, not parallel: the second REGISTER must see the first already
+  // placed, which is the whole point — otherwise the shared world is a race.
+  const wopr = await mk("WOPR");
+  const school = await mk("SCHOOL");
+  try {
+    assert.equal(wopr.world, 1);
+    assert.equal(wopr.slot, "WOPR");
+    assert.equal(school.world, 1);
+    assert.equal(school.slot, "SCHOOL");
+
+    // One world, two slots, in roster order.
+    assert.deepEqual(await dirSlots(), ["WOPR", "SCHOOL"]);
+
+    // Hanging up frees the slot; the world survives its departure.
+    school.tie.stop();
+    await new Promise((r) => setTimeout(r, 200));
+    assert.deepEqual(await dirSlots(), ["WOPR"]);
+  } finally {
+    wopr.tie.stop();
+    school.tie.stop();
     await hub.close();
     await hostComms.close();
     await bridge.close();

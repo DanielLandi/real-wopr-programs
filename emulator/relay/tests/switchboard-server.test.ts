@@ -140,7 +140,10 @@ test("trunk hub: directory pins world 1 even when empty", async () => {
   } finally { await server.close(); }
 });
 
-test("trunk hub: a malformed TRUNK_MAX_WORLDS falls back to 8, it does not go unbounded", async () => {
+// Timeout, both env tests below: on regression the hub ACCEPTS the REGISTER
+// instead of refusing it, so `nextClose` never settles and the test would hang
+// forever rather than fail. The bound turns a regression into a red test.
+test("trunk hub: a malformed TRUNK_MAX_WORLDS falls back to 8, it does not go unbounded", { timeout: 5000 }, async () => {
   // Number("banana") is NaN, and every `world > NaN` comparison is false — a
   // typo in the env var must not turn the explicit-world path into an
   // unbounded world allocator.
@@ -159,7 +162,7 @@ test("trunk hub: a malformed TRUNK_MAX_WORLDS falls back to 8, it does not go un
   }
 });
 
-test("trunk hub: TRUNK_MAX_WORLDS caps the hub when opts.trunk does not", async () => {
+test("trunk hub: TRUNK_MAX_WORLDS caps the hub when opts.trunk does not", { timeout: 5000 }, async () => {
   const before = process.env.TRUNK_MAX_WORLDS;
   process.env.TRUNK_MAX_WORLDS = "1";
   const server = await startServer({ port: 0 });
