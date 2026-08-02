@@ -97,7 +97,9 @@ export function newExchangeCode(): string {
 export interface DirectoryEntry {
   id: string; name: string; region: string; api: string; link: string;
   joshua: string; operator?: string; online: true;
+  world: number; slot: string;
 }
+export interface WorldDirectory { n: number; slots: DirectoryEntry[] }
 
 // TrunkPort is the minimal socket shape the registry needs (ws WebSocket satisfies it);
 // tests pass fakes.
@@ -107,6 +109,7 @@ export interface ChannelPort extends TrunkPort {}
 interface Exchange {
   code: string; name: string; region: string; joshua: string; operator?: string;
   port: TrunkPort;
+  world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void;
@@ -119,22 +122,65 @@ export class Switchboard {
   private exchanges = new Map<string, Exchange>();
   private maxExchanges: number;
   private maxChannels: number;
+  private maxWorlds: number;
 
-  constructor(opts: { maxExchanges?: number; maxChannels?: number } = {}) {
+  constructor(opts: { maxExchanges?: number; maxChannels?: number; maxWorlds?: number } = {}) {
     this.maxExchanges = opts.maxExchanges ?? 32;
     this.maxChannels = opts.maxChannels ?? 16;
+    this.maxWorlds = opts.maxWorlds ?? 8;
   }
 
-  register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>): string | null {
-    if (this.exchanges.size >= this.maxExchanges) return null;
+  /** Where does a REGISTER land? Worlds are derived, not stored: a world is
+   *  the set of live exchanges tagged with its number. World 1 is pinned. */
+  private place(req: { slot?: string; world?: number | "NEW" }):
+      { world: number; slot: string } | "no-circuits" | "slot-taken" {
+    const occ = new Map<number, Set<string>>();
+    for (const ex of this.exchanges.values()) {
+      let s = occ.get(ex.world);
+      if (!s) occ.set(ex.world, (s = new Set()));
+      s.add(ex.slot);
+    }
+    const open = (w: number): string | null =>
+      req.slot !== undefined
+        ? (occ.get(w)?.has(req.slot) ? null : req.slot)
+        : WILDCARD_SLOTS.find((s) => !occ.get(w)?.has(s)) ?? null;
+
+    if (typeof req.world === "number") {
+      if (req.world > this.maxWorlds) return "no-circuits";
+      const slot = open(req.world);
+      return slot === null ? "slot-taken" : { world: req.world, slot };
+    }
+    // Live worlds first in numeric order (NEW skips them), then the lowest
+    // unopened number up to the cap.
+    const live = [...new Set([1, ...occ.keys()])].sort((a, b) => a - b);
+    if (req.world !== "NEW") {
+      for (const w of live) {
+        const slot = open(w);
+        if (slot !== null) return { world: w, slot };
+      }
+    }
+    for (let w = 1; w <= this.maxWorlds; w++) {
+      if (live.includes(w)) continue;
+      const slot = open(w);
+      if (slot !== null) return { world: w, slot };
+    }
+    return "no-circuits";
+  }
+
+  register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>):
+      { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" {
+    if (this.exchanges.size >= this.maxExchanges) return "full";
+    const placed = this.place({ slot: f.slot, world: f.world });
+    if (typeof placed === "string") return placed;
     let code = newExchangeCode();
     while (this.exchanges.has(code)) code = newExchangeCode();
     this.exchanges.set(code, {
       code, name: f.name.toUpperCase(), region: f.region.toUpperCase(),
       joshua: f.joshua, operator: f.operator, port,
+      world: placed.world, slot: placed.slot,
       channels: new Map(), nextChan: 1, pending: new Map(), nextRid: 1, missedPongs: 0,
     });
-    return code;
+    return { code, world: placed.world, slot: placed.slot };
   }
 
   unregister(code: string): void {
@@ -217,12 +263,21 @@ export class Switchboard {
     });
   }
 
-  directory(publicBase: string): DirectoryEntry[] {
+  directory(publicBase: string): WorldDirectory[] {
     const wsBase = publicBase.replace(/^http/, "ws");
-    return [...this.exchanges.values()].map((ex) => ({
-      id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
-      api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
-      joshua: ex.joshua, operator: ex.operator, online: true as const,
+    const byWorld = new Map<number, DirectoryEntry[]>([[1, []]]); // world 1 pinned
+    for (const ex of this.exchanges.values()) {
+      let list = byWorld.get(ex.world);
+      if (!list) byWorld.set(ex.world, (list = []));
+      list.push({
+        id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
+        api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
+        joshua: ex.joshua, operator: ex.operator, online: true as const,
+        world: ex.world, slot: ex.slot,
+      });
+    }
+    return [...byWorld.entries()].sort((a, b) => a[0] - b[0]).map(([n, slots]) => ({
+      n, slots: slots.sort((a, b) => ALL_SLOTS.indexOf(a.slot) - ALL_SLOTS.indexOf(b.slot)),
     }));
   }
 
