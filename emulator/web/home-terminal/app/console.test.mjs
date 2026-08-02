@@ -240,3 +240,22 @@ test("sessionBody omits joshua when none was asked for", () => {
 test("sessionBody does not vet the processor name — the exchange owns that list", () => {
   assert.equal(sessionBody("home-terminal", undefined, null, "nonsense").joshua, "nonsense");
 });
+
+test("directoryText groups world-tagged exchanges under WORLD headings", () => {
+  const exchanges = [
+    { id: "a", name: "CHEYENNE EXCH", region: "SAO PAULO BR", api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "WOPR" },
+    { id: "b", name: "ANNEX EXCH", region: "PORTLAND US", api: "https://y", link: "wss://y", joshua: "period", world: 2, slot: "SCHOOL" },
+  ];
+  const text = directoryText({ exchanges, systems: [], hits: null });
+  const lines = text.split("\n");
+  const w1 = lines.indexOf("-- WORLD 1 --"), w2 = lines.indexOf("-- WORLD 2 --");
+  assert.ok(w1 >= 0 && w2 > w1);
+  assert.ok(lines[w1 + 1].includes("CHEYENNE EXCH") && lines[w1 + 1].includes("WOPR"));
+  assert.ok(lines[w2 + 1].includes("ANNEX EXCH"));
+});
+
+test("directoryText prints an untagged book with no WORLD headings", () => {
+  // A phone-book entry that never came from a trunk has no world; the
+  // directory must look exactly as it did before worlds existed.
+  assert.equal(/-- WORLD/.test(directoryText(ctx)), false);
+});

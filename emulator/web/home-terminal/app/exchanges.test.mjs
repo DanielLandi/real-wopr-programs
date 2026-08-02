@@ -60,6 +60,10 @@ const TRUNK_GOOD = {
   joshua: "claude",
 };
 
+/** The hub answers `GET /trunk/directory` with worlds, each holding its
+ *  numbered slots: `{ worlds: [{ n, slots: [entry...] }] }`. */
+const TRUNK_DIR = { worlds: [{ n: 1, slots: [TRUNK_GOOD] }] };
+
 const SUPABASE_CFG = {
   source: "supabase",
   url: "https://ref.supabase.co",
@@ -122,7 +126,7 @@ test("supabase mode dispatches PostgREST and trunk fetches concurrently", async 
   );
 
   rest.resolve(jsonResponse([GOOD]));
-  trunk.resolve(jsonResponse({ exchanges: [TRUNK_GOOD] }));
+  trunk.resolve(jsonResponse(TRUNK_DIR));
   assert.deepEqual(await loading, [GOOD, TRUNK_GOOD]);
 });
 
@@ -141,7 +145,7 @@ test("supabase mode returns null when PostgREST fails, even if the trunk answers
   mockFetch(t, [
     ["phonebook.json", jsonResponse(SUPABASE_CFG)],
     ["/rest/v1/exchanges", jsonResponse(null, false)],
-    ["/trunk/directory", jsonResponse({ exchanges: [TRUNK_GOOD] })],
+    ["/trunk/directory", jsonResponse(TRUNK_DIR)],
   ]);
   assert.equal(await loadExchanges(), null);
 });
@@ -151,7 +155,44 @@ test("supabase mode dedupes trunk entries behind the book's own rows by id", asy
   mockFetch(t, [
     ["phonebook.json", jsonResponse(SUPABASE_CFG)],
     ["/rest/v1/exchanges", jsonResponse([GOOD])],
-    ["/trunk/directory", jsonResponse({ exchanges: [shadow, TRUNK_GOOD] })],
+    ["/trunk/directory", jsonResponse({ worlds: [{ n: 1, slots: [shadow, TRUNK_GOOD] }] })],
   ]);
   assert.deepEqual(await loadExchanges(), [GOOD, TRUNK_GOOD]);
+});
+
+// ---- loadExchanges: the {worlds} trunk directory ---------------------------
+
+const STATIC_CFG = {
+  source: "static",
+  exchanges: [],
+  trunk_directory: "https://hub.example/trunk/directory",
+};
+
+test("trunkEntries flattens a {worlds} directory and keeps world/slot tags", async (t) => {
+  const dir = { worlds: [
+    { n: 1, slots: [{ ...GOOD, world: 1, slot: "WOPR" }] },
+    { n: 2, slots: [{ ...GOOD, id: "trunk-def234", name: "ANNEX EXCH", world: 2, slot: "SCHOOL" }] },
+  ] };
+  mockFetch(t, [
+    ["phonebook.json", jsonResponse(STATIC_CFG)],
+    ["/trunk/directory", jsonResponse(dir)],
+  ]);
+  const list = await loadExchanges();
+  assert.deepEqual(list.map((e) => [e.world, e.slot]), [[1, "WOPR"], [2, "SCHOOL"]]);
+});
+
+test("a directory without worlds contributes nothing (the old {exchanges} shape is gone)", async (t) => {
+  mockFetch(t, [
+    ["phonebook.json", jsonResponse(STATIC_CFG)],
+    ["/trunk/directory", jsonResponse({ exchanges: [TRUNK_GOOD] })],
+  ]);
+  assert.deepEqual(await loadExchanges(), []);
+});
+
+test("a world missing its slots array is skipped, not fatal", async (t) => {
+  mockFetch(t, [
+    ["phonebook.json", jsonResponse(STATIC_CFG)],
+    ["/trunk/directory", jsonResponse({ worlds: [{ n: 1 }, { n: 2, slots: [TRUNK_GOOD] }] })],
+  ]);
+  assert.deepEqual(await loadExchanges(), [TRUNK_GOOD]);
 });

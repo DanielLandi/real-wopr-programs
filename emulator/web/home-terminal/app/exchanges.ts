@@ -14,7 +14,10 @@
 //
 // An optional `trunk_directory` URL points at a comms hub's
 // `GET /trunk/directory` — live federated exchanges merged in behind the
-// book's own entries (dedupe by id; the book always wins on collision).
+// book's own entries (dedupe by id; the book always wins on collision). The
+// hub groups those entries into worlds, and each entry carries the world and
+// slot it was placed in; the DIRECTORY screen prints them under world
+// headings.
 
 export interface Exchange {
   id: string;
@@ -24,6 +27,8 @@ export interface Exchange {
   link: string;         // wss URL of the comms layer's /link
   joshua: "claude" | "period";
   operator?: string;    // GitHub handle
+  world?: number;       // trunk world this exchange was placed in
+  slot?: string;        // its role in that world (WOPR, SCHOOL, PANAM, ...)
 }
 
 interface PhonebookConfig {
@@ -55,15 +60,21 @@ export function valid(list: unknown): Exchange[] {
 }
 
 /** Live entries from the comms hub's trunk directory (`GET /trunk/directory`
- *  → `{ exchanges: DirectoryEntry[] }`, already phone-book Exchange-shaped).
- *  Degrades silently — an unreachable or slow trunk never blocks the book. */
+ *  → `{ worlds: [{ n, slots: DirectoryEntry[] }] }`, each entry already
+ *  phone-book Exchange-shaped and tagged with its `world`/`slot`). Flattened
+ *  in world order, so the book keeps one list and the DIRECTORY screen can
+ *  re-group it by the tags. Degrades silently — an unreachable or slow trunk
+ *  never blocks the book. */
 async function trunkEntries(url: string | undefined): Promise<Exchange[]> {
   if (!url) return [];
   try {
     const res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(3500) });
     if (!res.ok) return [];
-    const dir = (await res.json()) as { exchanges?: unknown };
-    return valid(dir.exchanges);
+    const dir = (await res.json()) as { worlds?: Array<{ slots?: unknown }> };
+    const flat = Array.isArray(dir.worlds)
+      ? dir.worlds.flatMap((w) => (Array.isArray(w.slots) ? w.slots : []))
+      : [];
+    return valid(flat);
   } catch {
     return [];
   }

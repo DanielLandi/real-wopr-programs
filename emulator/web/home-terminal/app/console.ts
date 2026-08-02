@@ -37,6 +37,8 @@ export interface DirEntry {
   region?: string;
   number?: string; // the ATDT-dialable number, if the entry has one
   joshua?: "claude" | "period";
+  world?: number; // trunk world, when the entry came from a trunk directory
+  slot?: string;  // its role in that world (WOPR, SCHOOL, PANAM, ...)
   target: DialTarget | null; // null = the default WOPR line
 }
 
@@ -103,7 +105,10 @@ export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   const out: DirEntry[] = [];
   let i = 1;
   for (const e of ctx.exchanges ?? []) {
-    out.push({ index: i++, name: e.name, region: e.region, joshua: e.joshua, target: e });
+    out.push({
+      index: i++, name: e.name, region: e.region, joshua: e.joshua,
+      world: e.world, slot: e.slot, target: e,
+    });
   }
   for (const s of ctx.systems) {
     out.push({ index: i++, name: s.name, number: s.number, target: s });
@@ -115,15 +120,28 @@ export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   return out;
 }
 
-/** The DIRECTORY screen as plain teletype text. */
+/** The DIRECTORY screen as plain teletype text. Trunk entries arrive tagged
+ *  with the world they were placed in, so they print under a `-- WORLD n --`
+ *  heading; untagged entries (the local book, the SYSTEM/1 numbers, the
+ *  mystery carrier) print exactly as they always did. */
 export function directoryText(ctx: ConsoleContext): string {
   const lines = ["DIRECTORY", ""];
+  let lastWorld: number | undefined;
   for (const e of directoryEntries(ctx)) {
+    if (e.world !== undefined && e.world !== lastWorld) {
+      if (lines.length > 2) lines.push("");
+      lines.push(`-- WORLD ${e.world} --`);
+      lastWorld = e.world;
+    } else if (e.world === undefined && lastWorld !== undefined) {
+      lines.push("");
+      lastWorld = undefined;
+    }
     const nn = String(e.index).padStart(2, "0");
     const region = e.region ? `  [${e.region}]` : "";
     const num = e.number ? `  ${e.number}` : "";
     const mode = e.joshua === "period" ? "  (1983 MODE)" : "";
-    lines.push(`${nn}  ${e.name}${region}${num}${mode}`);
+    const slot = e.slot ? `  ${e.slot}` : "";
+    lines.push(`${nn}  ${e.name}${slot}${region}${num}${mode}`);
   }
   lines.push("");
   lines.push("DIAL <NN>   DIAL <NAME>   ATDT <NUMBER>   OR JUST THE NUMBER");
