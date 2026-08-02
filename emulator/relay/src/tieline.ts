@@ -4,7 +4,7 @@
 // two configured local endpoints.
 
 import { WebSocket } from "ws";
-import { decodeTrunkFrame, restAllowed, type TrunkFrame } from "./trunk.ts";
+import { ALL_SLOTS, decodeTrunkFrame, restAllowed, type TrunkFrame } from "./trunk.ts";
 
 export interface TielineOpts {
   hubUrl: string;          // wss://wopr.realwopr.ai/trunk
@@ -93,6 +93,17 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
       if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461) {
         stopped = true;
         console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
+      } else if (closeCode === 4400) {
+        // The hub could not even read our REGISTER — an off-roster slot, a
+        // world that is not a number or NEW. That verdict is deterministic:
+        // the same frame will be rejected every time, so redialling is an
+        // infinite loop with no LINE REFUSED to explain it. Stop and say what
+        // to fix.
+        stopped = true;
+        console.error(
+          `LINE NOT ACCEPTED — ${reason.toString().toUpperCase() || "MALFORMED REGISTER"}` +
+          ` — CHECK TIELINE_SLOT AND TIELINE_WORLD`,
+        );
       }
       retry();
     });
@@ -109,15 +120,29 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
 
 // CLI entry: `npm run tieline` on a host machine.
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // Check what the hub checks, before dialling. A bad slot or world is refused
+  // with a malformed-frame close that says nothing about which field was
+  // wrong; caught here it is one readable line instead.
+  const rawSlot = process.env.TIELINE_SLOT?.toUpperCase() || undefined;
+  if (rawSlot !== undefined && !ALL_SLOTS.includes(rawSlot)) {
+    console.error(`TIELINE_SLOT MUST BE ONE OF: ${ALL_SLOTS.join(" ")}`);
+    process.exit(1);
+  }
+  const rawWorld = process.env.TIELINE_WORLD?.toUpperCase() || undefined;
+  if (rawWorld !== undefined && rawWorld !== "NEW" &&
+      !(/^[0-9]+$/.test(rawWorld) && Number(rawWorld) >= 1)) {
+    console.error("TIELINE_WORLD MUST BE A WORLD NUMBER (1 OR GREATER) OR NEW");
+    process.exit(1);
+  }
+
   startTieline({
     hubUrl: process.env.TRUNK_HUB_URL ?? "wss://wopr.realwopr.ai/trunk",
     name: process.env.TIELINE_NAME ?? "UNNAMED EXCH",
     region: process.env.TIELINE_REGION ?? "SOMEWHERE",
     joshua: (process.env.TIELINE_JOSHUA as "claude" | "period") ?? "period",
     operator: process.env.TIELINE_OPERATOR,
-    slot: process.env.TIELINE_SLOT ? process.env.TIELINE_SLOT.toUpperCase() : undefined,
-    world: process.env.TIELINE_WORLD === "NEW" ? "NEW"
-         : process.env.TIELINE_WORLD ? Number(process.env.TIELINE_WORLD) : undefined,
+    slot: rawSlot,
+    world: rawWorld === "NEW" ? "NEW" : rawWorld ? Number(rawWorld) : undefined,
     localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
     localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
     onAssigned: (exchange, world, slot) => {

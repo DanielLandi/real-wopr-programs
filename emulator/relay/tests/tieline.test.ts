@@ -265,6 +265,51 @@ test("tieline: registers its slot/world and reports the placement", { timeout: 1
   }
 });
 
+test("tieline: stops (no reconnect) when the hub cannot read the REGISTER", { timeout: 20_000 }, async () => {
+  // A typo'd slot or world never becomes a refusal — the hub cannot decode the
+  // frame at all and closes 4400. That verdict is deterministic, so it has to
+  // be as terminal as 4460/4461: redialling re-sends the same bad frame every
+  // backoff, forever, with nothing on the console to explain the silence.
+  // (The CLI validates these fields first; this is the path where something
+  // else builds the opts, and the last line of defence for the operator.)
+  const hub = await startServer({ port: 0, trunk: { maxWorlds: 2 } });
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+  const rejections = () => errors.filter((e) => e.includes("LINE NOT ACCEPTED"));
+
+  const typo = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "TYPO EXCH", region: "PORTLAND US", joshua: "period",
+    slot: "WOPRR",                                    // off the roster
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: true,                                  // the 4400 must override
+    onAssigned: () => { assert.fail("a malformed REGISTER must not be assigned"); },
+  });
+
+  try {
+    const deadline = Date.now() + 3_000;
+    while (rejections().length < 1 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.deepEqual(rejections(), [
+      "LINE NOT ACCEPTED — MALFORMED TRUNK FRAME — CHECK TIELINE_SLOT AND TIELINE_WORLD",
+    ]);
+    // The first backoff is 5s: wait past it. A tieline that treated 4400 as an
+    // outage would be on its second (and third...) attempt by now, each one
+    // logging again.
+    await new Promise((r) => setTimeout(r, 6_500));
+    assert.equal(rejections().length, 1, `redialled a frame the hub cannot read: ${JSON.stringify(errors)}`);
+    const dir = await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`);
+    const worlds = JSON.parse(dir.body).worlds as Array<{ slots: unknown[] }>;
+    assert.deepEqual(worlds.flatMap((w) => w.slots), []);   // nothing was ever placed
+  } finally {
+    console.error = origError;
+    typo.stop();
+    await hub.close();
+  }
+});
+
 test("tieline: stops (no reconnect) when the hub refuses the slot", { timeout: 10_000 }, async () => {
   // A refusal is an answer, not an outage. `reconnect: true` asks for redials
   // through outages; a 4409/4460/4461 close must override it, or the host

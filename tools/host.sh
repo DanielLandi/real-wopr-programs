@@ -12,8 +12,32 @@ cd "$(dirname "$0")/.."
 # nothing else in the pack reads one — config.py sees the environment and only
 # the environment. Read it here, before the guards, so what it sets is checked
 # like anything else. `set -a` exports every assignment, so both `KEY=val` and
-# `export KEY=val` lines work, and the file wins over the surrounding shell.
-if [ -f .env ]; then set -a; . ./.env; set +a; fi
+# `export KEY=val` lines work.
+#
+# The command line wins. host.html hands operators a one-line
+# `TIELINE_SLOT=... make host`, and the README suggests a .env for the same
+# variables; if the file quietly beat the line the operator just typed, they
+# would watch the wrong slot go up with nothing to explain it. So snapshot
+# whatever the surrounding shell already set, source the file, put the
+# snapshot back. (bash 3.2: no associative arrays, no `${!name}` games beyond
+# eval on these fixed identifiers.)
+HOST_ENV_VARS="TIELINE_SLOT TIELINE_WORLD TIELINE_NAME TIELINE_REGION
+TIELINE_JOSHUA TIELINE_OPERATOR TRUNK_HUB_URL BRIDGE_LOGON_BANNER
+WOPR_OPERATORS JOSHUA_ENGINE COMMS_MODE"
+if [ -f .env ]; then
+  host_preset=""
+  for v in $HOST_ENV_VARS; do
+    if eval "[ -n \"\${$v+x}\" ]"; then
+      eval "host_preset_$v=\$$v"
+      host_preset="$host_preset $v"
+    fi
+  done
+  set -a; . ./.env; set +a
+  for v in $host_preset; do
+    eval "$v=\$host_preset_$v"
+    export "$v"
+  done
+fi
 
 die() { echo "host: $*" >&2; exit 1; }
 upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
@@ -102,4 +126,15 @@ TIELINE_LOCAL_COMMS="ws://127.0.0.1:${COMMS_PORT}" TIELINE_LOCAL_BRIDGE="http://
   node emulator/relay/src/tieline.ts &
 pids+=($!)
 
-wait
+# Supervise, don't just `wait`. A bare wait returns when *all three* have
+# exited, so a tieline that hung up on a refusal would leave the node host and
+# relay running and the operator reading a healthy-looking stack that is not
+# on the switchboard. Any one of the three going down takes the exchange down.
+# (`wait -n` would say this in one line; bash 3.2 — the macOS default — does
+# not have it, so poll.) The EXIT trap does the teardown.
+while :; do
+  for p in "${pids[@]}"; do
+    kill -0 "$p" 2>/dev/null || { echo "host: a component exited — shutting down" >&2; exit 1; }
+  done
+  sleep 1
+done
