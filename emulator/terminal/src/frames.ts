@@ -104,6 +104,11 @@ export class HomeFrameHandler {
       if (unexpected && !this.sawNoCarrierFrame) {
         this.sinks.appendRaw("\n\nNO CARRIER\n");
       }
+      // The carrier is gone, so the input line must stop wearing the dead
+      // system's prompt — anything typed now goes to the local console (#26).
+      // When a control NO CARRIER preceded this close, that path already
+      // reset it (and phase, so `unexpected` is false here).
+      if (unexpected) this.sinks.setPrompt(">");
       this.sawNoCarrierFrame = false;
       this.sinks.setPhase((p) => (p === "connected" || p === "dialing" ? "no-carrier" : p));
       return;
@@ -153,6 +158,7 @@ export class HomeFrameHandler {
       // frame does not print a duplicate NO CARRIER (#88).
       this.sawNoCarrierFrame = true;
       this.sinks.appendRaw("\n\nNO CARRIER\n");
+      this.sinks.setPrompt(">");
       this.sinks.setPhase("no-carrier");
     }
   }

@@ -153,6 +153,31 @@ test("a control NO CARRIER prints once; the WS close behind it stays silent", ()
   assert.equal(state.text.match(/NO CARRIER/g)!.length, 1);
 });
 
+test("regression (#26): a control NO CARRIER returns the input line to the local prompt", () => {
+  // Dial PANAMAC, sign off with SO: the carrier drops, but the displayed
+  // prompt stayed "READY:" — the prompt of a system the terminal is no longer
+  // talking to, while input actually goes to the local console interpreter.
+  const { state, handler } = harness();
+  for (const e of shaped("prompt", "READY:")) handler.onEvent(e);
+  assert.equal(state.prompt, "READY:");
+  handler.onEvent({
+    type: "frame",
+    frame: { v: 1, session: "s1", seq: 9, kind: "control", link: "dialup-300", payload: "NO CARRIER", eom: true },
+  } as FrameEvent);
+  assert.equal(state.prompt, ">");
+});
+
+test("regression (#26): an unexpected close returns the input line to the local prompt", () => {
+  const { state, handler } = harness();
+  for (const e of shaped("prompt", "READY:")) handler.onEvent(e);
+  handler.onEvent({ type: "close" });
+  assert.equal(state.prompt, ">");
+  // An idle close (nothing was connected) must not touch the input line.
+  const idle = harness("idle");
+  idle.handler.onEvent({ type: "close" });
+  assert.deepEqual(idle.state.prompts, []);
+});
+
 test("an unexpected close with no control frame announces NO CARRIER itself", () => {
   const { state, handler } = harness("connected");
   handler.onEvent({ type: "close" });
