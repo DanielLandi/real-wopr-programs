@@ -36,7 +36,8 @@ test("codec: round-trips every frame type through JSON", () => {
   const frames: TrunkFrame[] = [
     { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" },
     { t: "REGISTER", v: 1, name: "CRYSTAL PALACE", region: "SEATTLE US", joshua: "claude", operator: "DANIEL" },
-    { t: "ASSIGNED", exchange: "ABC234" },
+    { t: "REGISTER", v: 1, name: "SEATTLE SCHOOL", region: "SEATTLE US", joshua: "period", slot: "SCHOOL", world: 2 },
+    { t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" },
     { t: "OPEN", chan: 1, query: "" },
     { t: "FRAME", chan: 1, data: "HELLO" },
     { t: "CLOSE", chan: 1 },
@@ -124,6 +125,29 @@ test("codec: throws on RESPONSE status outside the HTTP range (writeHead would t
 
 test("codec: throws on CLOSE reason too long to relay as a ws close reason", () => {
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "CLOSE", chan: 1, reason: "X".repeat(101) })), Error);
+});
+
+// ---- worlds and roster slots ----------------------------------------------
+
+test("REGISTER accepts a roster slot and a world number or NEW", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, slot: "SCHOOL" })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, slot: "OTHER-2", world: 3 })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, world: "NEW" })).t, "REGISTER");
+});
+
+test("REGISTER rejects an off-roster slot and a bad world", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "JOSHUA" })), /bad slot/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "wopr" })), /bad slot/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: 0 })), /bad world/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: "FRESH" })), /bad world/);
+});
+
+test("ASSIGNED requires world and slot", () => {
+  assert.equal(decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" })).t, "ASSIGNED");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234" })), /bad world/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1 })), /bad slot/);
 });
 
 // ---- REST allowlist -------------------------------------------------------

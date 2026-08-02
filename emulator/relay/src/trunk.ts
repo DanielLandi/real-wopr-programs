@@ -3,8 +3,9 @@
 // allowlisted REST subset down each trunk, and never inspects relayed payloads.
 
 export type TrunkFrame =
-  | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period"; operator?: string }
-  | { t: "ASSIGNED"; exchange: string }
+  | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period";
+      operator?: string; slot?: string; world?: number | "NEW" }
+  | { t: "ASSIGNED"; exchange: string; world: number; slot: string }
   | { t: "OPEN"; chan: number; query: string }
   | { t: "FRAME"; chan: number; data: string }
   | { t: "CLOSE"; chan: number; reason?: string }
@@ -15,6 +16,13 @@ export type TrunkFrame =
 
 export const TRUNK_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const TRUNK_MAX_FRAME_BYTES = 8192;
+
+// The film's wardial cast (docs/period-systems.md in the engine repo) plus
+// overflow slots for original systems. Slot names double as the world-local
+// numbering plan in phase 2 — fixed here, never renamed.
+export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL", "HOME"] as const;
+export const WILDCARD_SLOTS = ["OTHER-1", "OTHER-2"] as const;
+export const ALL_SLOTS: readonly string[] = [...NAMED_SLOTS, ...WILDCARD_SLOTS];
 
 const FRAME_TYPES = new Set(["REGISTER", "ASSIGNED", "OPEN", "FRAME", "CLOSE", "REQUEST", "RESPONSE", "PING", "PONG"]);
 
@@ -31,8 +39,12 @@ export function decodeTrunkFrame(raw: string): TrunkFrame {
     if (typeof f.region !== "string" || f.region.length < 2 || f.region.length > 24) throw new Error("bad region");
     if (f.joshua !== "claude" && f.joshua !== "period") throw new Error("bad joshua");
     if (f.operator !== undefined && (typeof f.operator !== "string" || f.operator.length > 24)) throw new Error("bad operator");
+    if (f.slot !== undefined && (typeof f.slot !== "string" || !ALL_SLOTS.includes(f.slot))) throw new Error("bad slot");
+    if (f.world !== undefined && f.world !== "NEW" && (!Number.isInteger(f.world) || f.world < 1)) throw new Error("bad world");
   } else if (f.t === "ASSIGNED") {
     if (typeof f.exchange !== "string") throw new Error("bad exchange");
+    if (!Number.isInteger(f.world) || f.world < 1) throw new Error("bad world");
+    if (typeof f.slot !== "string") throw new Error("bad slot");
   } else if (f.t === "OPEN") {
     if (!Number.isInteger(f.chan)) throw new Error("bad chan");
     if (typeof f.query !== "string") throw new Error("bad query");
