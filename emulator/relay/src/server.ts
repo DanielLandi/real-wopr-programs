@@ -25,6 +25,7 @@ export interface ServerOpts {
   trunk?: {
     maxExchanges?: number;
     maxChannels?: number;
+    maxWorlds?: number;
     pingIntervalMs?: number;
     relayPingMs?: number;
     registerTimeoutMs?: number;
@@ -49,7 +50,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // the pre-listen `port` is 0, which would bake ":0" into every directory
   // entry. Explicit configuration always wins.
   let publicBase = opts.publicBase ?? process.env.TRUNK_PUBLIC_BASE ?? "";
-  const switchboard = new Switchboard(opts.trunk);
+  // TRUNK_MAX_WORLDS is operator-supplied text: a typo (or "") parses to NaN/0,
+  // and `world > NaN` is false, which would silently turn the explicit-world
+  // REGISTER path into an unbounded world allocator. Only a whole number >= 1
+  // is honored; anything else falls back to the documented default of 8.
+  const envMaxWorlds = Number(process.env.TRUNK_MAX_WORLDS);
+  const defaultMaxWorlds = Number.isInteger(envMaxWorlds) && envMaxWorlds >= 1 ? envMaxWorlds : 8;
+  const switchboard = new Switchboard({
+    ...opts.trunk,
+    maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
+  });
 
   const httpServer = createServer((req, res) => { void handleHttp(req, res); });
   const linkWss = new WebSocketServer({ noServer: true });
@@ -241,10 +251,17 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       catch { host.close(4400, "malformed trunk frame"); return; }
       if (f.t === "REGISTER") {
         if (code !== null) return;                       // one REGISTER per socket
-        code = switchboard.register(host, f);
-        if (code === null) { host.close(4409, "switchboard full"); return; }
+        const placed = switchboard.register(host, f);
+        // Three refusals, three codes: the host operator has to be able to tell
+        // "this hub is out of room entirely" from "the world you asked for is
+        // out of circuits" from "someone else already holds that slot" — only
+        // the last two are fixable by asking for a different world or slot.
+        if (placed === "full") { host.close(4409, "switchboard full"); return; }
+        if (placed === "no-circuits") { host.close(4460, "no circuits available"); return; }
+        if (placed === "slot-taken") { host.close(4461, "slot taken"); return; }
+        code = placed.code;
         clearTimeout(registerTimer);
-        host.send(JSON.stringify({ t: "ASSIGNED", exchange: code }));
+        host.send(JSON.stringify({ t: "ASSIGNED", exchange: placed.code, world: placed.world, slot: placed.slot }));
         return;
       }
       if (code !== null) switchboard.handleHostFrame(code, f);
@@ -295,7 +312,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
     if (req.method === "GET" && url.pathname === "/trunk/directory") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ exchanges: switchboard.directory(publicBase) }));
+      res.end(JSON.stringify({ worlds: switchboard.directory(publicBase) }));
       return;
     }
     const m = url.pathname.match(/^\/x\/([A-Z2-9]{6})(\/.*)$/);

@@ -36,6 +36,8 @@ test("world NEW skips live worlds; explicit world joins or refuses", () => {
   assert.equal(place(sb, { world: 2, slot: "SCHOOL" }).world, 2);
   assert.equal(sb.register(fakePort(), reg({ world: 2, slot: "SCHOOL" })), "slot-taken");
   assert.equal(sb.register(fakePort(), reg({ world: 99, slot: "SCHOOL" })), "no-circuits");
+  // Below the floor as well as above the cap: world 0 never gets placed.
+  assert.equal(sb.register(fakePort(), reg({ world: 0, slot: "SCHOOL" })), "no-circuits");
 });
 
 test("world cap refuses with no-circuits", () => {

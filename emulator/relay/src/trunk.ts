@@ -146,7 +146,10 @@ export class Switchboard {
         : WILDCARD_SLOTS.find((s) => !occ.get(w)?.has(s)) ?? null;
 
     if (typeof req.world === "number") {
-      if (req.world > this.maxWorlds) return "no-circuits";
+      // decodeTrunkFrame already rejects world < 1 on the wire; the floor is
+      // repeated here so an in-process caller cannot place an exchange into
+      // world 0 or a negative world that the directory would then expose.
+      if (req.world < 1 || req.world > this.maxWorlds) return "no-circuits";
       const slot = open(req.world);
       return slot === null ? "slot-taken" : { world: req.world, slot };
     }
