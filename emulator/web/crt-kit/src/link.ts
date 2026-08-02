@@ -39,6 +39,13 @@ export class WoprLink {
     this.opts = opts;
   }
 
+  /** True while the socket is live. A link whose far end hung up still
+   *  exists as an object, but it is not a line — sends on it are silent
+   *  no-ops, so a caller must not pick it as one to retry on (#27). */
+  get open(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
   onEvent(fn: (e: LinkEvent) => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);

@@ -239,8 +239,12 @@ export default function HomeTerminal() {
     frames.current?.resetCall();
     voice.current?.cancel();
     appendText(`\nDIALING ${target ? target.name : "UNKNOWN"}\n`);
-    if (link.current && active.current?.id === target?.id) {
-      link.current.sendControl("DIAL"); // retry on the same line
+    // Retry on the same line — only while the line is actually up. After a
+    // hangup link.current still holds the dead WoprLink, and a control DIAL
+    // into its closed socket is a silent no-op: the redial would stall at
+    // DIALING forever (#27). A closed link falls through to a fresh mint.
+    if (link.current?.open && active.current?.id === target?.id) {
+      link.current.sendControl("DIAL");
       return;
     }
     // Detach before hanging up the old line: this close is deliberate and must
