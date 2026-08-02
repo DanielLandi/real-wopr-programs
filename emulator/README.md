@@ -47,3 +47,25 @@ Every program is still a self-contained subprocess reading one frame on stdin an
 writing one on stdout. The harness never reaches inside a program; it only speaks
 `WOPR/1`, `SYSTEM/1` and `JOSHUA/1` to it, and treats every `STATE` block as
 opaque.
+
+## Hosting a slot
+
+Any clone of this repo can be a live exchange in the realwopr.ai phone book.
+The hub is a switchboard: your machine runs the stack and holds all state;
+the hub relays calls and lists your number while your carrier is up. Hang up
+(Ctrl-C) and the slot opens again.
+
+```bash
+TIELINE_SLOT=SCHOOL TIELINE_NAME="CHEYENNE ANNEX" TIELINE_REGION="SAO PAULO BR" make host
+```
+
+| Env | Meaning |
+| --- | --- |
+| `TIELINE_SLOT` | `WOPR` `SCHOOL` `PANAM` `PROTOVISION` `PACTEL` `HOME` `OTHER-1` `OTHER-2` |
+| `TIELINE_WORLD` | a world number, or `NEW` for a fresh world (default: lowest world with the slot open) |
+| `TIELINE_NAME` / `TIELINE_REGION` / `TIELINE_OPERATOR` | how the phone book lists you |
+| `TIELINE_JOSHUA` | `period` (default) or `claude` |
+| `TRUNK_HUB_URL` | defaults to `wss://wopr.realwopr.ai/trunk` |
+| `BRIDGE_LOGON_BANNER`, `WOPR_OPERATORS` | your exchange's banner and operator roster — local to your machine, never sent anywhere |
+
+`https://realwopr.ai/host.html` generates this command from a form.
