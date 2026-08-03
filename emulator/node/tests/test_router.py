@@ -110,8 +110,39 @@ def test_list_games_is_bridge_handled_and_film_ordered():
         await logon_as_joshua(router, sid)
         r = await router.handle(sid, "LIST GAMES")
         assert r.route == "bridge"
-        assert r.text.splitlines()[0] == "FALKEN'S MAZE"
-        assert r.text.splitlines()[-1] == "GLOBAL THERMONUCLEAR WAR"
+        lines = r.text.splitlines()
+        assert lines[0] == "FALKEN'S MAZE"
+        assert lines[-1] == "GLOBAL THERMONUCLEAR WAR"
+        # the film's list holds GTW off on its own, after a blank line
+        assert lines[-2] == ""
+
+    asyncio.run(flow())
+
+
+def test_tictactoe_is_unlisted_but_still_startable():
+    """The film's scrolling list does not recite TIC-TAC-TOE — David types it
+    himself in the finale (#40). Unlisted is not unplayable."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+
+        r = await router.handle(sid, "LIST GAMES")
+        assert "TIC-TAC-TOE" not in r.text
+        # the rest of the recitation is untouched
+        assert "FALKEN'S MAZE" in r.text
+        assert "THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE" in r.text
+
+        # naming the slot directly still opens its door...
+        r = await router.handle(sid, "LIST TIC-TAC-TOE")
+        assert r.route == "bridge"
+        assert r.text.splitlines()[0] == "TIC-TAC-TOE"
+
+        # ...and starting it still works
+        r = await router.handle(sid, "NEW TICTACTOE")
+        assert (await store.get_active_game(sid)) is not None
 
     asyncio.run(flow())
 

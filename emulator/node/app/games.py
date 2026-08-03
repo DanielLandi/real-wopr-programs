@@ -14,6 +14,10 @@ CATALOG_ORDER = [
     "air-to-ground", "theater-tactical", "theater-biotoxic", "tictactoe", "gtw",
 ]
 
+# Playable but never recited: the film's scrolling list does not include
+# tic-tac-toe — David types it directly in the finale (#40).
+UNLISTED = frozenset({"tictactoe"})
+
 PLACEHOLDER_TITLES = {
     "falkens-maze": "FALKEN'S MAZE",
     "blackjack": "BLACK JACK",
@@ -171,7 +175,8 @@ def interpretation_dir(game: Game, pin: str) -> str | None:
 
 def list_games_text(catalog: dict[str, Game]) -> str:
     """The in-world LIST GAMES output — the film's recitation, ending on
-    GLOBAL THERMONUCLEAR WAR."""
-    lines = [catalog[g].title for g in CATALOG_ORDER if g != "gtw"]
+    GLOBAL THERMONUCLEAR WAR. UNLISTED slots stay startable but unrecited."""
+    lines = [catalog[g].title for g in CATALOG_ORDER
+             if g != "gtw" and g not in UNLISTED]
     lines += ["", catalog["gtw"].title]
     return "\n".join(lines)
