@@ -354,11 +354,13 @@ test("trunk hub: a malformed TRUNK_LOCAL_WORLD is logged and seeds nothing — t
 test("trunk hub: a well-formed but invalid TRUNK_LOCAL_WORLD fails startup outright", async () => {
   // Parseable JSON naming an illegal slot is a deploy error, not a transient:
   // the operator wrote a manifest and got it wrong, and a hub that quietly
-  // dropped the entry would serve a directory nobody asked for.
+  // dropped the entry would serve a directory nobody asked for. HOME is the
+  // illegal slot worth naming: it is the caller's own seat, so the refusal has
+  // to explain itself rather than read as a typo.
   const before = process.env.TRUNK_LOCAL_WORLD;
   process.env.TRUNK_LOCAL_WORLD = JSON.stringify([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]);
   try {
-    await assert.rejects(() => startServer({ port: 0 }), /HOME/);
+    await assert.rejects(() => startServer({ port: 0 }), /HOME is the caller's own seat/);
   } finally {
     if (before === undefined) delete process.env.TRUNK_LOCAL_WORLD;
     else process.env.TRUNK_LOCAL_WORLD = before;

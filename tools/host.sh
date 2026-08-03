@@ -49,7 +49,9 @@ upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 # redials it forever. Every check the hub makes on the fields we send is made
 # here first, where a typo is still a one-line error the operator can read.
 
-SLOTS="WOPR SCHOOL PANAM PROTOVISION PACTEL HOME OTHER-1 OTHER-2"
+# No HOME: that is the caller's own seat, not a service anyone hosts. The hub's
+# roster leaves it out too, so a REGISTER claiming it would not even decode.
+SLOTS="WOPR SCHOOL PANAM PROTOVISION PACTEL OTHER-1 OTHER-2"
 
 if [ -n "${TIELINE_SLOT:-}" ]; then
   TIELINE_SLOT=$(upper "$TIELINE_SLOT")

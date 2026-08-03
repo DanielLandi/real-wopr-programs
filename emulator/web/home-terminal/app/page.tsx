@@ -326,7 +326,9 @@ export default function HomeTerminal() {
     void (async () => {
       for (const e of exchanges) {
         const up = await probe(e);
-        appendText(`ATDT ${e.name} [${e.region}] ... ${up ? "CARRIER DETECTED" : "NO CARRIER"}\n`);
+        // No region: it is not shown to a visitor anywhere any more, and the
+        // DIRECTORY this line echoes does not print one either.
+        appendText(`ATDT ${e.name} ... ${up ? "CARRIER DETECTED" : "NO CARRIER"}\n`);
         if (up) {
           dial(e);
           return;

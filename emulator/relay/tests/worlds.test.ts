@@ -67,11 +67,11 @@ test("directory groups by world and orders slots by roster", () => {
   const sb = new Switchboard({ reservedWorlds: [] });
   place(sb, { slot: "SCHOOL" });
   place(sb, { slot: "WOPR" });
-  place(sb, { world: "NEW", slot: "HOME" });
+  place(sb, { world: "NEW", slot: "PACTEL" });
   const dir = sb.directory("http://hub");
   assert.deepEqual(dir.map((w) => w.n), [1, 2]);
   assert.deepEqual(dir[0].slots.map((e) => e.slot), ["WOPR", "SCHOOL"]);
-  assert.deepEqual(dir[1].slots.map((e) => e.slot), ["HOME"]);
+  assert.deepEqual(dir[1].slots.map((e) => e.slot), ["PACTEL"]);
   const e = dir[0].slots[0];
   assert.equal(e.world, 1);
   assert.equal(e.api, `http://hub/x/${e.id.slice("trunk-".length).toUpperCase()}`);
@@ -255,8 +255,12 @@ test("a malformed manifest is a deploy error: the Switchboard refuses to constru
   // `.slot` of null — the operator has to be able to read what went wrong.
   assert.throws(bad([null as unknown as LocalSlot]), /bad entry/);
   assert.throws(bad(["WOPR" as unknown as LocalSlot]), /bad entry/);
-  // HOME is on the roster but is the visitor's own line — it is never listed.
-  assert.throws(bad([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]), /HOME/);
+  // HOME is David's desk: the seat a caller dials FROM. It is off the roster
+  // entirely now, so it is unregistrable on the wire AND unseedable here — and
+  // the manifest error still says which of the two mistakes was made, rather
+  // than degrading into the bare "bad slot" every other off-roster name gets.
+  assert.throws(bad([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]),
+                /HOME is the caller's own seat/);
   // Wildcards are for registrants who did not ask for a slot; a manifest names
   // what it is seeding.
   assert.throws(bad([{ slot: "OTHER-1", name: "SPARE", region: "SEATTLE US" }]), /slot/);

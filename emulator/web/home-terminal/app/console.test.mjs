@@ -296,9 +296,10 @@ test("directoryText hides (1983 MODE) on a slot that is a period system, not Jos
 
 test("directoryText fits an 80-column terminal in the worst case", () => {
   // The IMSAI's screen is 80 columns; a wrapped directory line is a visible
-  // defect. Worst case is every field at its maximum simultaneously: a 24-char
-  // name and a 24-char region (the REGISTER wire caps both at 24), the longest
-  // roster slot (PROTOVISION, 11), and the period-engine suffix.
+  // defect. Worst case is every printed field at its maximum simultaneously: a
+  // 24-char name (the REGISTER wire's cap), the longest roster slot
+  // (PROTOVISION, 11), and the period-engine suffix. The region is still on the
+  // entry — it just is not printed any more, so it cannot spend columns.
   const exchanges = [{
     id: "a", name: "X".repeat(24), region: "Y".repeat(24),
     api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "PROTOVISION",
@@ -308,4 +309,21 @@ test("directoryText fits an 80-column terminal in the worst case", () => {
   assert.ok(entry, "the worst-case entry must be printed");
   assert.ok(entry.length <= 80, `worst-case entry is ${entry.length} cols: ${JSON.stringify(entry)}`);
   for (const l of lines) assert.ok(l.length <= 80, `line over 80 cols: ${JSON.stringify(l)}`);
+});
+
+test("directoryText does not print an exchange's region", () => {
+  // The region was a bracketed suffix on every trunk line. It is no longer
+  // shown anywhere a visitor can read: an exchange line is its number, its
+  // name, its slot, and — for a period Joshua — the mode suffix, full stop.
+  // The field survives on the wire and in DirEntry; only the display drops it.
+  const exchanges = [
+    { id: "a", name: "CHEYENNE EXCH", region: "SAO PAULO BR", api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "WOPR" },
+    { id: "b", name: "ANNEX EXCH", region: "PORTLAND US", api: "https://y", link: "wss://y", joshua: "claude", world: 1, slot: "SCHOOL" },
+  ];
+  const text = directoryText({ exchanges, systems: [], hits: null });
+  assert.equal(/SAO PAULO BR|PORTLAND US/.test(text), false, `a region leaked into the screen:\n${text}`);
+  assert.equal(/\[/.test(text), false, `a bracketed suffix survives:\n${text}`);
+  const lines = text.split("\n");
+  assert.equal(lines.find((l) => l.includes("CHEYENNE EXCH")), "01  CHEYENNE EXCH  WOPR (1983 MODE)");
+  assert.equal(lines.find((l) => l.includes("ANNEX EXCH")), "02  ANNEX EXCH  SCHOOL");
 });

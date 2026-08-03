@@ -7,6 +7,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { startServer } from "../src/server.ts";
 import { startTieline } from "../src/tieline.ts";
@@ -488,4 +490,37 @@ test("tieline: carries the reserve key, and lands in the reserved world with it"
     tie.stop();
     await hub.close();
   }
+});
+
+// ---- CLI pre-flight ---------------------------------------------------------
+// `npm run tieline` checks TIELINE_SLOT against the roster before it dials, so
+// a typo is one readable line instead of a malformed-frame close. The check
+// derives its accepted list from ALL_SLOTS — this pins that HOME really has
+// left it, on the surface an operator actually reads.
+
+test("tieline CLI: HOME is refused before dialling, and is not offered as a choice",
+     { timeout: 10_000 }, async () => {
+  const cli = fileURLToPath(new URL("../src/tieline.ts", import.meta.url));
+  const run = (slot: string) => new Promise<{ code: number | null; err: string }>((resolve) => {
+    const p = spawn(process.execPath, [cli], {
+      env: { ...process.env, TIELINE_SLOT: slot },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let err = "";
+    p.stderr.on("data", (d) => { err += d.toString(); });
+    p.on("close", (code) => resolve({ code, err }));
+    // The bad-slot path exits before any socket is opened; if a regression lets
+    // it through it would sit dialling the default hub forever, so bound it.
+    setTimeout(() => p.kill("SIGKILL"), 8000).unref();
+  });
+
+  const home = await run("HOME");
+  assert.equal(home.code, 1, `HOME must not be dialable: ${JSON.stringify(home)}`);
+  // Match the one line, not all of stderr: node's own warnings share the
+  // stream and could carry an unrelated "HOME" (a path, an env note).
+  const offered = home.err.split("\n").find((l) => l.includes("TIELINE_SLOT MUST BE ONE OF"));
+  assert.ok(offered, `no accepted-values line was printed: ${JSON.stringify(home.err)}`);
+  assert.match(offered, /WOPR/);
+  // The list an operator is shown must not name the seat they cannot have.
+  assert.equal(/\bHOME\b/.test(offered), false, `HOME is still offered: ${offered}`);
 });
