@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parse, directoryText, sessionBody, DEFAULT_WOPR_NUMBER } from "./console.ts";
+import {
+  parse, directoryText, directoryEntries, sessionBody, DEFAULT_WOPR_NUMBER,
+} from "./console.ts";
 import { DIAL_SYSTEMS } from "./sims.ts";
 import { buildSweep } from "./wardial.ts";
 
@@ -326,4 +328,134 @@ test("directoryText does not print an exchange's region", () => {
   const lines = text.split("\n");
   assert.equal(lines.find((l) => l.includes("CHEYENNE EXCH")), "01  CHEYENNE EXCH  WOPR (1983 MODE)");
   assert.equal(lines.find((l) => l.includes("ANNEX EXCH")), "02  ANNEX EXCH  SCHOOL");
+});
+
+// --- one line per machine: a world entry absorbs its local dial-list twin ---
+
+// What production looks like: the hub seeds world 1 with the flagship's own
+// slots, four of which are the period systems that are ALSO on David's paper
+// list (sims.ts DIAL_SYSTEMS). Same machine, reached two ways.
+const SEED = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
+const WORLD1 = [
+  { ...SEED, id: "w1-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
+  { ...SEED, id: "w1-school", name: "GOOSE LAKE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+  { ...SEED, id: "w1-panam", name: "PAN AM", slot: "PANAM", system: "airline" },
+  { ...SEED, id: "w1-proto", name: "PROTOVISION", slot: "PROTOVISION", system: "protovision" },
+  { ...SEED, id: "w1-pactel", name: "PACIFIC TELEPHONE", slot: "PACTEL", system: "pactel" },
+];
+const worldCtx = { exchanges: WORLD1, systems: DIAL_SYSTEMS, hits: null };
+
+test("a world entry absorbs its local dial-list twin — one row, number kept", () => {
+  const entries = directoryEntries(worldCtx);
+  // The school is one machine, so it gets exactly one line: the world entry's
+  // name and slot, carrying the paper list's number.
+  const school = entries.filter((e) => e.system === "school" || e.name.startsWith("GOOSE LAKE"));
+  assert.equal(school.length, 1, `expected one school row, got ${JSON.stringify(school)}`);
+  assert.equal(school[0].name, "GOOSE LAKE SCHOOL DIST");
+  assert.equal(school[0].slot, "SCHOOL");
+  assert.equal(school[0].number, "(206) 555-0142");
+  assert.equal(school[0].target, WORLD1[1], "the world entry is the canonical line");
+  // All four twins are absorbed: no standalone DialSystem row survives.
+  for (const s of DIAL_SYSTEMS) {
+    assert.equal(
+      entries.some((e) => e.target === s), false,
+      `${s.name} still has a standalone dial-list row`,
+    );
+  }
+  // Five world slots + UNKNOWN, and nothing else.
+  assert.equal(entries.length, WORLD1.length + 1);
+  const text = directoryText(worldCtx);
+  assert.equal((text.match(/GOOSE LAKE/g) ?? []).length, 1, `the school is listed twice:\n${text}`);
+  assert.equal(/PANAMAC/.test(text), false, `the dial-list twin's label survives:\n${text}`);
+});
+
+test("the absorbed number still dials — ATDT reaches the merged world entry", () => {
+  // The paper list is what a visitor types. It must now land on the world
+  // entry, which is the same machine by another road.
+  const a = parse("ATDT (206) 555-0142", worldCtx);
+  assert.equal(a.kind, "dial");
+  assert.equal(a.target, WORLD1[1]);
+  assert.equal(a.label, "GOOSE LAKE SCHOOL DIST");
+  // bare-digit and bare-number forms take the same road
+  assert.equal(parse("ATDT 2065550142", worldCtx).target, WORLD1[1]);
+  assert.equal(parse("(206) 555-0142", worldCtx).target, WORLD1[1]);
+  // and so does the film's PAN AM number, onto the PANAM slot
+  assert.equal(parse("ATDT (212) 555-0177", worldCtx).target, WORLD1[2]);
+});
+
+test("an exchange with no system id never absorbs anything", () => {
+  // CHEYENNE MOUNTAIN is a Joshua line, not a period system: it has no `system`
+  // to match on, so it keeps its own row with no number attached.
+  const wopr = directoryEntries(worldCtx).find((e) => e.name === "CHEYENNE MOUNTAIN");
+  assert.equal(wopr.number, undefined);
+  assert.equal(wopr.system, undefined);
+});
+
+test("an unmatched sim lists exactly as before — the pre-worlds directory is pinned", () => {
+  // No trunk directory (local dev, classic mode): every sim is unmatched, so
+  // the list is byte-for-byte what it was before worlds existed.
+  assert.equal(
+    directoryText(soloCtx),
+    ["DIRECTORY", "",
+      "01  PAN AM / PANAMAC  (212) 555-0177",
+      "02  GOOSE LAKE SCHOOL DISTRICT  (206) 555-0142",
+      "03  PROTOVISION  (408) 555-0163",
+      "04  PACIFIC TELEPHONE  (311) 555-0100",
+      `05  UNKNOWN  ${DEFAULT_WOPR_NUMBER}`,
+      "",
+      "DIAL <NN>   DIAL <NAME>   ATDT <NUMBER>   OR JUST THE NUMBER", ""].join("\n"),
+  );
+  // an empty book is the same as no book
+  assert.equal(directoryText({ ...soloCtx, exchanges: [] }), directoryText(soloCtx));
+  // a world whose slots name no system absorbs nothing either
+  const noSystems = [{ ...SEED, id: "w1-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" }];
+  const kept = directoryEntries({ exchanges: noSystems, systems: DIAL_SYSTEMS, hits: null });
+  assert.equal(kept.length, 1 + DIAL_SYSTEMS.length + 1);
+});
+
+test("the mystery carrier keeps its row in both modes", () => {
+  for (const c of [worldCtx, soloCtx, ctx]) {
+    const entries = directoryEntries(c);
+    const unknown = entries.filter((e) => e.name === "UNKNOWN");
+    assert.equal(unknown.length, 1);
+    assert.equal(unknown[0].number, DEFAULT_WOPR_NUMBER);
+    assert.equal(unknown[0].target, null);
+    assert.equal(unknown[0].index, entries.length, "UNKNOWN is always last");
+    assert.equal(parse("DIAL UNKNOWN", c).target, null);
+    assert.equal(parse(`ATDT ${DEFAULT_WOPR_NUMBER}`, c).target, null);
+    // still unlabeled: its own line names nothing but the number
+    const line = directoryText(c).split("\n").find((l) => l.includes("UNKNOWN"));
+    assert.equal(line, `${String(unknown[0].index).padStart(2, "0")}  UNKNOWN  ${DEFAULT_WOPR_NUMBER}`);
+  }
+});
+
+test("indices stay contiguous after an absorption", () => {
+  const entries = directoryEntries(worldCtx);
+  entries.forEach((e, i) => assert.equal(e.index, i + 1));
+  // DIAL <nn> still indexes this exact list
+  assert.equal(parse("DIAL 2", worldCtx).target, entries[1].target);
+  assert.equal(parse(`DIAL ${entries.length}`, worldCtx).target, null);
+  assert.equal(parse(`DIAL ${entries.length + 1}`, worldCtx).kind, "error");
+});
+
+test("a merged directory line fits 80 columns in the worst case", () => {
+  // A merged line prints every field at once. Worst case:
+  //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 + "  " 2 + number 14 = 57.
+  // (No mode suffix: a merged entry carries `system` by definition, and the
+  // suffix is suppressed for those — so the two can never share a line.)
+  const exchanges = [{
+    ...SEED, id: "wide", name: "X".repeat(24), region: "Y".repeat(24),
+    slot: "PROTOVISION", system: "protovision",
+  }];
+  const systems = [{
+    kind: "system", id: "sys-wide", name: "Z".repeat(40),
+    number: "(408) 555-0163", systemId: "protovision",
+  }];
+  const lines = directoryText({ exchanges, systems, hits: null }).split("\n");
+  const entry = lines.find((l) => l.includes("PROTOVISION"));
+  assert.ok(entry, "the worst-case merged entry must be printed");
+  assert.ok(entry.includes("(408) 555-0163"), "the absorbed number must print");
+  assert.equal(entry.includes("1983 MODE"), false, "a period system has no mode suffix");
+  assert.equal(entry.length, 57, `worst-case merged line is ${entry.length} cols: ${JSON.stringify(entry)}`);
+  for (const l of lines) assert.ok(l.length <= 80, `line over 80 cols: ${JSON.stringify(l)}`);
 });
