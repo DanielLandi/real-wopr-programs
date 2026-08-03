@@ -12,7 +12,7 @@ const TOPO: Topology = {
   },
   nodes: {
     school: {
-      id: "school", title: "GOOSE LAKE", source: "manifest",
+      id: "school", title: "SEATTLE SCHOOL DISTRICT", source: "manifest",
       networks: {
         pstn: { address: "(206) 555-0142", protocol: "SYSTEM/1" },
         bus: { address: "SCHOOL", protocol: "SYSTEM/1" },

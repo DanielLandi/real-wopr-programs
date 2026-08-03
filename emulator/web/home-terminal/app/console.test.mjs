@@ -38,7 +38,7 @@ test("DIRECTORY lists exchanges and local systems as text", () => {
   assert.equal(a.kind, "directory");
   assert.match(a.text, /CHEYENNE MOUNTAIN/);
   assert.match(a.text, /PAN AM \/ PANAMAC/);
-  assert.match(a.text, /GOOSE LAKE SCHOOL DISTRICT/);
+  assert.match(a.text, /SEATTLE SCHOOL DISTRICT/);
   // the mystery carrier is present but unlabeled (the directory must not
   // reveal it is WOPR before you connect)
   assert.match(a.text, /UNKNOWN/);
@@ -88,6 +88,12 @@ test("ATDT with bare digits dials the same system", () => {
   const a = parse("ATDT 2125550177", ctx);
   assert.equal(a.kind, "dial");
   assert.equal(a.target.systemId, "airline");
+});
+
+test("the default WOPR number is the film's Sunnyvale line", () => {
+  // 311-399-2364: 399 is one of the four prefixes the operator reads out in
+  // the film (fidelity audit 2026-08-03, real-wopr#161).
+  assert.equal(DEFAULT_WOPR_NUMBER, "(311) 399-2364");
 });
 
 test("ATDT the default WOPR number dials the default line", () => {
@@ -338,7 +344,7 @@ test("directoryText does not print an exchange's region", () => {
 const SEED = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
 const WORLD1 = [
   { ...SEED, id: "w1-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
-  { ...SEED, id: "w1-school", name: "GOOSE LAKE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+  { ...SEED, id: "w1-school", name: "SEATTLE SCHOOL DIST", slot: "SCHOOL", system: "school" },
   { ...SEED, id: "w1-panam", name: "PAN AM", slot: "PANAM", system: "airline" },
   { ...SEED, id: "w1-proto", name: "PROTOVISION", slot: "PROTOVISION", system: "protovision" },
   { ...SEED, id: "w1-pactel", name: "PACIFIC TELEPHONE", slot: "PACTEL", system: "pactel" },
@@ -349,9 +355,9 @@ test("a world entry absorbs its local dial-list twin — one row, number kept", 
   const entries = directoryEntries(worldCtx);
   // The school is one machine, so it gets exactly one line: the world entry's
   // name and slot, carrying the paper list's number.
-  const school = entries.filter((e) => e.system === "school" || e.name.startsWith("GOOSE LAKE"));
+  const school = entries.filter((e) => e.system === "school" || e.name.startsWith("SEATTLE SCHOOL"));
   assert.equal(school.length, 1, `expected one school row, got ${JSON.stringify(school)}`);
-  assert.equal(school[0].name, "GOOSE LAKE SCHOOL DIST");
+  assert.equal(school[0].name, "SEATTLE SCHOOL DIST");
   assert.equal(school[0].slot, "SCHOOL");
   assert.equal(school[0].number, "(206) 555-0142");
   assert.equal(school[0].target, WORLD1[1], "the world entry is the canonical line");
@@ -365,7 +371,7 @@ test("a world entry absorbs its local dial-list twin — one row, number kept", 
   // Five world slots + UNKNOWN, and nothing else.
   assert.equal(entries.length, WORLD1.length + 1);
   const text = directoryText(worldCtx);
-  assert.equal((text.match(/GOOSE LAKE/g) ?? []).length, 1, `the school is listed twice:\n${text}`);
+  assert.equal((text.match(/SEATTLE SCHOOL/g) ?? []).length, 1, `the school is listed twice:\n${text}`);
   assert.equal(/PANAMAC/.test(text), false, `the dial-list twin's label survives:\n${text}`);
 });
 
@@ -375,7 +381,7 @@ test("the absorbed number still dials — ATDT reaches the merged world entry", 
   const a = parse("ATDT (206) 555-0142", worldCtx);
   assert.equal(a.kind, "dial");
   assert.equal(a.target, WORLD1[1]);
-  assert.equal(a.label, "GOOSE LAKE SCHOOL DIST");
+  assert.equal(a.label, "SEATTLE SCHOOL DIST");
   // bare-digit and bare-number forms take the same road
   assert.equal(parse("ATDT 2065550142", worldCtx).target, WORLD1[1]);
   assert.equal(parse("(206) 555-0142", worldCtx).target, WORLD1[1]);
@@ -398,7 +404,7 @@ test("an unmatched sim lists exactly as before — the pre-worlds directory is p
     directoryText(soloCtx),
     ["DIRECTORY", "",
       "01  PAN AM / PANAMAC  (212) 555-0177",
-      "02  GOOSE LAKE SCHOOL DISTRICT  (206) 555-0142",
+      "02  SEATTLE SCHOOL DISTRICT  (206) 555-0142",
       "03  PROTOVISION  (408) 555-0163",
       "04  PACIFIC TELEPHONE  (311) 555-0100",
       `05  UNKNOWN  ${DEFAULT_WOPR_NUMBER}`,

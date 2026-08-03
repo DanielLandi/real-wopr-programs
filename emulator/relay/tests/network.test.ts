@@ -109,9 +109,9 @@ test("network relay: dialing a claimed line rings the node, and frames cross", a
   const ring = await node.next("RING") as { call: number; address: string };
   assert.equal(ring.address, "2065550142");
   node.send({ t: "ANSWER", call: ring.call });
-  node.send({ t: "FRAME", call: ring.call, data: "GOOSE LAKE UNIFIED SCHOOL DISTRICT" });
+  node.send({ t: "FRAME", call: ring.call, data: "WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET" });
 
-  assert.equal(await caller.waitFor("GOOSE LAKE"), true);
+  assert.equal(await caller.waitFor("SEATTLE PUBLIC SCHOOL"), true);
 
   caller.ws.close(); node.ws.close();
   await relay.close();

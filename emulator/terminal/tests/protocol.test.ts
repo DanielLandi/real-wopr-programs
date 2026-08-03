@@ -49,7 +49,7 @@ test("dialUrl carries the address and the caller", () => {
 
 test("dial: text from the far end arrives in order", async () => {
   const relay = await fakeRelay((ws) => {
-    ws.send(envelope("GOOSE LAKE UNIFIED SCHOOL DISTRICT"));
+    ws.send(envelope("WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET"));
     ws.send(envelope("PASSWORD:"));
   });
   const line = await dial(relay.url, "(206) 555-0142");
@@ -58,7 +58,7 @@ test("dial: text from the far end arrives in order", async () => {
     got.push(chunk);
     if (got.length === 2) break;
   }
-  assert.deepEqual(got, ["GOOSE LAKE UNIFIED SCHOOL DISTRICT", "PASSWORD:"]);
+  assert.deepEqual(got, ["WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET", "PASSWORD:"]);
   line.hangUp();
   await relay.close();
 });

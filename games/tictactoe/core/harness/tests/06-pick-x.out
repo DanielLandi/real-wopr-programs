@@ -1,0 +1,13 @@
+WOPR/1 tictactoe OK
+STATE 3
+MODE ONE-X
+.........
+TURN X
+DISPLAY 5
+ . | . | .
+-----------
+ . | . | .
+-----------
+ . | . | .
+STATUS PLAYING
+END

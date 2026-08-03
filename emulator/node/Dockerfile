@@ -39,7 +39,7 @@ COPY --from=programs /src /opt/wopr/pack
 RUN printf 'SYSTEM/1 airline CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/airline/harness/bin/airline | grep -q PANAMAC
 RUN printf 'SYSTEM/1 school CONNECT\nSTATE 0\nEND\n' \
-      | /opt/wopr/pack/systems/school/harness/bin/school | grep -q 'GOOSE LAKE'
+      | /opt/wopr/pack/systems/school/harness/bin/school | grep -q 'SEATTLE PUBLIC SCHOOL DISTRICT'
 RUN printf 'SYSTEM/1 protovision CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/protovision/harness/bin/protovision | grep -q PROTOVISION
 RUN printf 'SYSTEM/1 pactel CONNECT\nSTATE 0\nEND\n' \

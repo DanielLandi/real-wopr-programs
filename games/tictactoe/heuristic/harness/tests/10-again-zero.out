@@ -1,0 +1,15 @@
+WOPR/1 tictactoe OK
+STATE 3
+TTT-H MODE SELF-2
+XOXXOOOXX
+TURN O
+DISPLAY 7
+ X | O | X
+-----------
+ X | O | O
+-----------
+ O | X | X
+
+STALEMATE.
+STATUS PLAYING
+END

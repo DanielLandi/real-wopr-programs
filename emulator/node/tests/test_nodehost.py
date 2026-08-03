@@ -133,7 +133,7 @@ def test_a_ring_is_answered_and_the_program_greets():
             await relay.wait_frames(2)
 
             assert any(f["t"] == "ANSWER" for f in relay.frames)
-            assert "GOOSE LAKE" in relay.display_text()
+            assert "SEATTLE PUBLIC SCHOOL DISTRICT" in relay.display_text()
             await host.stop()
 
     asyncio.run(flow())

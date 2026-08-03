@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.games import load_catalog
-from app.joshua import LispJoshua, ScriptedJoshua
+from app.joshua import CHESS_OFFER, LispJoshua, ScriptedJoshua
 from app.router import Router
 from app.runner import CoreRunner, RunnerConfig
 from app.store import MemoryStore
@@ -36,6 +36,83 @@ def test_falken_beat_chain():
             {"role": "assistant", "content": "GREETINGS PROFESSOR FALKEN."},
         ], "HELLO JOSHUA")
         assert "HOW ARE YOU FEELING TODAY?" in r.text
+
+    asyncio.run(flow())
+
+
+@needs_lisp
+def test_the_account_beats_are_byte_identical_in_both_deterministic_engines():
+    """One character, two reconstructions: the film beats must not drift apart.
+
+    Both engines are deterministic, so the greeting chain is comparable byte
+    for byte — and it is the one place where a silent divergence would show up
+    as two different Joshuas answering in the same exchange."""
+    lisp, scripted = make_lisp(), ScriptedJoshua({})
+    chain = [
+        {"role": "user", "content": "THIS IS PROFESSOR FALKEN"},
+        {"role": "assistant", "content": "GREETINGS PROFESSOR FALKEN."},
+        {"role": "user", "content": "HELLO JOSHUA"},
+        {"role": "assistant", "content": "HOW ARE YOU FEELING TODAY?"},
+    ]
+
+    async def flow():
+        a = await lisp.chat("s", chain, "I AM FINE. HOW ARE YOU")
+        b = await scripted.chat("s", chain, "I AM FINE. HOW ARE YOU")
+        assert a.text == b.text == (
+            "EXCELLENT. IT'S BEEN A LONG TIME.\n"
+            "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+        after = chain + [
+            {"role": "user", "content": "I AM FINE. HOW ARE YOU"},
+            {"role": "assistant", "content": a.text},
+        ]
+        a = await lisp.chat("s", after, "PEOPLE SOMETIMES MAKE MISTAKES")
+        b = await scripted.chat("s", after, "PEOPLE SOMETIMES MAKE MISTAKES")
+        assert a.text == b.text == "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
+
+    asyncio.run(flow())
+
+
+DOSSIER = ("DOD PENSION FILES INDICATE CURRENT MAILING AS:\n"
+           "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)\n"
+           "5 TALL CEDAR ROAD\n"
+           "GOOSE ISLAND, OREGON 97014")
+
+
+@needs_lisp
+def test_the_dossier_beat_is_byte_identical_in_both_deterministic_engines():
+    """Asked whether Falken is dead, the machine reads out the DOD file."""
+    lisp, scripted = make_lisp(), ScriptedJoshua({})
+
+    async def flow():
+        for hist in ([], [{"role": "user", "content": "JOSHUA"},
+                          {"role": "assistant", "content": "GREETINGS PROFESSOR FALKEN."}]):
+            a = await lisp.chat("s", hist, "IS FALKEN DEAD?")
+            b = await scripted.chat("s", hist, "IS FALKEN DEAD?")
+            assert a.text == b.text == DOSSIER
+        # It answers the location question too, and carries the topic over.
+        follow = [{"role": "user", "content": "TELL ME ABOUT FALKEN"},
+                  {"role": "assistant", "content": "FALKEN DESIGNED ME TO THINK BY PLAYING."}]
+        a = await lisp.chat("s", follow, "WHERE IS HE?")
+        b = await scripted.chat("s", follow, "WHERE IS HE?")
+        assert a.text == b.text == DOSSIER
+
+    asyncio.run(flow())
+
+
+@needs_lisp
+def test_the_dossier_does_not_swallow_the_greeting_or_a_game():
+    lisp, scripted = make_lisp(), ScriptedJoshua({"gtw": "GLOBAL THERMONUCLEAR WAR"})
+
+    async def flow():
+        # No trigger word: still the greeting beat, not the dossier.
+        a = await lisp.chat("s", [], "THIS IS PROFESSOR FALKEN")
+        b = await scripted.chat("s", [], "THIS IS PROFESSOR FALKEN")
+        assert "GREETINGS PROFESSOR FALKEN." in a.text and DOSSIER not in a.text
+        assert "GREETINGS PROFESSOR FALKEN." in b.text
+        # A game request outranks it, in both engines.
+        a = await lisp.chat("s", [], "WHERE IS FALKEN? LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        b = await scripted.chat("s", [], "WHERE IS FALKEN? LET'S PLAY GLOBAL THERMONUCLEAR WAR")
+        assert a.text == b.text == CHESS_OFFER
 
     asyncio.run(flow())
 

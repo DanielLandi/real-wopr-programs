@@ -161,7 +161,7 @@
       "kind": "system",
       "protocol": "SYSTEM/1",
       "language": "basic",
-      "title": "GOOSE LAKE SCHOOL DISTRICT",
+      "title": "SEATTLE SCHOOL DISTRICT",
       "path": "systems/school",
       "binary": "school"
     },
@@ -170,7 +170,7 @@
       "kind": "system",
       "protocol": "SYSTEM/1",
       "language": "basic",
-      "title": "GOOSE LAKE STUDENT RECORDS",
+      "title": "SEATTLE SCHOOL DB",
       "path": "systems/school-db",
       "binary": "school-db"
     },

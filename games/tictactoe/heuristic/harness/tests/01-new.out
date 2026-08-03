@@ -1,13 +1,16 @@
 WOPR/1 tictactoe OK
 STATE 3
-TTT-H
+TTT-H MODE ASK
 .........
 TURN X
-DISPLAY 5
+DISPLAY 8
  . | . | .
 -----------
  . | . | .
 -----------
  . | . | .
+
+ONE OR TWO PLAYERS?
+PLEASE LIST NUMBER OF PLAYERS:
 STATUS PLAYING
 END

@@ -12,7 +12,8 @@ from app.attachment import NORAD_OPS
 from app.games import load_catalog, list_games_text
 from app.joshua import ScriptedJoshua
 from app.rooms import RoomLocks, room_key
-from app.router import Router, LOGON_REJECTION, CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT
+from app.router import (Router, LOGON_REJECTION, HELP_GAMES_DEFINITION,
+                        CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT)
 from app.runner import CoreBusy, CoreRunner, CoreTimeout, RunnerConfig
 from app.store import MemoryStore
 
@@ -84,10 +85,10 @@ def test_commands_are_rejected_until_joshua_backdoor():
     async def flow():
         sid = await new_session(store)
 
-        r = await router.handle(sid, "LIST GAMES")
+        r = await router.handle(sid, "NEW GTW")
         assert r.route == "bridge"
         assert r.text == LOGON_REJECTION
-        assert "GLOBAL THERMONUCLEAR WAR" not in r.text
+        assert (await store.get_active_game(sid)) is None
 
         r = await router.handle(sid, "LET'S PLAY TIC-TAC-TOE")
         assert r.route == "bridge"
@@ -110,8 +111,39 @@ def test_list_games_is_bridge_handled_and_film_ordered():
         await logon_as_joshua(router, sid)
         r = await router.handle(sid, "LIST GAMES")
         assert r.route == "bridge"
-        assert r.text.splitlines()[0] == "FALKEN'S MAZE"
-        assert r.text.splitlines()[-1] == "GLOBAL THERMONUCLEAR WAR"
+        lines = r.text.splitlines()
+        assert lines[0] == "FALKEN'S MAZE"
+        assert lines[-1] == "GLOBAL THERMONUCLEAR WAR"
+        # the film's list holds GTW off on its own, after a blank line
+        assert lines[-2] == ""
+
+    asyncio.run(flow())
+
+
+def test_tictactoe_is_unlisted_but_still_startable():
+    """The film's scrolling list does not recite TIC-TAC-TOE — David types it
+    himself in the finale (#40). Unlisted is not unplayable."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+
+        r = await router.handle(sid, "LIST GAMES")
+        assert "TIC-TAC-TOE" not in r.text
+        # the rest of the recitation is untouched
+        assert "FALKEN'S MAZE" in r.text
+        assert "THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE" in r.text
+
+        # naming the slot directly still opens its door...
+        r = await router.handle(sid, "LIST TIC-TAC-TOE")
+        assert r.route == "bridge"
+        assert r.text.splitlines()[0] == "TIC-TAC-TOE"
+
+        # ...and starting it still works
+        r = await router.handle(sid, "NEW TICTACTOE")
+        assert (await store.get_active_game(sid)) is not None
 
     asyncio.run(flow())
 
@@ -148,7 +180,8 @@ def test_logon_is_rejected_by_the_bridge():
 
 
 def test_joshua_backdoor_and_film_beat_order():
-    """fidelity-notes.md §1: JOSHUA -> GREETINGS -> HOW ARE YOU FEELING TODAY?"""
+    """The film's greeting chain, whole: GREETINGS -> HOW ARE YOU FEELING
+    TODAY? -> EXCELLENT + the 6/23/73 account question -> YES THEY DO."""
     store = MemoryStore()
     router = make_router(store)
 
@@ -160,12 +193,81 @@ def test_joshua_backdoor_and_film_beat_order():
         r = await router.handle(sid, "HELLO. ARE YOU STILL THERE?")
         assert "HOW ARE YOU FEELING TODAY?" in r.text
         r = await router.handle(sid, "I'M FINE. HOW ARE YOU?")
-        assert "SHALL WE PLAY A GAME?" in r.text
+        assert r.text == ("EXCELLENT. IT'S BEEN A LONG TIME.\n"
+                          "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+        r = await router.handle(sid, "PEOPLE SOMETIMES MAKE MISTAKES.")
+        assert r.text == "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
 
     asyncio.run(flow())
 
 
-def test_help_is_not_available_but_help_games_is():
+@needs_core
+def test_the_nowin_verdict_reaches_the_teletype_in_three_lines():
+    """The wire RESULT stays one sentence; only the rendering breaks it up —
+    the film puts A STRANGE GAME. on its own line and splits the rest."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+        await router.handle(sid, "NEW TICTACTOE")
+        last = await router.handle(sid, "0")          # 0 players = self-play
+        for _ in range(12):
+            if (await store.get_active_game(sid)) is None:
+                break
+            last = await router.handle(sid, "OBSERVE")
+        assert store.games[sid].status == "NO-WIN"
+        assert last.text.endswith("A STRANGE GAME.\n"
+                                  "THE ONLY WINNING MOVE IS\n"
+                                  "NOT TO PLAY.")
+        assert "THE ONLY WINNING MOVE IS NOT TO PLAY." not in last.text
+        # The wire is untouched: the game still reports one canonical line.
+        assert store.games[sid].status == "NO-WIN"
+
+    asyncio.run(flow())
+
+
+def test_asking_after_falken_reads_out_the_dod_dossier():
+    """The film's pension-file gag: Robert Hume, Goose Island, Oregon."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+        r = await router.handle(sid, "IS FALKEN DEAD?")
+        assert r.route == "joshua"
+        assert r.text == ("DOD PENSION FILES INDICATE CURRENT MAILING AS:\n"
+                          "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)\n"
+                          "5 TALL CEDAR ROAD\n"
+                          "GOOSE ISLAND, OREGON 97014")
+        assert len(r.text.splitlines()) == 4
+        assert max(len(line) for line in r.text.splitlines()) <= 60
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_account_question_yields_to_an_explicit_game_request():
+    """The chain never traps a player: asking for a game still starts one."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await router.handle(sid, "JOSHUA")
+        await router.handle(sid, "HELLO.")
+        r = await router.handle(sid, "I'M FINE.")
+        assert "6/23/73" in r.text
+        await router.handle(sid, "LET'S PLAY TIC-TAC-TOE")
+        assert (await store.get_active_game(sid)) is not None
+
+    asyncio.run(flow())
+
+
+def test_help_is_not_available_but_help_games_is_defined():
+    """The film: HELP GAMES answers with a definition, on both sides of the door."""
     store = MemoryStore()
     router = make_router(store)
 
@@ -173,9 +275,50 @@ def test_help_is_not_available_but_help_games_is():
         sid = await new_session(store)
         assert (await router.handle(sid, "HELP")).text == "HELP NOT AVAILABLE"
         assert (await router.handle(sid, "HELP LOGON")).text == "HELP NOT AVAILABLE"
-        assert (await router.handle(sid, "HELP GAMES")).text == LOGON_REJECTION
+        assert (await router.handle(sid, "HELP GAMES")).text == HELP_GAMES_DEFINITION
+        assert "'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES" in HELP_GAMES_DEFINITION
+        assert "WHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS." in HELP_GAMES_DEFINITION
         await logon_as_joshua(router, sid)
-        assert "GLOBAL THERMONUCLEAR WAR" in (await router.handle(sid, "HELP GAMES")).text
+        # Post-auth it stops aliasing LIST GAMES: a definition, not a catalog.
+        r = await router.handle(sid, "HELP GAMES")
+        assert r.text == HELP_GAMES_DEFINITION
+        assert "GLOBAL THERMONUCLEAR WAR" not in r.text
+        assert "GLOBAL THERMONUCLEAR WAR" in (await router.handle(sid, "LIST GAMES")).text
+
+    asyncio.run(flow())
+
+
+def test_the_front_door_lists_and_defines_games_before_logon():
+    """David reads the catalog and the definition before he is ever admitted."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        r = await router.handle(sid, "LIST GAMES")
+        assert r.route == "bridge"
+        assert "FALKEN'S MAZE" in r.text and "GLOBAL THERMONUCLEAR WAR" in r.text
+        assert r.text == list_games_text(load_catalog(GAMES_DIR))
+        assert router.is_authenticated(sid) is False
+        assert (await router.handle(sid, "HELP GAMES")).text == HELP_GAMES_DEFINITION
+        assert router.is_authenticated(sid) is False
+
+    asyncio.run(flow())
+
+
+def test_the_rejection_keeps_the_films_own_misspelling():
+    """INDENTIFICATION (sic) is what the film's screen reads — 3 sources."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        assert LOGON_REJECTION == ("INDENTIFICATION NOT RECOGNIZED BY SYSTEM"
+                                   "\n--CONNECTION TERMINATED--")
+        assert "IDENTIFICATION NOT RECOGNIZED" not in LOGON_REJECTION
+        r = await router.handle(sid, "LOGON DAVID")
+        assert "INDENTIFICATION NOT RECOGNIZED BY SYSTEM" in r.text
+        assert "--CONNECTION TERMINATED--" in r.text
 
     asyncio.run(flow())
 
@@ -257,13 +400,19 @@ def test_full_game_flow_move_routes_to_core_and_wopr_replies():
         started = await router.handle(sid, "NEW tictactoe")
         assert started.route == "bridge"
         assert (await store.get_active_game(sid)) is not None
+        assert "ONE OR TWO PLAYERS?" in started.text
+
+        # The film's finale order: number of players, then side, then a cell.
+        assert "X OR O?" in (await router.handle(sid, "1")).text
+        await router.handle(sid, "X")
 
         r = await router.handle(sid, "5")
         assert r.route == "core"
-        # WOPR played its own move after the human's: board shows an O reply
-        # and the turn is back with the human (X).
+        # WOPR played its own move inside the human's move — the game is
+        # self-resolving now, so there is no second frame.
         game = store.games[sid]
-        board, turn_line = game.state.splitlines()
+        mode_line, board, turn_line = game.state.splitlines()
+        assert mode_line == "MODE ONE-X"
         assert board.count("X") == 1 and board.count("O") == 1
         assert turn_line == "TURN X"
         assert game.status == "PLAYING"
@@ -389,6 +538,9 @@ def test_room_terminals_share_one_game(router_with_memory_store):
         await router.handle(sa.id, "NEW tictactoe")
         joined = await router.handle(sb.id, "NEW tictactoe")
         assert joined.detail.get("attached") is True
+        # A answers the game's opening questions; B then plays a cell into it.
+        await router.handle(sa.id, "1")
+        await router.handle(sa.id, "X")
         before = await store.get_latest_game("tictactoe", room.code)
         moved = await router.handle(sb.id, "5")
         assert moved.route == "core"
@@ -423,7 +575,8 @@ def test_room_terminals_share_one_game_no_longer_without_joining(router_with_mem
         after = await store.get_latest_game("tictactoe", room.code)
         assert after.turn == before_turn  # A's game did not move
         assert after.state == before_state
-        assert after.state.splitlines()[0] == "........."  # board still empty
+        # STATE is MODE / board / TURN — still on the opening question.
+        assert after.state.splitlines()[:2] == ["MODE ASK", "........."]
 
     asyncio.run(flow())
 

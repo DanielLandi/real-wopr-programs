@@ -32,7 +32,7 @@ export const DIAL_SYSTEMS: DialSystem[] = [
   {
     kind: "system",
     id: "sys-school",
-    name: "GOOSE LAKE SCHOOL DISTRICT",
+    name: "SEATTLE SCHOOL DISTRICT",
     number: "(206) 555-0142",
     systemId: "school",
   },

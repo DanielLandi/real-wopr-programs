@@ -1,0 +1,14 @@
+WOPR/1 tictactoe OK
+STATE 3
+TTT-H MODE ONE-X
+XX.OOOX..
+TURN X
+DISPLAY 5
+ X | X | .
+-----------
+ O | O | O
+-----------
+ X | . | .
+STATUS LOSS
+RESULT O WINS
+END

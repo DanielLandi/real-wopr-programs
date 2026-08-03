@@ -1,0 +1,7 @@
+WOPR/1 tictactoe MOVE
+STATE 3
+TTT-H MODE ASK
+.........
+TURN X
+INPUT 0
+END

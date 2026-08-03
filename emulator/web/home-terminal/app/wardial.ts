@@ -33,9 +33,12 @@ const MISSES: ReadonlyArray<{ number: string; status: SweepStatus }> = [
 ];
 
 /** The unknown discovery: WOPR, dialed as an unlabeled carrier. target=null
- *  routes to dial(null) (the default bridge / (311) 767-8524). */
+ *  routes to dial(null) (the default bridge / (311) 399-2364 — 399 is one of
+ *  the four Sunnyvale prefixes the operator reads out in the film; fidelity
+ *  audit 2026-08-03, real-wopr#161). Kept in step with console.ts's
+ *  DEFAULT_WOPR_NUMBER (a value, not an import: this module is data-only). */
 const UNKNOWN: SweepEntry = {
-  number: "(311) 767-8524",
+  number: "(311) 399-2364",
   status: "CARRIER",
   hit: { label: "??? NO ANSWERBACK", target: null },
 };
@@ -58,4 +61,27 @@ export function buildSweep(systems: DialSystem[]): SweepEntry[] {
   }
   out.push({ ...UNKNOWN });
   return out;
+}
+
+/** The film's own results header, printed over David's sweep results
+ *  (fidelity audit 2026-08-03, real-wopr#161). */
+export const RESULTS_HEADER = "NUMBERS FOR WHICH CARRIER TONES WERE DETECTED";
+
+/** The reviewable hit list the sweep leaves behind: the completion line, the
+ *  film's results header, the numbered carriers, and the DIAL hint. Pure, so
+ *  the page just prints what this returns. */
+export function hitListText(carriers: SweepEntry[]): string {
+  const lines = [
+    "",
+    `SCAN COMPLETE - ${carriers.length} CARRIERS FOUND`,
+    "",
+    RESULTS_HEADER,
+    "",
+  ];
+  carriers.forEach((e, idx) => {
+    const label = e.hit?.target ? e.hit.target.name : "??? UNKNOWN SYSTEM";
+    lines.push(`${String(idx + 1).padStart(2, "0")}  ${e.number}  ${label}  [${e.hit?.label}]`);
+  });
+  lines.push("", "DIAL <NN> TO CONNECT TO A CARRIER", "");
+  return lines.join("\n");
 }

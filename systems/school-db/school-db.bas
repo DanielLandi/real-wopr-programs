@@ -1,4 +1,4 @@
-10 REM GOOSE LAKE UNIFIED SCHOOL DISTRICT - SYSTEM/1 school-db
+10 REM SEATTLE PUBLIC SCHOOL DISTRICT - SYSTEM/1 school-db
 20 REM The district's student records, held apart from the administrative
 30 REM datanet that reads them. The school calls this program over the
 40 REM local bus; no subscriber line reaches it. Stateless per invocation:
@@ -50,7 +50,7 @@
 3020 PRINT "SYSTEM/1 school-db OK"
 3030 GOSUB 7500
 3040 PRINT "DISPLAY 2"
-3050 PRINT "GOOSE LAKE STUDENT RECORDS"
+3050 PRINT "SEATTLE PUBLIC SCHOOLS STUDENT RECORDS"
 3060 PRINT "READY"
 3070 PRINT "LINE UP"
 3080 PRINT "END"

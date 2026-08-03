@@ -145,7 +145,11 @@ def test_gtw_full_flow_the_films_play():
         assert final.status == "NO-WIN"
         assert "GABON REBELLION" in last.text          # the montage ran
         assert "WINNER: NONE" in last.text
-        assert "THE ONLY WINNING MOVE IS NOT TO PLAY." in last.text
+        # The verdict reaches the teletype in the film's three-line break —
+        # the wire RESULT is still the single canonical sentence.
+        assert ("A STRANGE GAME.\nTHE ONLY WINNING MOVE IS\nNOT TO PLAY."
+                in last.text)
+        assert "THE ONLY WINNING MOVE IS NOT TO PLAY." not in last.text
         assert "HOW ABOUT A NICE GAME OF CHESS?" in last.text
 
     asyncio.run(flow())

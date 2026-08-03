@@ -10,7 +10,7 @@ import {
 
 test("awaitingAccessCode: true only when the prompt is the last line", () => {
   assert.equal(awaitingAccessCode("WOPR> LOGON NORAD-3\nACCESS CODE:\n"), true);
-  assert.equal(awaitingAccessCode("ACCESS CODE:\nIDENTIFICATION NOT RECOGNIZED BY SYSTEM\n"), false);
+  assert.equal(awaitingAccessCode("ACCESS CODE:\nINDENTIFICATION NOT RECOGNIZED BY SYSTEM\n"), false);
   assert.equal(awaitingAccessCode(""), false);
   assert.equal(ACCESS_CODE_PROMPT, "ACCESS CODE:");
 });
