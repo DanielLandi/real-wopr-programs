@@ -215,6 +215,58 @@ test("trunk hub: TRUNK_RESERVED_WORLDS and TRUNK_RESERVE_KEY configure the hub",
   }
 });
 
+test("trunk hub: an empty reserve key unlocks nothing, whichever path set it", { timeout: 5000 }, async () => {
+  // A misconfigured key ("" from an unset shell variable, a compose default
+  // that expanded to nothing) must fail CLOSED. The codec accepts `key: ""`
+  // (length 0), so without the guard a one-line REGISTER would own world 1.
+  // opts, not env: the env read's `|| undefined` cannot cover this path.
+  const server = await startServer({ port: 0, trunk: { reserveKey: "" } });
+  const wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const h = await connect(`${wsBase}/trunk`);
+    h.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PRETENDER", region: "NOWHERE US", joshua: "period", world: 1, slot: "WOPR", key: "" }));
+    assert.equal((await nextClose(h)).code, 4462);
+  } finally { await server.close(); }
+});
+
+test("trunk hub: an empty TRUNK_RESERVED_WORLDS reads as unset, not as an open board", { timeout: 5000 }, async () => {
+  // `TRUNK_RESERVED_WORLDS=` is what an unset variable expands to in a .env or
+  // a compose file. Reading that as "reserve nothing" would silently hand the
+  // flagship's world to the next caller — the wrong direction to fail.
+  const before = process.env.TRUNK_RESERVED_WORLDS;
+  process.env.TRUNK_RESERVED_WORLDS = "   ";
+  const server = await startServer({ port: 0 });
+  const wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const h = await connect(`${wsBase}/trunk`);
+    h.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PRETENDER", region: "NOWHERE US", joshua: "period", world: 1, slot: "WOPR" }));
+    assert.equal((await nextClose(h)).code, 4462);
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_RESERVED_WORLDS;
+    else process.env.TRUNK_RESERVED_WORLDS = before;
+    await server.close();
+  }
+});
+
+test("trunk hub: a deliberate TRUNK_RESERVED_WORLDS opt-out still opens the board", { timeout: 5000 }, async () => {
+  // Typed something, meant something: a value with tokens but no usable world
+  // number is an operator saying "reserve nothing", distinct from an empty
+  // value they never set.
+  const before = process.env.TRUNK_RESERVED_WORLDS;
+  process.env.TRUNK_RESERVED_WORLDS = "none";
+  const server = await startServer({ port: 0 });
+  const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const a = await registerHost(base, wsBase, { world: 1, slot: "WOPR" });
+    assert.equal(a.world, 1);
+    a.host.close();
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_RESERVED_WORLDS;
+    else process.env.TRUNK_RESERVED_WORLDS = before;
+    await server.close();
+  }
+});
+
 test("trunk hub: opts.trunk.reservedWorlds beats TRUNK_RESERVED_WORLDS", { timeout: 5000 }, async () => {
   const before = process.env.TRUNK_RESERVED_WORLDS;
   process.env.TRUNK_RESERVED_WORLDS = "1";

@@ -60,11 +60,17 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   const defaultMaxWorlds = Number.isInteger(envMaxWorlds) && envMaxWorlds >= 1 ? envMaxWorlds : 8;
   // TRUNK_RESERVED_WORLDS is a comma list, vetted token by token the same way
   // TRUNK_MAX_WORLDS is: a token that is not a whole number >= 1 is dropped
-  // rather than reserving world NaN. Unset means the documented default (world
-  // 1, the flagship's); set-but-with-nothing-usable means an open board, which
-  // is the only way an operator can say "reserve nothing".
+  // rather than reserving world NaN.
+  //
+  // Unset — or empty/whitespace, which is exactly what an unset variable
+  // expands to in a .env or a compose file — means the documented default:
+  // world 1, the flagship's. Reading a blank value as "reserve nothing" would
+  // silently open the flagship's world, which is the wrong way to fail.
+  // Opting out stays possible, it just has to be typed on purpose: a value
+  // with tokens but no usable world number (`TRUNK_RESERVED_WORLDS=none`)
+  // reserves nothing.
   const envReserved = process.env.TRUNK_RESERVED_WORLDS;
-  const defaultReservedWorlds = envReserved === undefined
+  const defaultReservedWorlds = envReserved === undefined || envReserved.trim() === ""
     ? [1]
     : envReserved.split(",").map((t) => Number(t.trim()))
         .filter((n) => Number.isInteger(n) && n >= 1);
@@ -72,8 +78,9 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     ...opts.trunk,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
     reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
-    // An empty TRUNK_RESERVE_KEY is no key at all: treating "" as a real key
-    // would mean a REGISTER that simply omits `key` unlocks the world.
+    // `|| undefined` so an empty TRUNK_RESERVE_KEY does not shadow an
+    // opts-supplied key. The invariant that an empty key unlocks nothing lives
+    // in the Switchboard, which covers this path and the opts path alike.
     reserveKey: opts.trunk?.reserveKey ?? (process.env.TRUNK_RESERVE_KEY || undefined),
   });
 

@@ -137,7 +137,7 @@ export class Switchboard {
     this.maxExchanges = opts.maxExchanges ?? 32;
     this.maxChannels = opts.maxChannels ?? 16;
     this.maxWorlds = opts.maxWorlds ?? 8;
-    // World 1 is the flagship's by default. With no reserveKey configured
+    // World 1 is the flagship's by default. With no usable reserveKey
     // NOTHING unlocks it: a hub that has not been told the key holds the world
     // closed rather than handing it to the first caller who guesses.
     this.reservedWorlds = opts.reservedWorlds ?? [1];
@@ -151,7 +151,12 @@ export class Switchboard {
       { world: number; slot: string } | "no-circuits" | "slot-taken" | "world-reserved" {
     // One comparison decides the whole placement: with the hub's key the
     // reserved worlds behave like any other, without it they do not exist.
-    const unlocked = this.reserveKey !== undefined && req.key === this.reserveKey;
+    // `!!this.reserveKey`, not `!== undefined`: an empty key is a
+    // misconfiguration (an unset variable expanded into the config), and the
+    // codec accepts `key: ""` on the wire (length 0), so honoring "" would
+    // hand every reserved world to a one-line REGISTER. This is the invariant
+    // for BOTH configuration paths — env and opts — not just the env read.
+    const unlocked = !!this.reserveKey && req.key === this.reserveKey;
     const reserved = (w: number) => !unlocked && this.reservedWorlds.includes(w);
     const occ = new Map<number, Set<string>>();
     for (const ex of this.exchanges.values()) {

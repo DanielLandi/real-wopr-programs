@@ -143,3 +143,15 @@ test("any world can be reserved, not just world 1", () => {
   assert.equal(place(sb, { slot: "WOPR" }).world, 3);
   assert.equal(sb.register(fakePort(), reg({ world: 2, slot: "WOPR" })), "world-reserved");
 });
+
+test("an empty reserve key is no key at all — it must not unlock anything", () => {
+  // A misconfigured hub (TIELINE-side "" plumbed through, an env var expanded
+  // to nothing) must fail CLOSED: with reserveKey "" the world stays reserved,
+  // and a REGISTER carrying key "" — which the codec accepts, length 0 — is
+  // refused like any other unkeyed caller.
+  const sb = new Switchboard({ reserveKey: "" });
+  assert.equal(sb.register(fakePort(), reg({ key: "", world: 1, slot: "WOPR" })), "world-reserved");
+  assert.equal(sb.register(fakePort(), reg({ world: 1, slot: "WOPR" })), "world-reserved");
+  // And the auto path still skips the reserved world for a key: "" caller.
+  assert.equal(place(sb, { key: "", slot: "WOPR" }).world, 2);
+});
