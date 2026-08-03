@@ -13,7 +13,8 @@ import { configFromEnv, resolveLink, type CommsConfig } from "./config.ts";
 import { decodeEnvelope, encodeEnvelope, type Envelope } from "./envelope.ts";
 import { LinkShaper } from "./shaper.ts";
 import { runHandshake, type HandshakeOpts } from "./handshake.ts";
-import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES } from "./trunk.ts";
+import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
+         type LocalSlot } from "./trunk.ts";
 
 export interface ServerOpts {
   port?: number;
@@ -28,6 +29,7 @@ export interface ServerOpts {
     maxWorlds?: number;
     reservedWorlds?: number[];
     reserveKey?: string;
+    localWorld?: LocalSlot[];
     pingIntervalMs?: number;
     relayPingMs?: number;
     registerTimeoutMs?: number;
@@ -74,10 +76,29 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     ? [1]
     : envReserved.split(",").map((t) => Number(t.trim()))
         .filter((n) => Number.isInteger(n) && n >= 1);
+  // TRUNK_LOCAL_WORLD is the hub's own world-1 manifest: a JSON array of
+  // LocalSlot. Two failure modes, two behaviours, on purpose. Unparseable or
+  // not an array = a truncated/garbled value: say so once on stderr and seed
+  // NOTHING, because a broken manifest must neither take the hub down nor
+  // half-seed the board. Parseable but invalid (a bad slot, a duplicate) is a
+  // deploy error the operator typed: the Switchboard ctor throws and startup
+  // fails, rather than serving a directory nobody wrote.
+  let envLocalWorld: LocalSlot[] | undefined;
+  const rawLocalWorld = process.env.TRUNK_LOCAL_WORLD;
+  if (rawLocalWorld !== undefined && rawLocalWorld.trim() !== "") {
+    try {
+      const parsed: unknown = JSON.parse(rawLocalWorld);
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      envLocalWorld = parsed as LocalSlot[];
+    } catch {
+      console.error("trunk: ignoring malformed TRUNK_LOCAL_WORLD");
+    }
+  }
   const switchboard = new Switchboard({
     ...opts.trunk,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
     reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
+    localWorld: opts.trunk?.localWorld ?? envLocalWorld,
     // `|| undefined` so an empty TRUNK_RESERVE_KEY does not shadow an
     // opts-supplied key. The invariant that an empty key unlocks nothing lives
     // in the Switchboard, which covers this path and the opts path alike.

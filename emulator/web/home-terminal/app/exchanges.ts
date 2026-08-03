@@ -29,6 +29,11 @@ export interface Exchange {
   operator?: string;    // GitHub handle
   world?: number;       // trunk world this exchange was placed in
   slot?: string;        // its role in that world (WOPR, SCHOOL, PANAM, ...)
+  /** Bridge system id (`POST /api/session { system }`), on an entry whose slot
+   *  is a period system rather than a Joshua line. The hub sets it on the
+   *  slots it seeds into world 1; dialling such an entry opens a system
+   *  session instead of a WOPR one. */
+  system?: string;
 }
 
 interface PhonebookConfig {
@@ -48,15 +53,26 @@ const PHONEBOOK_URL = process.env.NEXT_PUBLIC_PHONEBOOK_URL ?? "../phonebook.jso
  *  Supabase schema CHECKs its rows (0002_exchanges.sql): api must be https:,
  *  link must be wss:. A hostile trunk registrant or malformed directory
  *  response must not be able to make the terminal dial a downgraded
- *  http:/ws: endpoint. */
+ *  http:/ws: endpoint.
+ *
+ *  `system` is the one field that is repaired rather than fatal: it only
+ *  decides which KIND of session a dial mints, so a malformed one costs the
+ *  entry its system tag (it dials as an ordinary WOPR line) instead of costing
+ *  the caller a dialable exchange. */
 export function valid(list: unknown): Exchange[] {
   if (!Array.isArray(list)) return [];
-  return list.filter(
-    (e): e is Exchange =>
-      !!e && typeof e.name === "string" && typeof e.region === "string" &&
-      typeof e.api === "string" && e.api.startsWith("https://") &&
-      typeof e.link === "string" && e.link.startsWith("wss://"),
-  );
+  return list
+    .filter(
+      (e): e is Exchange =>
+        !!e && typeof e.name === "string" && typeof e.region === "string" &&
+        typeof e.api === "string" && e.api.startsWith("https://") &&
+        typeof e.link === "string" && e.link.startsWith("wss://"),
+    )
+    .map((e) => {
+      if (e.system === undefined || typeof e.system === "string") return e;
+      const { system: _bad, ...rest } = e;
+      return rest;
+    });
 }
 
 /** Live entries from the comms hub's trunk directory (`GET /trunk/directory`

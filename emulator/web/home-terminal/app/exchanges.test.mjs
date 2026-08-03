@@ -49,6 +49,21 @@ test("valid filters hostile entries out of a mixed directory, keeping good ones"
   assert.deepEqual(valid([GOOD, evil]), [GOOD]);
 });
 
+test("valid keeps a bridge system id on a seeded period-system entry", () => {
+  // A hub-seeded slot that is a period system (the school's BASIC-PLUS box,
+  // PAN AM's COBOL reservations) names the bridge id its session needs.
+  const school = { ...GOOD, id: "local-school", system: "school" };
+  assert.deepEqual(valid([school]), [school]);
+});
+
+test("valid strips a non-string system rather than dropping the whole entry", () => {
+  // The system id is an optional routing hint, not a safety boundary: a
+  // malformed one must not cost the caller a dialable exchange — it just
+  // dials as an ordinary WOPR line.
+  assert.deepEqual(valid([{ ...GOOD, system: 7 }]), [GOOD]);
+  assert.deepEqual(valid([{ ...GOOD, system: { evil: true } }]), [GOOD]);
+});
+
 // ---- loadExchanges: Supabase-mode load ------------------------------------
 
 const TRUNK_GOOD = {

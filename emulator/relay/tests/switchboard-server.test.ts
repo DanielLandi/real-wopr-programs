@@ -283,6 +283,102 @@ test("trunk hub: opts.trunk.reservedWorlds beats TRUNK_RESERVED_WORLDS", { timeo
   }
 });
 
+// ---- world 1 self-seeding ---------------------------------------------------
+
+const SEEDS = [
+  { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR" },
+  { slot: "SCHOOL", name: "SUNNYVALE SCHOOL DIST", region: "SUNNYVALE CA", system: "school" },
+];
+
+test("trunk hub: opts.trunk.localWorld seeds world 1 with direct-dial entries", async () => {
+  const publicBase = "https://hub.example";
+  const server = await startServer({ port: 0, publicBase, trunk: { localWorld: SEEDS } });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
+    assert.deepEqual(dir.worlds.map((w: { n: number }) => w.n), [1]);
+    assert.equal(dir.worlds[0].reserved, true);
+    assert.deepEqual(dir.worlds[0].slots.map((s: { id: string }) => s.id),
+                     ["local-wopr", "local-school"]);
+    // Straight at the public base: no /x/<CODE>, because the flagship is not
+    // on the other end of a trunk.
+    assert.equal(dir.worlds[0].slots[0].api, publicBase);
+    assert.equal(dir.worlds[0].slots[0].link, "wss://hub.example/link");
+    assert.equal(dir.worlds[0].slots[1].system, "school");
+  } finally { await server.close(); }
+});
+
+test("trunk hub: TRUNK_LOCAL_WORLD seeds world 1, and a registrant still lands world 2", { timeout: 5000 }, async () => {
+  const before = process.env.TRUNK_LOCAL_WORLD;
+  process.env.TRUNK_LOCAL_WORLD = JSON.stringify(SEEDS);
+  const server = await startServer({ port: 0, publicBase: "https://hub.example" });
+  const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const a = await registerHost(base, wsBase, { slot: "WOPR" });
+    assert.deepEqual([a.world, a.slot], [2, "WOPR"], "world 1 is seeded AND reserved");
+    const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
+    assert.deepEqual(dir.worlds[0].slots.map((s: { id: string }) => s.id),
+                     ["local-wopr", "local-school"]);
+    assert.deepEqual(dir.worlds[1].slots.map((s: { id: string }) => s.id),
+                     [`trunk-${a.code.toLowerCase()}`]);
+    a.host.close();
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_LOCAL_WORLD;
+    else process.env.TRUNK_LOCAL_WORLD = before;
+    await server.close();
+  }
+});
+
+test("trunk hub: a malformed TRUNK_LOCAL_WORLD is logged and seeds nothing — the hub still starts", async () => {
+  const before = process.env.TRUNK_LOCAL_WORLD;
+  const realError = console.error;
+  const logged: string[] = [];
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  // Truncated JSON: a half-written manifest must not half-seed the board, and
+  // must not take the hub down either — the rest of the switchboard is fine.
+  process.env.TRUNK_LOCAL_WORLD = "{nope";
+  let server;
+  try {
+    server = await startServer({ port: 0 });
+    const dir = JSON.parse((await httpJson("GET", `http://127.0.0.1:${server.port}/trunk/directory`)).body);
+    assert.deepEqual(dir, { worlds: [{ n: 1, reserved: true, slots: [] }] });
+    assert.deepEqual(logged, ["trunk: ignoring malformed TRUNK_LOCAL_WORLD"]);
+  } finally {
+    console.error = realError;
+    if (before === undefined) delete process.env.TRUNK_LOCAL_WORLD;
+    else process.env.TRUNK_LOCAL_WORLD = before;
+    await server?.close();
+  }
+});
+
+test("trunk hub: a well-formed but invalid TRUNK_LOCAL_WORLD fails startup outright", async () => {
+  // Parseable JSON naming an illegal slot is a deploy error, not a transient:
+  // the operator wrote a manifest and got it wrong, and a hub that quietly
+  // dropped the entry would serve a directory nobody asked for.
+  const before = process.env.TRUNK_LOCAL_WORLD;
+  process.env.TRUNK_LOCAL_WORLD = JSON.stringify([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]);
+  try {
+    await assert.rejects(() => startServer({ port: 0 }), /HOME/);
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_LOCAL_WORLD;
+    else process.env.TRUNK_LOCAL_WORLD = before;
+  }
+});
+
+test("trunk hub: opts.trunk.localWorld beats TRUNK_LOCAL_WORLD", async () => {
+  const before = process.env.TRUNK_LOCAL_WORLD;
+  process.env.TRUNK_LOCAL_WORLD = JSON.stringify([{ slot: "PANAM", name: "PAN AM", region: "NEW YORK US" }]);
+  const server = await startServer({ port: 0, trunk: { localWorld: [SEEDS[0]] } });
+  try {
+    const dir = JSON.parse((await httpJson("GET", `http://127.0.0.1:${server.port}/trunk/directory`)).body);
+    assert.deepEqual(dir.worlds[0].slots.map((s: { id: string }) => s.id), ["local-wopr"]);
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_LOCAL_WORLD;
+    else process.env.TRUNK_LOCAL_WORLD = before;
+    await server.close();
+  }
+});
+
 // Timeout, both env tests below: on regression the hub ACCEPTS the REGISTER
 // instead of refusing it, so `nextClose` never settles and the test would hang
 // forever rather than fail. The bound turns a regression into a red test.

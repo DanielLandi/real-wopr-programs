@@ -241,6 +241,24 @@ test("sessionBody does not vet the processor name — the exchange owns that lis
   assert.equal(sessionBody("home-terminal", undefined, null, "nonsense").joshua, "nonsense");
 });
 
+test("a seeded directory entry's system id opens a system session, not a WOPR one", () => {
+  // World 1 is seeded by the hub, so a period-system slot arrives as an
+  // ordinary directory entry carrying a bridge `system` id. Dialling it is the
+  // system path: no room, no joshua — the same body a local SYSTEM/1 number
+  // would mint (page.tsx passes `entry.system ?? null` here).
+  const entry = { system: "school" };
+  assert.deepEqual(sessionBody("home-terminal", "UXBB6B", entry.system ?? null, "claude"), {
+    surface: "home-terminal",
+    system: "school",
+  });
+  // The same call for a Joshua slot (no system id) is unchanged.
+  assert.deepEqual(sessionBody("home-terminal", "UXBB6B", {}.system ?? null, "claude"), {
+    surface: "home-terminal",
+    room_code: "UXBB6B",
+    joshua: "claude",
+  });
+});
+
 test("directoryText groups world-tagged exchanges under WORLD headings", () => {
   const exchanges = [
     { id: "a", name: "CHEYENNE EXCH", region: "SAO PAULO BR", api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "WOPR" },

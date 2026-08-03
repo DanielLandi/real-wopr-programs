@@ -7,7 +7,7 @@
 // semantics; the reservation rules get their own cases at the bottom.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Switchboard, type TrunkFrame } from "../src/trunk.ts";
+import { Switchboard, type LocalSlot, type TrunkFrame } from "../src/trunk.ts";
 
 const fakePort = () => ({ sent: [] as string[], send(d: string) { this.sent.push(d); }, close() {} });
 const reg = (extra: Partial<Extract<TrunkFrame, { t: "REGISTER" }>> = {}) =>
@@ -154,4 +154,108 @@ test("an empty reserve key is no key at all — it must not unlock anything", ()
   assert.equal(sb.register(fakePort(), reg({ world: 1, slot: "WOPR" })), "world-reserved");
   // And the auto path still skips the reserved world for a key: "" caller.
   assert.equal(place(sb, { key: "", slot: "WOPR" }).world, 2);
+});
+
+// ---- world 1 self-seeds -----------------------------------------------------
+// The flagship never dials its own hub. World 1 is SYNTHESIZED at startup from
+// a local manifest: every entry points straight at the hub's public base (no
+// /x/<CODE> trunk hop, because there is no trunk), and a period system carries
+// the bridge `system` id the terminal needs to open a system session.
+
+const SEEDS: LocalSlot[] = [
+  { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR" },
+  { slot: "SCHOOL", name: "SUNNYVALE SCHOOL DIST", region: "SUNNYVALE CA", system: "school" },
+];
+
+test("world 1 seeds from the local manifest: direct-dial entries, system tag where set", () => {
+  const sb = new Switchboard({ localWorld: SEEDS });
+  const dir = sb.directory("http://hub");
+  assert.deepEqual(dir.map((w) => w.n), [1]);
+  // Still the flagship's world: seeding it does not open it to registrants.
+  assert.equal(dir[0].reserved, true);
+  assert.deepEqual(dir[0].slots, [
+    {
+      id: "local-wopr", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR",
+      api: "http://hub", link: "ws://hub/link", joshua: "period",
+      operator: undefined, online: true, world: 1, slot: "WOPR",
+    },
+    {
+      id: "local-school", name: "SUNNYVALE SCHOOL DIST", region: "SUNNYVALE CA",
+      api: "http://hub", link: "ws://hub/link", joshua: "period",
+      operator: undefined, online: true, world: 1, slot: "SCHOOL", system: "school",
+    },
+  ]);
+  // `system` is present only where the manifest set one — an absent key, not
+  // an undefined value, so a surface that round-trips the JSON sees the same
+  // document the hub built.
+  assert.equal("system" in dir[0].slots[0], false);
+});
+
+test("a seed's joshua defaults to period and can be named per slot", () => {
+  const sb = new Switchboard({
+    localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", joshua: "claude" }],
+  });
+  assert.equal(sb.directory("http://hub")[0].slots[0].joshua, "claude");
+});
+
+test("seeds and live keyed entries merge into one roster-ordered world 1", () => {
+  const sb = new Switchboard({ reserveKey: "K", localWorld: SEEDS });
+  place(sb, { key: "K", world: 1, slot: "PANAM" });
+  const slots = sb.directory("http://hub")[0].slots;
+  assert.deepEqual(slots.map((e) => e.slot), ["WOPR", "SCHOOL", "PANAM"]);
+  assert.equal(slots[2].api.startsWith("http://hub/x/"), true, "a real trunk entry still relays");
+});
+
+test("a seeded slot is occupied: even the hub's own key cannot claim it", () => {
+  const sb = new Switchboard({ reserveKey: "K", localWorld: SEEDS });
+  // Unlocked (right key), so this is not a reservation refusal — the slot is
+  // simply already filled by the seed.
+  assert.equal(sb.register(fakePort(), reg({ key: "K", world: 1, slot: "WOPR" })), "slot-taken");
+  // A free named slot in the same world is still claimable with the key.
+  assert.equal(place(sb, { key: "K", world: 1, slot: "PANAM" }).slot, "PANAM");
+});
+
+test("seeds are not exchanges: sweepDead never reaps them", () => {
+  const sb = new Switchboard({ localWorld: SEEDS });
+  sb.sweepDead();
+  sb.sweepDead();
+  assert.deepEqual(sb.directory("http://hub")[0].slots.map((e) => e.id),
+                   ["local-wopr", "local-school"]);
+});
+
+test("seeding world 1 does not disturb auto placement: a plain REGISTER lands world 2", () => {
+  const sb = new Switchboard({ localWorld: SEEDS });
+  const first = place(sb);
+  assert.deepEqual([first.world, first.slot], [2, "OTHER-1"]);
+  assert.equal(place(sb, { slot: "WOPR" }).world, 2);
+});
+
+test("a malformed manifest is a deploy error: the Switchboard refuses to construct", () => {
+  const bad = (localWorld: LocalSlot[]) => () => new Switchboard({ localWorld });
+  // HOME is on the roster but is the visitor's own line — it is never listed.
+  assert.throws(bad([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]), /HOME/);
+  // Wildcards are for registrants who did not ask for a slot; a manifest names
+  // what it is seeding.
+  assert.throws(bad([{ slot: "OTHER-1", name: "SPARE", region: "SEATTLE US" }]), /slot/);
+  assert.throws(bad([{ slot: "NOPE", name: "SPARE", region: "SEATTLE US" }]), /slot/);
+  // One slot, one occupant — a duplicate would silently shadow itself.
+  assert.throws(bad([SEEDS[0], { ...SEEDS[0], name: "SECOND MOUNTAIN" }]), /duplicate/);
+  // Same 2-24 bounds the REGISTER wire imposes: the DIRECTORY screen's column
+  // budget is computed against that ceiling (console.ts directoryText).
+  assert.throws(bad([{ slot: "WOPR", name: "W", region: "SAO PAULO BR" }]), /name/);
+  assert.throws(bad([{ slot: "WOPR", name: "X".repeat(25), region: "SAO PAULO BR" }]), /name/);
+  assert.throws(bad([{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "B" }]), /region/);
+  // Parsed JSON, not typed source: a number where a name belongs is reported,
+  // not coerced into the directory as "42".
+  assert.throws(bad([{ slot: "WOPR", name: 42, region: "SAO PAULO BR" } as unknown as LocalSlot]), /name/);
+  assert.throws(bad([{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", system: 7 } as unknown as LocalSlot]), /system/);
+  assert.throws(bad([{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", joshua: "gpt" } as unknown as LocalSlot]), /joshua/);
+});
+
+test("a seed's name and region are uppercased, like a REGISTER's", () => {
+  const sb = new Switchboard({
+    localWorld: [{ slot: "WOPR", name: "Cheyenne Mountain", region: "Sao Paulo BR" }],
+  });
+  const e = sb.directory("http://hub")[0].slots[0];
+  assert.deepEqual([e.name, e.region], ["CHEYENNE MOUNTAIN", "SAO PAULO BR"]);
 });
