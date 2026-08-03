@@ -12,7 +12,8 @@ from app.attachment import NORAD_OPS
 from app.games import load_catalog, list_games_text
 from app.joshua import ScriptedJoshua
 from app.rooms import RoomLocks, room_key
-from app.router import Router, LOGON_REJECTION, CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT
+from app.router import (Router, LOGON_REJECTION, HELP_GAMES_DEFINITION,
+                        CORE_BUSY_TEXT, CORE_TIMEOUT_TEXT)
 from app.runner import CoreBusy, CoreRunner, CoreTimeout, RunnerConfig
 from app.store import MemoryStore
 
@@ -84,10 +85,10 @@ def test_commands_are_rejected_until_joshua_backdoor():
     async def flow():
         sid = await new_session(store)
 
-        r = await router.handle(sid, "LIST GAMES")
+        r = await router.handle(sid, "NEW GTW")
         assert r.route == "bridge"
         assert r.text == LOGON_REJECTION
-        assert "GLOBAL THERMONUCLEAR WAR" not in r.text
+        assert (await store.get_active_game(sid)) is None
 
         r = await router.handle(sid, "LET'S PLAY TIC-TAC-TOE")
         assert r.route == "bridge"
@@ -196,7 +197,8 @@ def test_joshua_backdoor_and_film_beat_order():
     asyncio.run(flow())
 
 
-def test_help_is_not_available_but_help_games_is():
+def test_help_is_not_available_but_help_games_is_defined():
+    """The film: HELP GAMES answers with a definition, on both sides of the door."""
     store = MemoryStore()
     router = make_router(store)
 
@@ -204,9 +206,50 @@ def test_help_is_not_available_but_help_games_is():
         sid = await new_session(store)
         assert (await router.handle(sid, "HELP")).text == "HELP NOT AVAILABLE"
         assert (await router.handle(sid, "HELP LOGON")).text == "HELP NOT AVAILABLE"
-        assert (await router.handle(sid, "HELP GAMES")).text == LOGON_REJECTION
+        assert (await router.handle(sid, "HELP GAMES")).text == HELP_GAMES_DEFINITION
+        assert "'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES" in HELP_GAMES_DEFINITION
+        assert "WHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS." in HELP_GAMES_DEFINITION
         await logon_as_joshua(router, sid)
-        assert "GLOBAL THERMONUCLEAR WAR" in (await router.handle(sid, "HELP GAMES")).text
+        # Post-auth it stops aliasing LIST GAMES: a definition, not a catalog.
+        r = await router.handle(sid, "HELP GAMES")
+        assert r.text == HELP_GAMES_DEFINITION
+        assert "GLOBAL THERMONUCLEAR WAR" not in r.text
+        assert "GLOBAL THERMONUCLEAR WAR" in (await router.handle(sid, "LIST GAMES")).text
+
+    asyncio.run(flow())
+
+
+def test_the_front_door_lists_and_defines_games_before_logon():
+    """David reads the catalog and the definition before he is ever admitted."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        r = await router.handle(sid, "LIST GAMES")
+        assert r.route == "bridge"
+        assert "FALKEN'S MAZE" in r.text and "GLOBAL THERMONUCLEAR WAR" in r.text
+        assert r.text == list_games_text(load_catalog(GAMES_DIR))
+        assert router.is_authenticated(sid) is False
+        assert (await router.handle(sid, "HELP GAMES")).text == HELP_GAMES_DEFINITION
+        assert router.is_authenticated(sid) is False
+
+    asyncio.run(flow())
+
+
+def test_the_rejection_keeps_the_films_own_misspelling():
+    """INDENTIFICATION (sic) is what the film's screen reads — 3 sources."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        assert LOGON_REJECTION == ("INDENTIFICATION NOT RECOGNIZED BY SYSTEM"
+                                   "\n--CONNECTION TERMINATED--")
+        assert "IDENTIFICATION NOT RECOGNIZED" not in LOGON_REJECTION
+        r = await router.handle(sid, "LOGON DAVID")
+        assert "INDENTIFICATION NOT RECOGNIZED BY SYSTEM" in r.text
+        assert "--CONNECTION TERMINATED--" in r.text
 
     asyncio.run(flow())
 

@@ -222,7 +222,7 @@ def test_ws_resync_does_not_regreet_an_authenticated_session(client):
     # Simulated RESYNC: a new WS connection for the same, still-authenticated
     # session. The first frame must answer our input, not re-prompt LOGON:.
     with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        ws.send_text(ws_envelope(sid, "HELP GAMES"))
+        ws.send_text(ws_envelope(sid, "LIST GAMES"))
         out = json.loads(ws.receive_text())
         assert "LOGON:" not in out["payload"]
         assert "GLOBAL THERMONUCLEAR WAR" in out["payload"]

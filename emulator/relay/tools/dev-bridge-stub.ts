@@ -15,15 +15,21 @@ const PORT = Number(process.env.DEV_BRIDGE_PORT ?? 8000);
 const respond = (input: string): string => {
   const cmd = input.trim().toUpperCase();
   if (cmd === "LOGON" || cmd.startsWith("LOGON ")) {
-    return "IDENTIFICATION NOT RECOGNIZED BY SYSTEM\n--CONNECTION TERMINATED--\n\n(JUST KIDDING. TRY: HELP GAMES)";
+    // INDENTIFICATION (sic) — the film's own misspelling, as in the router.
+    return "INDENTIFICATION NOT RECOGNIZED BY SYSTEM\n--CONNECTION TERMINATED--\n\n(JUST KIDDING. TRY: LIST GAMES)";
   }
-  if (cmd === "HELP GAMES" || cmd === "LIST GAMES") {
+  if (cmd === "HELP GAMES") {
+    return "'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES\nWHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS.";
+  }
+  if (cmd === "LIST GAMES") {
+    // The film's recitation ends on GLOBAL THERMONUCLEAR WAR and never says
+    // TIC-TAC-TOE — the real router's list_games_text agrees.
     return [
       "FALKEN'S MAZE", "BLACK JACK", "GIN RUMMY", "HEARTS", "BRIDGE",
       "CHECKERS", "CHESS", "POKER", "FIGHTER COMBAT", "GUERRILLA ENGAGEMENT",
       "DESERT WARFARE", "AIR-TO-GROUND ACTIONS", "THEATERWIDE TACTICAL WARFARE",
       "THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE", "",
-      "GLOBAL THERMONUCLEAR WAR", "", "TIC-TAC-TOE",
+      "GLOBAL THERMONUCLEAR WAR",
     ].join("\n");
   }
   if (cmd.includes("JOSHUA")) {

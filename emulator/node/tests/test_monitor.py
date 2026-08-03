@@ -16,8 +16,8 @@ from app.games import load_catalog
 from app.joshua import ScriptedJoshua
 from app.operators import Operator
 from app.router import (Router, ACCESS_CODE_PROMPT, CEASE_RANDOM_FUNCTION,
-                        CHANGES_LOCKED_OUT, IMPROPER_REQUEST,
-                        LOGON_REJECTION, HELP_NOT_AVAILABLE,
+                        CHANGES_LOCKED_OUT, HELP_GAMES_DEFINITION,
+                        IMPROPER_REQUEST, LOGON_REJECTION, HELP_NOT_AVAILABLE,
                         UNRECOGNIZED_DIRECTIVE)
 from app.runner import CoreError, CoreRunner, RunnerConfig
 from app.store import MemoryStore
@@ -46,18 +46,34 @@ def test_a_new_session_starts_at_the_front_door():
     asyncio.run(flow())
 
 
-def test_the_front_door_refuses_reserved_words():
-    # E01: LIST GAMES before the backdoor is the rejection, and must not leak
-    # the catalog. Reserved words only outrank an attachment, and there is
-    # none yet.
+def test_the_front_door_recites_the_catalog():
+    # The film: David gets the HELP GAMES definition and the whole games list
+    # before he ever logs on. Our earlier no-leak stance contradicted the
+    # scene; the owner's 2026-08-03 fidelity batch reverses it (real-wopr#161).
     store = MemoryStore()
     router = make_router(store)
 
     async def flow():
         session = await store.create_session("home-terminal", "dialup-300", None)
         result = await router.handle(session.id, "LIST GAMES")
-        assert result.text == LOGON_REJECTION
-        assert "GLOBAL THERMONUCLEAR WAR" not in result.text
+        assert "FALKEN'S MAZE" in result.text
+        assert "GLOBAL THERMONUCLEAR WAR" in result.text
+        assert result.text != LOGON_REJECTION
+
+    asyncio.run(flow())
+
+
+def test_the_front_door_defines_games_but_still_refuses_the_rest():
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        session = await store.create_session("home-terminal", "dialup-300", None)
+        assert (await router.handle(session.id, "HELP GAMES")).text == HELP_GAMES_DEFINITION
+        # Everything that is not the backdoor, a logon, or a games question is
+        # still the rejection — the door itself has not moved.
+        assert (await router.handle(session.id, "NEW TICTACTOE")).text == LOGON_REJECTION
+        assert (await router.handle(session.id, "STATUS")).text == LOGON_REJECTION
 
     asyncio.run(flow())
 

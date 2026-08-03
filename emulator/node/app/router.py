@@ -21,9 +21,16 @@ from .scenarios import montage_text
 from .store import GameState, Store
 from .wire import TERMINAL_STATUSES
 
-LOGON_REJECTION = "IDENTIFICATION NOT RECOGNIZED BY SYSTEM\n--CONNECTION TERMINATED--"
+LOGON_REJECTION = ("INDENTIFICATION NOT RECOGNIZED BY SYSTEM"
+                   "\n--CONNECTION TERMINATED--")
+# sic: the film's own on-screen misspelling, reproduced deliberately
+# (fidelity audit 2026-08-03, real-wopr#161).
 BACKDOOR_GREETING = "GREETINGS PROFESSOR FALKEN."
 HELP_NOT_AVAILABLE = "HELP NOT AVAILABLE"
+# What WOPR answers when asked what a "game" is — the one HELP topic it has.
+# Verbatim from the scene (owner batch approval 2026-08-03, real-wopr#161).
+HELP_GAMES_DEFINITION = ("'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES\n"
+                         "WHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS.")
 CHESS_CODA = "HOW ABOUT A NICE GAME OF CHESS?"
 NOT_IMPLEMENTED = "NOT YET IMPLEMENTED. SEE docs/contributing.md TO CLAIM IT."
 CORE_TIMEOUT_TEXT = "WOPR CORE UNRESPONSIVE. REQUEST TERMINATED."
@@ -51,9 +58,10 @@ class RouteResult:
 
 
 class Router:
-    # Words that always mean the monitor, in every mode. Seven literals, six
-    # distinct commands — HELP GAMES is an alias for LIST GAMES, not a seventh
-    # one. The objection this design answers is that *Joshua's* vocabulary
+    # Words that always mean the monitor, in every mode. Seven literals and
+    # seven distinct answers: HELP GAMES used to alias LIST GAMES, but the
+    # film gives it its own definition text, so it stands on its own now.
+    # The objection this design answers is that *Joshua's* vocabulary
     # should not pull you out of a game, and six commands do not. LIST GAMES
     # and NEW are required by the evals — E03 asserts the catalog in exact
     # order on both Joshua engines, so Joshua cannot own that answer. NEW and
@@ -248,8 +256,8 @@ class Router:
         """Nothing reaches a program until the door opens.
 
         The film's front door: only the JOSHUA backdoor, or a roster logon on a
-        NORAD terminal, gets past it. Reserved words do not work here — E01
-        requires LIST GAMES to be refused without leaking the catalog.
+        NORAD terminal, gets past it. Reserved words do not work here — except
+        the two the film shows David using before he is ever admitted.
         """
         # Checked first so a pending access-code prompt is abandoned (not
         # matched as the code) before the bare-JOSHUA branch below fires;
@@ -264,10 +272,19 @@ class Router:
                 {"role": "assistant", "content": BACKDOOR_GREETING})
             return RouteResult(text=BACKDOOR_GREETING, route="bridge",
                                detail={"backdoor": True})
-        # HELP GAMES is a catalog request, not a plea for help. At the front
-        # door it gets the rejection like LIST GAMES does — never the softer
-        # HELP NOT AVAILABLE, and never the catalog.
-        if upper == "HELP" or (upper.startswith("HELP ") and upper != "HELP GAMES"):
+        # The door answers two questions before it opens, because the film
+        # shows it doing so: David reads the HELP GAMES definition and then
+        # the whole games list while still locked out. This reverses the
+        # earlier no-leak stance (the amendment is dated 2026-08-03 in
+        # real-wopr's executive-design spec; audit: real-wopr#161). Nothing
+        # else moves — no game starts and no session is authenticated here.
+        if upper == "LIST GAMES":
+            return RouteResult(text=list_games_text(self.catalog), route="bridge",
+                               detail={"authenticated": False})
+        if upper == "HELP GAMES":
+            return RouteResult(text=HELP_GAMES_DEFINITION, route="bridge",
+                               detail={"authenticated": False})
+        if upper == "HELP" or upper.startswith("HELP "):
             return RouteResult(text=HELP_NOT_AVAILABLE, route="bridge")
         return RouteResult(text=LOGON_REJECTION, route="bridge",
                            detail={"authenticated": False})
@@ -282,8 +299,13 @@ class Router:
         logon = await self._logon_line(session_id, raw, upper)
         if logon is not None:
             return logon
-        if upper in ("LIST GAMES", "HELP GAMES"):
+        if upper == "LIST GAMES":
             return RouteResult(text=list_games_text(self.catalog), route="bridge")
+        if upper == "HELP GAMES":
+            # A definition, not a catalog: HELP GAMES stopped aliasing
+            # LIST GAMES on 2026-08-03 — in the film they are two different
+            # answers, and the door now serves both of them (real-wopr#161).
+            return RouteResult(text=HELP_GAMES_DEFINITION, route="bridge")
         if upper.startswith("LIST "):
             # LIST <TITLE> is the one door into a slot's interpretations (§8).
             # Anything that names no slot falls through — the attached program
