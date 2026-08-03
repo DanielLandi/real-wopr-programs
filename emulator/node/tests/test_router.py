@@ -201,6 +201,33 @@ def test_joshua_backdoor_and_film_beat_order():
     asyncio.run(flow())
 
 
+@needs_core
+def test_the_nowin_verdict_reaches_the_teletype_in_three_lines():
+    """The wire RESULT stays one sentence; only the rendering breaks it up —
+    the film puts A STRANGE GAME. on its own line and splits the rest."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+        await router.handle(sid, "NEW TICTACTOE")
+        last = await router.handle(sid, "0")          # 0 players = self-play
+        for _ in range(12):
+            if (await store.get_active_game(sid)) is None:
+                break
+            last = await router.handle(sid, "OBSERVE")
+        assert store.games[sid].status == "NO-WIN"
+        assert last.text.endswith("A STRANGE GAME.\n"
+                                  "THE ONLY WINNING MOVE IS\n"
+                                  "NOT TO PLAY.")
+        assert "THE ONLY WINNING MOVE IS NOT TO PLAY." not in last.text
+        # The wire is untouched: the game still reports one canonical line.
+        assert store.games[sid].status == "NO-WIN"
+
+    asyncio.run(flow())
+
+
 def test_asking_after_falken_reads_out_the_dod_dossier():
     """The film's pension-file gag: Robert Hume, Goose Island, Oregon."""
     store = MemoryStore()

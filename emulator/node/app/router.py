@@ -32,6 +32,11 @@ HELP_NOT_AVAILABLE = "HELP NOT AVAILABLE"
 HELP_GAMES_DEFINITION = ("'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES\n"
                          "WHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS.")
 CHESS_CODA = "HOW ABOUT A NICE GAME OF CHESS?"
+# The verdict. The games put it on the wire as one canonical sentence (their
+# RESULT line, and their goldens, are untouched by this); the film's screen
+# breaks it across three lines, so the break belongs to the rendering here.
+NOWIN_RESULT = "A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY."
+NOWIN_VERDICT = "A STRANGE GAME.\nTHE ONLY WINNING MOVE IS\nNOT TO PLAY."
 NOT_IMPLEMENTED = "NOT YET IMPLEMENTED. SEE docs/contributing.md TO CLAIM IT."
 CORE_TIMEOUT_TEXT = "WOPR CORE UNRESPONSIVE. REQUEST TERMINATED."
 CORE_BUSY_TEXT = "ALL WOPR PROCESSORS COMMITTED. STAND BY."
@@ -503,7 +508,12 @@ class Router:
         if game.game_id == "gtw" and status == "NO-WIN":
             texts.append(montage_text())
         if resp.result:
-            texts.append(resp.result)
+            # Every game that reaches NO-WIN says the same sentence, so the
+            # three-line form is keyed on the sentence itself, not on the id:
+            # GTW and tic-tac-toe both arrive here.
+            texts.append(NOWIN_VERDICT
+                         if status == "NO-WIN" and resp.result == NOWIN_RESULT
+                         else resp.result)
         if game.game_id == "gtw" and status == "NO-WIN":
             texts.append(CHESS_CODA)
         if status in TERMINAL_STATUSES:
