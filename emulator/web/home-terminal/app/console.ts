@@ -16,8 +16,10 @@ import type { SweepEntry } from "./wardial";
 export type DialTarget = Exchange | DialSystem;
 
 /** The unknown carrier David found: WOPR's own number. Dialling it routes to
- *  the default bridge (dial(null)); it is also the ATDT fallback match. */
-export const DEFAULT_WOPR_NUMBER = "(311) 767-8524";
+ *  the default bridge (dial(null)); it is also the ATDT fallback match.
+ *  311-399-2364 — 399 is one of the four Sunnyvale prefixes the operator reads
+ *  out in the film (fidelity audit 2026-08-03, real-wopr#161). */
+export const DEFAULT_WOPR_NUMBER = "(311) 399-2364";
 
 /** Everything the parser needs to resolve a line, snapshotted by the page. */
 export interface ConsoleContext {

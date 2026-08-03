@@ -90,6 +90,12 @@ test("ATDT with bare digits dials the same system", () => {
   assert.equal(a.target.systemId, "airline");
 });
 
+test("the default WOPR number is the film's Sunnyvale line", () => {
+  // 311-399-2364: 399 is one of the four prefixes the operator reads out in
+  // the film (fidelity audit 2026-08-03, real-wopr#161).
+  assert.equal(DEFAULT_WOPR_NUMBER, "(311) 399-2364");
+});
+
 test("ATDT the default WOPR number dials the default line", () => {
   const bare = DEFAULT_WOPR_NUMBER.replace(/\D/g, "");
   const a = parse(`ATDT ${bare}`, ctx);

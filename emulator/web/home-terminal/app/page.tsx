@@ -30,7 +30,7 @@ import {
 import { TerminalScreen, type XtermMount } from "@real-wopr/crt-kit/src/TerminalScreen";
 import { loadExchanges, probe, type Exchange } from "./exchanges";
 import { isSystem, DIAL_SYSTEMS } from "./sims";
-import { buildSweep, type SweepEntry } from "./wardial";
+import { buildSweep, hitListText, type SweepEntry } from "./wardial";
 import { parse, initialText, sessionBody, type DialTarget, type ConsoleContext } from "./console";
 import { HomeFrameHandler, type Phase } from "@real-wopr/terminal/frames";
 
@@ -350,12 +350,7 @@ export default function HomeTerminal() {
     const step = () => {
       if (i >= sweep.length) {
         const carriers = sweep.filter((e) => e.status === "CARRIER");
-        appendText(`\nSCAN COMPLETE - ${carriers.length} CARRIERS FOUND\n`);
-        carriers.forEach((e, idx) => {
-          const label = e.hit?.target ? e.hit.target.name : "??? UNKNOWN SYSTEM";
-          appendText(`${String(idx + 1).padStart(2, "0")}  ${e.number}  ${label}  [${e.hit?.label}]\n`);
-        });
-        appendText("\nDIAL <NN> TO CONNECT TO A CARRIER\n");
+        appendText(hitListText(carriers));
         setHits(carriers);
         setPhase("idle");
         sweepTimer.current = null;
