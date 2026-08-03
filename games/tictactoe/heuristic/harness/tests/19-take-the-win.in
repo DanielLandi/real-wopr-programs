@@ -1,7 +1,7 @@
 WOPR/1 tictactoe MOVE
 STATE 3
-TTT-H MODE ASK
-.........
+TTT-H MODE ONE-X
+X..OO.X..
 TURN X
-INPUT 5
+INPUT 2
 END

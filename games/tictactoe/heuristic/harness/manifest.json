@@ -5,9 +5,10 @@
   "binary": "tictactoe",
   "abbrev": "TTT",
   "players": 2,
-  "summary": "Rule-based period player. No search — beatable by a fork.",
-  "input_syntax": "cell 1-9, row-major",
-  "notes": "MOVE with INPUT omitted = engine plays current side (self-play / WOPR's turn)",
+  "summary": "Rule-based period player. No search — beatable by a fork, so its own self-play is decided at game 8 and the NO-WIN verdict is unreachable here.",
+  "input_syntax": "0|1|2 PLAYERS, X|O, CELL 1-9, OBSERVE, YES|NO",
+  "self_resolving": true,
+  "notes": "MODE state machine shared with the slot's core interpretation; STATE carries the TTT-H tag first and is not portable between interpretations",
   "interpretation": "heuristic",
   "author": "daniel",
   "memory_budget_kb": 16

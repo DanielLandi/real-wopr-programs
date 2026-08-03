@@ -1,13 +1,13 @@
 WOPR/1 tictactoe OK
 STATE 3
-TTT-H
-X.OOO.X.X
+TTT-H MODE ONE-X
+X...O....
 TURN X
 DISPLAY 5
- X | . | O
+ X | . | .
 -----------
- O | O | .
+ . | O | .
 -----------
- X | . | X
+ . | . | .
 STATUS PLAYING
 END

@@ -1,5 +1,7 @@
 WOPR/1 tictactoe MOVE
-STATE 2
+STATE 3
+TTT-H MODE ASK
 .........
 TURN X
+INPUT 1
 END
