@@ -57,7 +57,11 @@ offer) normally consumes the next three inputs regardless of content, but
 yields to an *explicit* game request mid-chain — a recognized `*game-titles*` title
 present together with a play intent, or a bare title typed exactly — so
 `GLOBAL THERMONUCLEAR WAR` after the greeting falls through to the chess counter-offer
-while non-game filler still feeds the beat.
+while non-game filler still feeds the beat. One beat sits *above* the chain: asking
+whether Falken is alive or where he is — `FALKEN` named in the input or in the user's
+own previous turn, plus `DEAD`/`DIED`/`ALIVE`/`WHERE`/`ADDRESS`/`FIND`/`LIVES` — draws
+the DOD pension dossier, because in the film that question follows the greeting
+immediately and must not be eaten by it.
 
 In the response pipeline, memory sits after the film beats and game intents but
 before the planned domain replies. The checks, in priority order:

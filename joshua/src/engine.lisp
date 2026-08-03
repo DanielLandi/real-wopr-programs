@@ -221,6 +221,12 @@
 (defun containsp (needle haystack)
   (and (search needle haystack :test #'char=) t))
 
+(defun last-user (history)
+  (let ((found nil))
+    (dolist (turn history)
+      (when (eq (car turn) :u) (setf found (cdr turn))))
+    (if found (string-upcase found) "")))
+
 (defun token-present-p (word tokens)
   (and (member word tokens :test #'string=) t))
 
@@ -551,6 +557,18 @@ plain NO-style answers only when they follow a game offer."
                (when (string= u (car entry))
                  (return t)))))))
 
+(defun dossier-request-p (input history)
+  "T when the user is asking after Falken the man — whether he is alive, or
+   where he is. FALKEN has to be on the table: named in INPUT, or in the
+   user's own previous turn, so WHERE IS HE? still lands after TELL ME ABOUT
+   FALKEN. Keyed on the user's turns only — the machine says FALKEN freely
+   (GREETINGS PROFESSOR FALKEN. would otherwise arm this permanently)."
+  (let ((u (string-upcase input)))
+    (and (or (containsp "FALKEN" u) (containsp "FALKEN" (last-user history)))
+         (or (containsp "DEAD" u) (containsp "DIED" u) (containsp "ALIVE" u)
+             (containsp "WHERE" u) (containsp "ADDRESS" u)
+             (containsp "FIND" u) (containsp "LIVES" u)))))
+
 ;;; ------------------------------------------------------------ respond ----
 
 (defun respond (history input)
@@ -585,6 +603,19 @@ plain NO-style answers only when they follow a game offer."
                  (cons (mapcar #'truncate-line reply) intent))))
       (cond
         ;; --- film beats (fidelity-notes.md §1), highest priority ---------
+        ;; The dossier sits at the head of the beats, not down with the
+        ;; fallbacks: in the film IS FALKEN DEAD? arrives one line after
+        ;; GREETINGS PROFESSOR FALKEN., so anything lower would be swallowed
+        ;; by the greeting chain. The game guard keeps an explicit game
+        ;; request winning, exactly as it does over the rest of the chain.
+        ;; Byte-identical to the scripted engine's FALKEN_DOSSIER.
+        ((and (dossier-request-p input history)
+              (not (explicit-game-request-p input act)))
+         (finish '("DOD PENSION FILES INDICATE CURRENT MAILING AS:"
+                   "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)"
+                   "5 TALL CEDAR ROAD"
+                   "GOOSE ISLAND, OREGON 97014")
+                 nil nil))
         ((and (eq act 'falken) (not (second state)))
          (finish '("GREETINGS PROFESSOR FALKEN.") nil))
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)

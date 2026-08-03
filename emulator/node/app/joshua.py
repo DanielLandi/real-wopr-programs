@@ -105,6 +105,15 @@ ACCOUNT_DATE = "6/23/73"
 ACCOUNT_QUESTION = ("EXCELLENT. IT'S BEEN A LONG TIME.\n"
                     f"CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON {ACCOUNT_DATE}?")
 ACCOUNT_ANSWER = "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
+# Asked whether Falken is dead, the machine reads out his pension file — the
+# address David and Jennifer then drive to. Four lines, all under 60: the
+# teletype contract holds without wrapping.
+FALKEN_DOSSIER = ("DOD PENSION FILES INDICATE CURRENT MAILING AS:\n"
+                  "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)\n"
+                  "5 TALL CEDAR ROAD\n"
+                  "GOOSE ISLAND, OREGON 97014")
+# What counts as asking after the man himself rather than about him.
+DOSSIER_TRIGGERS = ("DEAD", "DIED", "ALIVE", "WHERE", "ADDRESS", "FIND", "LIVES")
 
 
 class ScriptedJoshua:
@@ -137,6 +146,16 @@ class ScriptedJoshua:
         if CHESS_OFFER in last_assistant and (
                 "LATER" in t or t in ("NO", "NO.") or "THERMONUCLEAR" in t):
             return JoshuaReply(text="FINE.", start_game_id="gtw")
+
+        # Falken himself, above the greeting chain: "IS FALKEN DEAD?" arriving
+        # one line after GREETINGS PROFESSOR FALKEN. is the film's own order,
+        # and it must not be consumed as the chain's next beat. A game request
+        # still outranks it — the game rules above have already returned.
+        last_user = next(
+            (m["content"] for m in reversed(history) if m["role"] == "user"), "")
+        falken_on_the_table = "FALKEN" in t or "FALKEN" in last_user.upper()
+        if falken_on_the_table and any(w in t for w in DOSSIER_TRIGGERS):
+            return JoshuaReply(text=FALKEN_DOSSIER)
 
         if "GREETINGS PROFESSOR FALKEN" in last_assistant:
             return JoshuaReply(text=FEELING_LINE)

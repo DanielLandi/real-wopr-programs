@@ -201,6 +201,26 @@ def test_joshua_backdoor_and_film_beat_order():
     asyncio.run(flow())
 
 
+def test_asking_after_falken_reads_out_the_dod_dossier():
+    """The film's pension-file gag: Robert Hume, Goose Island, Oregon."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await logon_as_joshua(router, sid)
+        r = await router.handle(sid, "IS FALKEN DEAD?")
+        assert r.route == "joshua"
+        assert r.text == ("DOD PENSION FILES INDICATE CURRENT MAILING AS:\n"
+                          "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)\n"
+                          "5 TALL CEDAR ROAD\n"
+                          "GOOSE ISLAND, OREGON 97014")
+        assert len(r.text.splitlines()) == 4
+        assert max(len(line) for line in r.text.splitlines()) <= 60
+
+    asyncio.run(flow())
+
+
 @needs_core
 def test_the_account_question_yields_to_an_explicit_game_request():
     """The chain never traps a player: asking for a game still starts one."""
