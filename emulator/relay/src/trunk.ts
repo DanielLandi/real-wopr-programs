@@ -3,8 +3,9 @@
 // allowlisted REST subset down each trunk, and never inspects relayed payloads.
 
 export type TrunkFrame =
-  | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period"; operator?: string }
-  | { t: "ASSIGNED"; exchange: string }
+  | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period";
+      operator?: string; slot?: string; world?: number | "NEW"; key?: string }
+  | { t: "ASSIGNED"; exchange: string; world: number; slot: string }
   | { t: "OPEN"; chan: number; query: string }
   | { t: "FRAME"; chan: number; data: string }
   | { t: "CLOSE"; chan: number; reason?: string }
@@ -15,6 +16,13 @@ export type TrunkFrame =
 
 export const TRUNK_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const TRUNK_MAX_FRAME_BYTES = 8192;
+
+// The film's wardial cast (docs/period-systems.md in the engine repo) plus
+// overflow slots for original systems. Slot names double as the world-local
+// numbering plan in phase 2 — fixed here, never renamed.
+export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL", "HOME"] as const;
+export const WILDCARD_SLOTS = ["OTHER-1", "OTHER-2"] as const;
+export const ALL_SLOTS: readonly string[] = [...NAMED_SLOTS, ...WILDCARD_SLOTS];
 
 const FRAME_TYPES = new Set(["REGISTER", "ASSIGNED", "OPEN", "FRAME", "CLOSE", "REQUEST", "RESPONSE", "PING", "PONG"]);
 
@@ -31,8 +39,16 @@ export function decodeTrunkFrame(raw: string): TrunkFrame {
     if (typeof f.region !== "string" || f.region.length < 2 || f.region.length > 24) throw new Error("bad region");
     if (f.joshua !== "claude" && f.joshua !== "period") throw new Error("bad joshua");
     if (f.operator !== undefined && (typeof f.operator !== "string" || f.operator.length > 24)) throw new Error("bad operator");
+    if (f.slot !== undefined && (typeof f.slot !== "string" || !ALL_SLOTS.includes(f.slot))) throw new Error("bad slot");
+    if (f.world !== undefined && f.world !== "NEW" && (!Number.isInteger(f.world) || f.world < 1)) throw new Error("bad world");
+    // The reserve key is opaque to the wire — the hub compares it, nothing
+    // parses it — but it is still operator-supplied text on a public socket,
+    // so bound it like every other REGISTER field.
+    if (f.key !== undefined && (typeof f.key !== "string" || f.key.length > 64)) throw new Error("bad key");
   } else if (f.t === "ASSIGNED") {
     if (typeof f.exchange !== "string") throw new Error("bad exchange");
+    if (!Number.isInteger(f.world) || f.world < 1) throw new Error("bad world");
+    if (typeof f.slot !== "string") throw new Error("bad slot");
   } else if (f.t === "OPEN") {
     if (!Number.isInteger(f.chan)) throw new Error("bad chan");
     if (typeof f.query !== "string") throw new Error("bad query");
@@ -85,7 +101,16 @@ export function newExchangeCode(): string {
 export interface DirectoryEntry {
   id: string; name: string; region: string; api: string; link: string;
   joshua: string; operator?: string; online: true;
+  world: number; slot: string;
+  /** The bridge system id a surface must name to open a session against this
+   *  slot (`POST /api/session { system }`). Present only on seeded period
+   *  systems — a WOPR/Joshua line has none. Opaque here: which ids exist is
+   *  the node host's business, not the hub's. */
+  system?: string;
 }
+/** `reserved` is present (and always literal `true`) only for a world the hub
+ *  holds back for a keyed caller — surfaces print it, they never infer it. */
+export interface WorldDirectory { n: number; reserved?: true; slots: DirectoryEntry[] }
 
 // TrunkPort is the minimal socket shape the registry needs (ws WebSocket satisfies it);
 // tests pass fakes.
@@ -95,6 +120,7 @@ export interface ChannelPort extends TrunkPort {}
 interface Exchange {
   code: string; name: string; region: string; joshua: string; operator?: string;
   port: TrunkPort;
+  world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void;
@@ -103,26 +129,173 @@ interface Exchange {
   missedPongs: number;
 }
 
+/** One line of the hub's own world-1 manifest. The flagship does not dial its
+ *  own switchboard, so its slots are not registrants: they are declared here
+ *  and synthesized into the directory at startup. */
+export interface LocalSlot {
+  slot: string;
+  name: string;
+  region: string;
+  /** Bridge system id, for a slot that is a period system rather than Joshua. */
+  system?: string;
+  joshua?: "claude" | "period";
+  /** Who runs this line, as a REGISTER would carry it. A seeded slot has no
+   *  registrant to name itself, so the manifest names it — otherwise the
+   *  flagship's own world is the only one in the book with no operator. */
+  operator?: string;
+}
+
+/** Vet a manifest the way `decodeTrunkFrame` vets a REGISTER: a bad entry is a
+ *  deploy error, so it throws at construction rather than degrading into a
+ *  directory the operator never wrote. */
+function checkLocalWorld(seeds: LocalSlot[]): LocalSlot[] {
+  const seen = new Set<string>();
+  return seeds.map((s) => {
+    // The manifest is parsed JSON, so an element need not be an object: check
+    // that before reading a field off it, or `[null]` in TRUNK_LOCAL_WORLD
+    // aborts startup with a raw TypeError instead of naming the problem.
+    if (!s || typeof s !== "object") throw new Error("local world: bad entry");
+    // HOME is on the roster (it is a dialable slot for a registrant's own
+    // line) but it is the *visitor's* end of the call: the flagship never
+    // publishes one, so it is not seedable. Wildcards are what the hub hands
+    // out to a registrant that did not ask for a slot; a manifest says what it
+    // is seeding by name.
+    if (s.slot === "HOME") throw new Error("local world: HOME is never listed");
+    if (!NAMED_SLOTS.includes(s.slot as (typeof NAMED_SLOTS)[number])) {
+      throw new Error(`local world: bad slot ${JSON.stringify(s.slot)}`);
+    }
+    if (seen.has(s.slot)) throw new Error(`local world: duplicate slot ${s.slot}`);
+    seen.add(s.slot);
+    // The same 2-24 bounds the wire imposes on a REGISTER: the DIRECTORY
+    // screen's 80-column budget is computed against that ceiling. Measured
+    // after uppercasing, which is what the directory will actually print.
+    // Typed, not coerced: the manifest arrives as parsed JSON, so a number
+    // where a name belongs is a mistake to report, not one to stringify.
+    if (typeof s.name !== "string") throw new Error(`local world: bad name for ${s.slot}`);
+    if (typeof s.region !== "string") throw new Error(`local world: bad region for ${s.slot}`);
+    const name = s.name.toUpperCase();
+    const region = s.region.toUpperCase();
+    if (name.length < 2 || name.length > 24) throw new Error(`local world: bad name for ${s.slot}`);
+    if (region.length < 2 || region.length > 24) throw new Error(`local world: bad region for ${s.slot}`);
+    if (s.system !== undefined &&
+        (typeof s.system !== "string" || s.system.length < 1 || s.system.length > 24)) {
+      throw new Error(`local world: bad system for ${s.slot}`);
+    }
+    if (s.joshua !== undefined && s.joshua !== "claude" && s.joshua !== "period") {
+      throw new Error(`local world: bad joshua for ${s.slot}`);
+    }
+    // The same ceiling decodeTrunkFrame puts on a REGISTER's operator: the
+    // directory prints seeded and registered entries in the same column.
+    if (s.operator !== undefined && (typeof s.operator !== "string" || s.operator.length > 24)) {
+      throw new Error(`local world: bad operator for ${s.slot}`);
+    }
+    return { ...s, name, region };
+  });
+}
+
 export class Switchboard {
   private exchanges = new Map<string, Exchange>();
   private maxExchanges: number;
   private maxChannels: number;
+  private maxWorlds: number;
+  private reservedWorlds: number[];
+  private reserveKey: string | undefined;
+  private localWorld: LocalSlot[];
 
-  constructor(opts: { maxExchanges?: number; maxChannels?: number } = {}) {
+  constructor(opts: { maxExchanges?: number; maxChannels?: number; maxWorlds?: number;
+                      reservedWorlds?: number[]; reserveKey?: string;
+                      localWorld?: LocalSlot[] } = {}) {
     this.maxExchanges = opts.maxExchanges ?? 32;
     this.maxChannels = opts.maxChannels ?? 16;
+    this.maxWorlds = opts.maxWorlds ?? 8;
+    // World 1 is the flagship's by default. With no usable reserveKey
+    // NOTHING unlocks it: a hub that has not been told the key holds the world
+    // closed rather than handing it to the first caller who guesses.
+    this.reservedWorlds = opts.reservedWorlds ?? [1];
+    this.reserveKey = opts.reserveKey;
+    // World 1 is never *claimed*: the hub seeds it from this manifest, so the
+    // flagship needs no trunk back to itself and its entries dial the public
+    // base directly.
+    this.localWorld = checkLocalWorld(opts.localWorld ?? []);
   }
 
-  register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>): string | null {
-    if (this.exchanges.size >= this.maxExchanges) return null;
+  /** Where does a REGISTER land? Worlds are derived, not stored: a world is
+   *  the set of live exchanges tagged with its number. World 1 is pinned —
+   *  and, unless the caller carries the hub's key, reserved. */
+  private place(req: { slot?: string; world?: number | "NEW"; key?: string }):
+      { world: number; slot: string } | "no-circuits" | "slot-taken" | "world-reserved" {
+    // One comparison decides the whole placement: with the hub's key the
+    // reserved worlds behave like any other, without it they do not exist.
+    // `!!this.reserveKey`, not `!== undefined`: an empty key is a
+    // misconfiguration (an unset variable expanded into the config), and the
+    // codec accepts `key: ""` on the wire (length 0), so honoring "" would
+    // hand every reserved world to a one-line REGISTER. This is the invariant
+    // for BOTH configuration paths — env and opts — not just the env read.
+    const unlocked = !!this.reserveKey && req.key === this.reserveKey;
+    const reserved = (w: number) => !unlocked && this.reservedWorlds.includes(w);
+    const occ = new Map<number, Set<string>>();
+    for (const ex of this.exchanges.values()) {
+      let s = occ.get(ex.world);
+      if (!s) occ.set(ex.world, (s = new Set()));
+      s.add(ex.slot);
+    }
+    // A seeded slot is filled, even though nothing is registered in it: an
+    // unlocked keyed REGISTER for CHEYENNE MOUNTAIN's slot is "slot-taken",
+    // not a silent second occupant of world 1.
+    if (this.localWorld.length > 0) {
+      let s = occ.get(1);
+      if (!s) occ.set(1, (s = new Set()));
+      for (const seed of this.localWorld) s.add(seed.slot);
+    }
+    const open = (w: number): string | null =>
+      req.slot !== undefined
+        ? (occ.get(w)?.has(req.slot) ? null : req.slot)
+        : WILDCARD_SLOTS.find((s) => !occ.get(w)?.has(s)) ?? null;
+
+    if (typeof req.world === "number") {
+      // decodeTrunkFrame already rejects world < 1 on the wire; the floor is
+      // repeated here so an in-process caller cannot place an exchange into
+      // world 0 or a negative world that the directory would then expose.
+      if (req.world < 1 || req.world > this.maxWorlds) return "no-circuits";
+      // Before the occupancy check, deliberately: "slot taken" would tell an
+      // unkeyed caller who is living in the reserved world. Not their world,
+      // not their business.
+      if (reserved(req.world)) return "world-reserved";
+      const slot = open(req.world);
+      return slot === null ? "slot-taken" : { world: req.world, slot };
+    }
+    // Live worlds first in numeric order (NEW skips them), then the lowest
+    // unopened number up to the cap.
+    const live = [...new Set([1, ...occ.keys()])].sort((a, b) => a - b);
+    if (req.world !== "NEW") {
+      for (const w of live) {
+        if (reserved(w)) continue;
+        const slot = open(w);
+        if (slot !== null) return { world: w, slot };
+      }
+    }
+    for (let w = 1; w <= this.maxWorlds; w++) {
+      if (live.includes(w) || reserved(w)) continue;
+      const slot = open(w);
+      if (slot !== null) return { world: w, slot };
+    }
+    return "no-circuits";
+  }
+
+  register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>):
+      { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" | "world-reserved" {
+    if (this.exchanges.size >= this.maxExchanges) return "full";
+    const placed = this.place({ slot: f.slot, world: f.world, key: f.key });
+    if (typeof placed === "string") return placed;
     let code = newExchangeCode();
     while (this.exchanges.has(code)) code = newExchangeCode();
     this.exchanges.set(code, {
       code, name: f.name.toUpperCase(), region: f.region.toUpperCase(),
       joshua: f.joshua, operator: f.operator, port,
+      world: placed.world, slot: placed.slot,
       channels: new Map(), nextChan: 1, pending: new Map(), nextRid: 1, missedPongs: 0,
     });
-    return code;
+    return { code, world: placed.world, slot: placed.slot };
   }
 
   unregister(code: string): void {
@@ -205,12 +378,44 @@ export class Switchboard {
     });
   }
 
-  directory(publicBase: string): DirectoryEntry[] {
+  directory(rawPublicBase: string): WorldDirectory[] {
+    // Normalized once, for every entry. A relayed entry always appends
+    // `/x/<CODE>`, so a stray trailing slash on TRUNK_PUBLIC_BASE was harmless
+    // there — but a SEEDED entry's api IS the base, and `https://hub/` would
+    // have the terminal POST to `//api/session`.
+    const publicBase = rawPublicBase.replace(/\/+$/, "");
     const wsBase = publicBase.replace(/^http/, "ws");
-    return [...this.exchanges.values()].map((ex) => ({
-      id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
-      api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
-      joshua: ex.joshua, operator: ex.operator, online: true as const,
+    const byWorld = new Map<number, DirectoryEntry[]>([[1, []]]); // world 1 pinned
+    // The flagship's own slots, synthesized rather than registered. No
+    // `/x/<CODE>` hop: there is no trunk to hop over, so every seed points at
+    // the hub's public base and a period system carries the bridge `system` id
+    // that opens a session against it.
+    byWorld.set(1, this.localWorld.map((s) => ({
+      id: `local-${s.slot.toLowerCase()}`, name: s.name, region: s.region,
+      api: publicBase, link: `${wsBase}/link`,
+      joshua: s.joshua ?? "period", operator: s.operator, online: true as const,
+      world: 1, slot: s.slot,
+      // Spread, not an undefined value: an own `system` key with no value is a
+      // different document once a surface round-trips it.
+      ...(s.system ? { system: s.system } : {}),
+    })));
+    for (const ex of this.exchanges.values()) {
+      let list = byWorld.get(ex.world);
+      if (!list) byWorld.set(ex.world, (list = []));
+      list.push({
+        id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
+        api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
+        joshua: ex.joshua, operator: ex.operator, online: true as const,
+        world: ex.world, slot: ex.slot,
+      });
+    }
+    return [...byWorld.entries()].sort((a, b) => a[0] - b[0]).map(([n, slots]) => ({
+      n,
+      // Spread, not `reserved: cond || undefined`: an own key with an
+      // undefined value is a different object to a deepStrictEqual and a
+      // different document once a surface round-trips it.
+      ...(this.reservedWorlds.includes(n) ? { reserved: true as const } : {}),
+      slots: slots.sort((a, b) => ALL_SLOTS.indexOf(a.slot) - ALL_SLOTS.indexOf(b.slot)),
     }));
   }
 

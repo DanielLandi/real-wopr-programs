@@ -13,7 +13,8 @@ import { configFromEnv, resolveLink, type CommsConfig } from "./config.ts";
 import { decodeEnvelope, encodeEnvelope, type Envelope } from "./envelope.ts";
 import { LinkShaper } from "./shaper.ts";
 import { runHandshake, type HandshakeOpts } from "./handshake.ts";
-import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES } from "./trunk.ts";
+import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
+         type LocalSlot } from "./trunk.ts";
 
 export interface ServerOpts {
   port?: number;
@@ -25,6 +26,10 @@ export interface ServerOpts {
   trunk?: {
     maxExchanges?: number;
     maxChannels?: number;
+    maxWorlds?: number;
+    reservedWorlds?: number[];
+    reserveKey?: string;
+    localWorld?: LocalSlot[];
     pingIntervalMs?: number;
     relayPingMs?: number;
     registerTimeoutMs?: number;
@@ -49,7 +54,56 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // the pre-listen `port` is 0, which would bake ":0" into every directory
   // entry. Explicit configuration always wins.
   let publicBase = opts.publicBase ?? process.env.TRUNK_PUBLIC_BASE ?? "";
-  const switchboard = new Switchboard(opts.trunk);
+  // TRUNK_MAX_WORLDS is operator-supplied text: a typo (or "") parses to NaN/0,
+  // and `world > NaN` is false, which would silently turn the explicit-world
+  // REGISTER path into an unbounded world allocator. Only a whole number >= 1
+  // is honored; anything else falls back to the documented default of 8.
+  const envMaxWorlds = Number(process.env.TRUNK_MAX_WORLDS);
+  const defaultMaxWorlds = Number.isInteger(envMaxWorlds) && envMaxWorlds >= 1 ? envMaxWorlds : 8;
+  // TRUNK_RESERVED_WORLDS is a comma list, vetted token by token the same way
+  // TRUNK_MAX_WORLDS is: a token that is not a whole number >= 1 is dropped
+  // rather than reserving world NaN.
+  //
+  // Unset — or empty/whitespace, which is exactly what an unset variable
+  // expands to in a .env or a compose file — means the documented default:
+  // world 1, the flagship's. Reading a blank value as "reserve nothing" would
+  // silently open the flagship's world, which is the wrong way to fail.
+  // Opting out stays possible, it just has to be typed on purpose: a value
+  // with tokens but no usable world number (`TRUNK_RESERVED_WORLDS=none`)
+  // reserves nothing.
+  const envReserved = process.env.TRUNK_RESERVED_WORLDS;
+  const defaultReservedWorlds = envReserved === undefined || envReserved.trim() === ""
+    ? [1]
+    : envReserved.split(",").map((t) => Number(t.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 1);
+  // TRUNK_LOCAL_WORLD is the hub's own world-1 manifest: a JSON array of
+  // LocalSlot. Two failure modes, two behaviours, on purpose. Unparseable or
+  // not an array = a truncated/garbled value: say so once on stderr and seed
+  // NOTHING, because a broken manifest must neither take the hub down nor
+  // half-seed the board. Parseable but invalid (a bad slot, a duplicate) is a
+  // deploy error the operator typed: the Switchboard ctor throws and startup
+  // fails, rather than serving a directory nobody wrote.
+  let envLocalWorld: LocalSlot[] | undefined;
+  const rawLocalWorld = process.env.TRUNK_LOCAL_WORLD;
+  if (rawLocalWorld !== undefined && rawLocalWorld.trim() !== "") {
+    try {
+      const parsed: unknown = JSON.parse(rawLocalWorld);
+      if (!Array.isArray(parsed)) throw new Error("not an array");
+      envLocalWorld = parsed as LocalSlot[];
+    } catch {
+      console.error("trunk: ignoring malformed TRUNK_LOCAL_WORLD");
+    }
+  }
+  const switchboard = new Switchboard({
+    ...opts.trunk,
+    maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
+    reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
+    localWorld: opts.trunk?.localWorld ?? envLocalWorld,
+    // `|| undefined` so an empty TRUNK_RESERVE_KEY does not shadow an
+    // opts-supplied key. The invariant that an empty key unlocks nothing lives
+    // in the Switchboard, which covers this path and the opts path alike.
+    reserveKey: opts.trunk?.reserveKey ?? (process.env.TRUNK_RESERVE_KEY || undefined),
+  });
 
   const httpServer = createServer((req, res) => { void handleHttp(req, res); });
   const linkWss = new WebSocketServer({ noServer: true });
@@ -241,10 +295,20 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       catch { host.close(4400, "malformed trunk frame"); return; }
       if (f.t === "REGISTER") {
         if (code !== null) return;                       // one REGISTER per socket
-        code = switchboard.register(host, f);
-        if (code === null) { host.close(4409, "switchboard full"); return; }
+        const placed = switchboard.register(host, f);
+        // Four refusals, four codes: the host operator has to be able to tell
+        // "this hub is out of room entirely" from "the world you asked for is
+        // out of circuits" from "someone else already holds that slot" from
+        // "that world is not open to you" — the middle two are fixable by
+        // asking for a different world or slot, the last needs the hub
+        // operator's key.
+        if (placed === "full") { host.close(4409, "switchboard full"); return; }
+        if (placed === "no-circuits") { host.close(4460, "no circuits available"); return; }
+        if (placed === "slot-taken") { host.close(4461, "slot taken"); return; }
+        if (placed === "world-reserved") { host.close(4462, "world reserved"); return; }
+        code = placed.code;
         clearTimeout(registerTimer);
-        host.send(JSON.stringify({ t: "ASSIGNED", exchange: code }));
+        host.send(JSON.stringify({ t: "ASSIGNED", exchange: placed.code, world: placed.world, slot: placed.slot }));
         return;
       }
       if (code !== null) switchboard.handleHostFrame(code, f);
@@ -295,7 +359,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
     if (req.method === "GET" && url.pathname === "/trunk/directory") {
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ exchanges: switchboard.directory(publicBase) }));
+      res.end(JSON.stringify({ worlds: switchboard.directory(publicBase) }));
       return;
     }
     const m = url.pathname.match(/^\/x\/([A-Z2-9]{6})(\/.*)$/);

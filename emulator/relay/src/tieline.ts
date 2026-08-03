@@ -4,15 +4,20 @@
 // two configured local endpoints.
 
 import { WebSocket } from "ws";
-import { decodeTrunkFrame, restAllowed, type TrunkFrame } from "./trunk.ts";
+import { ALL_SLOTS, decodeTrunkFrame, restAllowed, type TrunkFrame } from "./trunk.ts";
 
 export interface TielineOpts {
   hubUrl: string;          // wss://wopr.realwopr.ai/trunk
   name: string; region: string; joshua: "claude" | "period"; operator?: string;
+  // What to ask the switchboard for. Both are requests, not facts: the hub
+  // places the exchange and answers with the placement it actually made.
+  slot?: string;           // WOPR, SCHOOL, ... ; omitted = next free wildcard
+  world?: number | "NEW";  // a specific world, or a fresh one
+  key?: string;            // the hub operator's key for a reserved world
   localComms: string;      // ws://127.0.0.1:8081
   localBridge: string;     // http://127.0.0.1:8000
   reconnect?: boolean;     // default true; tests pass false
-  onAssigned?: (exchange: string) => void;
+  onAssigned?: (exchange: string, world: number, slot: string) => void;
 }
 
 export function startTieline(opts: TielineOpts): { stop: () => void } {
@@ -54,16 +59,22 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
 
   function connect(): void {
     if (stopped) return;
+    // Did THIS attempt get as far as an ASSIGNED? The hub closes 4400 for any
+    // frame it cannot decode, not only a REGISTER — so the code alone does not
+    // say whether the placement was rejected or a live trunk hit one bad frame.
+    // Reset per attempt, set in the ASSIGNED handler below.
+    let assigned = false;
     hub = new WebSocket(opts.hubUrl);
     hub.on("open", () => {
       backoffMs = 5_000;
       send({ t: "REGISTER", v: 1, name: opts.name, region: opts.region,
-             joshua: opts.joshua, operator: opts.operator });
+             joshua: opts.joshua, operator: opts.operator,
+             slot: opts.slot, world: opts.world, key: opts.key });
     });
     hub.on("message", (data) => {
       let f: TrunkFrame;
       try { f = decodeTrunkFrame(data.toString()); } catch { return; }
-      if (f.t === "ASSIGNED") opts.onAssigned?.(f.exchange);
+      if (f.t === "ASSIGNED") { assigned = true; opts.onAssigned?.(f.exchange, f.world, f.slot); }
       else if (f.t === "OPEN") openChannel(f);
       else if (f.t === "FRAME") {
         const c = channels.get(f.chan);
@@ -81,7 +92,35 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
       setTimeout(connect, backoffMs);
       backoffMs = Math.min(backoffMs * 2, 60_000);
     };
-    hub.on("close", retry);
+    hub.on("close", (closeCode: number, reason: Buffer) => {
+      // A refusal is an answer, not an outage: NO CIRCUITS (4460), SLOT TAKEN
+      // (4461), WORLD RESERVED (4462), switchboard full (4409). Redialling
+      // would spam the hub with a REGISTER it just refused, so stop for good
+      // and say why.
+      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462) {
+        stopped = true;
+        console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
+      } else if (closeCode === 4400 && !assigned) {
+        // The hub could not even read our REGISTER — an off-roster slot, a
+        // world that is not a number or NEW. That verdict is deterministic:
+        // the same frame will be rejected every time, so redialling is an
+        // infinite loop with no LINE REFUSED to explain it. Stop and say what
+        // to fix.
+        //
+        // Only BEFORE an ASSIGNED, though: the hub closes 4400 for any
+        // undecodable frame, including one arriving mid-call on an exchange it
+        // already placed. Treating that as terminal would let a single corrupt
+        // frame take a live exchange off the board for good — and blame
+        // TIELINE_SLOT/TIELINE_WORLD, which were fine. Post-ASSIGNED it is an
+        // outage like any other: fall through to the backoff retry.
+        stopped = true;
+        console.error(
+          `LINE NOT ACCEPTED — ${reason.toString().toUpperCase() || "MALFORMED REGISTER"}` +
+          ` — CHECK TIELINE_SLOT AND TIELINE_WORLD`,
+        );
+      }
+      retry();
+    });
     hub.on("error", (err) => {
       // close fires after error and drives the reconnect; without this line a
       // refused/reset hub connection is invisible to the operator.
@@ -95,16 +134,36 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
 
 // CLI entry: `npm run tieline` on a host machine.
 if (import.meta.url === `file://${process.argv[1]}`) {
+  // Check what the hub checks, before dialling. A bad slot or world is refused
+  // with a malformed-frame close that says nothing about which field was
+  // wrong; caught here it is one readable line instead.
+  const rawSlot = process.env.TIELINE_SLOT?.toUpperCase() || undefined;
+  if (rawSlot !== undefined && !ALL_SLOTS.includes(rawSlot)) {
+    console.error(`TIELINE_SLOT MUST BE ONE OF: ${ALL_SLOTS.join(" ")}`);
+    process.exit(1);
+  }
+  const rawWorld = process.env.TIELINE_WORLD?.toUpperCase() || undefined;
+  if (rawWorld !== undefined && rawWorld !== "NEW" &&
+      !(/^[0-9]+$/.test(rawWorld) && Number(rawWorld) >= 1)) {
+    console.error("TIELINE_WORLD MUST BE A WORLD NUMBER (1 OR GREATER) OR NEW");
+    process.exit(1);
+  }
+
   startTieline({
     hubUrl: process.env.TRUNK_HUB_URL ?? "wss://wopr.realwopr.ai/trunk",
     name: process.env.TIELINE_NAME ?? "UNNAMED EXCH",
     region: process.env.TIELINE_REGION ?? "SOMEWHERE",
     joshua: (process.env.TIELINE_JOSHUA as "claude" | "period") ?? "period",
     operator: process.env.TIELINE_OPERATOR,
+    slot: rawSlot,
+    world: rawWorld === "NEW" ? "NEW" : rawWorld ? Number(rawWorld) : undefined,
+    // Only needed for a reserved world (world 1 is the flagship's); the hub
+    // operator issues it. Opaque here — the hub is the only thing that reads it.
+    key: process.env.TIELINE_RESERVE_KEY || undefined,
     localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
     localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
-    onAssigned: (exchange) => {
-      console.log(`TIE LINE UP — EXCHANGE ${exchange} — LISTED IN THE DIRECTORY`);
+    onAssigned: (exchange, world, slot) => {
+      console.log(`TIE LINE UP — YOU ARE WORLD ${world} / ${slot} — EXCHANGE ${exchange}`);
       console.log(`share: https://realwopr.ai/war-room.html?exch=${exchange}`);
     },
   });

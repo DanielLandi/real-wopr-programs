@@ -193,7 +193,7 @@ test("tieline: a disallowed REQUEST path is refused host-side without touching t
     ws.on("message", (data) => {
       const f = JSON.parse(data.toString());
       if (f.t === "REGISTER") {
-        ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01" }));
+        ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 1, slot: "WOPR" }));
         ws.send(JSON.stringify({ t: "REQUEST", rid: 1, method: "POST", path: "/api/session/1/defcon" }));
       } else if (f.t === "RESPONSE") {
         responses.push(f);
@@ -225,5 +225,267 @@ test("tieline: a disallowed REQUEST path is refused host-side without touching t
     await new Promise<void>((resolve) => fakeHub.close(() => resolve()));
     await comms.close();
     await bridge.close();
+  }
+});
+
+test("tieline: registers its slot/world and reports the placement", { timeout: 10_000 }, async () => {
+  // The placement is the hub's answer, not the host's request: the tieline
+  // asks for a slot and a world, and learns where it actually landed from
+  // ASSIGNED. "NEW" on an empty board lands in world 2 — world 1 is pinned
+  // live (and, on a default hub, reserved), so a host asking for a fresh
+  // world skips it either way.
+  const hub = await startServer({ port: 0 });
+  let resolvePlacement!: (p: { world: number; slot: string }) => void;
+  const placement = new Promise<{ world: number; slot: string }>((resolve) => { resolvePlacement = resolve; });
+
+  const tieline = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "BASEMENT EXCH",
+    region: "PORTLAND US",
+    joshua: "period",
+    slot: "SCHOOL",
+    world: "NEW",
+    // Nothing listens on port 9; this test never opens a call or a REST relay.
+    localComms: "ws://127.0.0.1:9",
+    localBridge: "http://127.0.0.1:9",
+    reconnect: false,
+    onAssigned: (_exchange, world, slot) => resolvePlacement({ world, slot }),
+  });
+
+  try {
+    assert.deepEqual(await placement, { world: 2, slot: "SCHOOL" });
+    const dir = await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`);
+    const worlds = JSON.parse(dir.body).worlds as Array<{ n: number; slots: Array<{ slot: string; name: string }> }>;
+    assert.deepEqual(
+      worlds.flatMap((w) => w.slots.map((s) => [w.n, s.slot, s.name])),
+      [[2, "SCHOOL", "BASEMENT EXCH"]],
+    );
+  } finally {
+    tieline.stop();
+    await hub.close();
+  }
+});
+
+test("tieline: stops (no reconnect) when the hub cannot read the REGISTER", { timeout: 20_000 }, async () => {
+  // A typo'd slot or world never becomes a refusal — the hub cannot decode the
+  // frame at all and closes 4400. That verdict is deterministic, so it has to
+  // be as terminal as 4460/4461: redialling re-sends the same bad frame every
+  // backoff, forever, with nothing on the console to explain the silence.
+  // (The CLI validates these fields first; this is the path where something
+  // else builds the opts, and the last line of defence for the operator.)
+  const hub = await startServer({ port: 0, trunk: { maxWorlds: 2 } });
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+  const rejections = () => errors.filter((e) => e.includes("LINE NOT ACCEPTED"));
+
+  const typo = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "TYPO EXCH", region: "PORTLAND US", joshua: "period",
+    slot: "WOPRR",                                    // off the roster
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: true,                                  // the 4400 must override
+    onAssigned: () => { assert.fail("a malformed REGISTER must not be assigned"); },
+  });
+
+  try {
+    const deadline = Date.now() + 3_000;
+    while (rejections().length < 1 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.deepEqual(rejections(), [
+      "LINE NOT ACCEPTED — MALFORMED TRUNK FRAME — CHECK TIELINE_SLOT AND TIELINE_WORLD",
+    ]);
+    // The first backoff is 5s: wait past it. A tieline that treated 4400 as an
+    // outage would be on its second (and third...) attempt by now, each one
+    // logging again.
+    await new Promise((r) => setTimeout(r, 6_500));
+    assert.equal(rejections().length, 1, `redialled a frame the hub cannot read: ${JSON.stringify(errors)}`);
+    const dir = await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`);
+    const worlds = JSON.parse(dir.body).worlds as Array<{ slots: unknown[] }>;
+    assert.deepEqual(worlds.flatMap((w) => w.slots), []);   // nothing was ever placed
+  } finally {
+    console.error = origError;
+    typo.stop();
+    await hub.close();
+  }
+});
+
+test("tieline: a 4400 AFTER the placement is an outage, not a verdict", { timeout: 20_000 }, async () => {
+  // The hub closes 4400 for ANY frame it cannot decode, not only a REGISTER —
+  // server.ts does it on every host message. So a single corrupt frame on a
+  // trunk the hub already placed arrives here as the same close code as a
+  // typo'd slot. Treating it as terminal would take a LIVE exchange off the
+  // board for good, blaming TIELINE_SLOT/TIELINE_WORLD, which were fine.
+  // Once ASSIGNED has arrived, 4400 follows the ordinary backoff retry.
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+
+  let connections = 0;
+  const fakeHub = new WebSocketServer({ port: 0 });
+  fakeHub.on("connection", (ws) => {
+    connections += 1;
+    ws.on("message", (data) => {
+      if (JSON.parse(data.toString()).t !== "REGISTER") return;
+      // Placed — and then the hub chokes on something mid-stream.
+      ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 2, slot: "WOPR" }));
+      setTimeout(() => ws.close(4400, "malformed trunk frame"), 20);
+    });
+  });
+  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
+  const hubPort = (fakeHub.address() as { port: number }).port;
+
+  let assignedCalls = 0;
+  const tie = startTieline({
+    hubUrl: `ws://127.0.0.1:${hubPort}`,
+    name: "LIVE EXCH", region: "PORTLAND US", joshua: "period",
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: true,
+    onAssigned: () => { assignedCalls += 1; },
+  });
+
+  try {
+    // The first backoff is 5s: past it, a tieline that respected the retry path
+    // has redialled and been placed a second time.
+    const deadline = Date.now() + 12_000;
+    while (connections < 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(connections >= 2, `a post-ASSIGNED 4400 killed a live trunk: ${connections} connection(s)`);
+    assert.ok(assignedCalls >= 2, `the redial was never placed again: ${assignedCalls} ASSIGNED`);
+    assert.deepEqual(
+      errors.filter((e) => e.includes("LINE NOT ACCEPTED")), [],
+      `a live exchange was blamed on its slot/world config: ${JSON.stringify(errors)}`,
+    );
+  } finally {
+    console.error = origError;
+    tie.stop();
+    await new Promise<void>((resolve) => fakeHub.close(() => resolve()));
+  }
+});
+
+test("tieline: stops (no reconnect) when the hub refuses the slot", { timeout: 10_000 }, async () => {
+  // A refusal is an answer, not an outage. `reconnect: true` asks for redials
+  // through outages; a 4409/4460/4461 close must override it, or the host
+  // spends its backoff loop re-sending a REGISTER the hub just refused.
+  // Subject: those refusals, so the board is open — on a default hub the
+  // holder itself would be refused for reservation before it ever took WOPR.
+  const hub = await startServer({ port: 0, trunk: { maxWorlds: 1, reservedWorlds: [] } });
+  const local = { localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9" } as const;
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+
+  const holder = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "HOLDER EXCH", region: "PORTLAND US", joshua: "period", slot: "WOPR",
+    ...local, reconnect: false, onAssigned: () => {},
+  });
+  let assignedCalls = 0;
+  const losers: Array<{ stop: () => void }> = [];
+  const refusals = () => errors.filter((e) => e.includes("LINE REFUSED"));
+  const dialRefused = async (world: number | undefined, expected: number) => {
+    losers.push(startTieline({
+      hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+      name: "LOSER EXCH", region: "PORTLAND US", joshua: "period", slot: "WOPR", world,
+      ...local,
+      reconnect: true,                                       // refusal must override
+      onAssigned: () => { assignedCalls += 1; },
+    }));
+    const deadline = Date.now() + 3_000;
+    while (refusals().length < expected && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.equal(
+      refusals().length, expected,
+      `expected ${expected} LINE REFUSED logs (the refusal path also sets the no-redial flag), got: ${JSON.stringify(errors)}`,
+    );
+  };
+
+  try {
+    await new Promise((r) => setTimeout(r, 200));            // holder registered
+    // No world asked for: the only world (maxWorlds: 1) already has WOPR, so
+    // the hub is out of circuits entirely -> 4460.
+    await dialRefused(undefined, 1);
+    // World named explicitly: that world exists and has room, but its WOPR is
+    // spoken for -> 4461. Retrying a taken slot would spin forever, so this
+    // code has to be as terminal as 4460.
+    await dialRefused(1, 2);
+    assert.deepEqual(refusals().sort(), [
+      "LINE REFUSED — NO CIRCUITS AVAILABLE",
+      "LINE REFUSED — SLOT TAKEN",
+    ]);
+    assert.equal(assignedCalls, 0);
+    const dir = await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`);
+    const worlds = JSON.parse(dir.body).worlds as Array<{ slots: unknown[] }>;
+    assert.equal(worlds.flatMap((w) => w.slots).length, 1);
+  } finally {
+    console.error = origError;
+    for (const l of losers) l.stop();
+    holder.stop();
+    await hub.close();
+  }
+});
+
+test("tieline: stops (no reconnect) when the world is reserved", { timeout: 10_000 }, async () => {
+  // World 1 is the flagship's on a default hub. A host that asks for it is
+  // refused 4462 — an answer, not an outage, so like 4460/4461 it must be
+  // terminal: redialling would re-send a REGISTER the hub will refuse every
+  // time, and the operator would see nothing but silence.
+  const hub = await startServer({ port: 0 });
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+  const refusals = () => errors.filter((e) => e.includes("LINE REFUSED"));
+
+  const loser = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "PRETENDER EXCH", region: "PORTLAND US", joshua: "period",
+    slot: "WOPR", world: 1,
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: true,                                    // the refusal must override
+    onAssigned: () => { assert.fail("a reserved world must not be assigned"); },
+  });
+
+  try {
+    const deadline = Date.now() + 3_000;
+    while (refusals().length < 1 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert.deepEqual(refusals(), ["LINE REFUSED — WORLD RESERVED"]);
+    // Past the first 5s backoff: a tieline that treated 4462 as an outage
+    // would have redialled (and logged) again by now.
+    await new Promise((r) => setTimeout(r, 6_000));
+    assert.equal(refusals().length, 1, `redialled a refused world: ${JSON.stringify(errors)}`);
+    const dir = await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`);
+    const worlds = JSON.parse(dir.body).worlds as Array<{ slots: unknown[] }>;
+    assert.deepEqual(worlds.flatMap((w) => w.slots), []);   // nothing was placed
+  } finally {
+    console.error = origError;
+    loser.stop();
+    await hub.close();
+  }
+});
+
+test("tieline: carries the reserve key, and lands in the reserved world with it", { timeout: 10_000 }, async () => {
+  const hub = await startServer({ port: 0, trunk: { reserveKey: "FLAGSHIP-KEY" } });
+  let resolvePlacement!: (p: { world: number; slot: string }) => void;
+  const placement = new Promise<{ world: number; slot: string }>((resolve) => { resolvePlacement = resolve; });
+
+  const tie = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`,
+    name: "FLAGSHIP EXCH", region: "PORTLAND US", joshua: "period",
+    slot: "WOPR", world: 1, key: "FLAGSHIP-KEY",
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: false,
+    onAssigned: (_exchange, world, slot) => resolvePlacement({ world, slot }),
+  });
+
+  try {
+    assert.deepEqual(await placement, { world: 1, slot: "WOPR" });
+  } finally {
+    tie.stop();
+    await hub.close();
   }
 });

@@ -286,9 +286,13 @@ export default function HomeTerminal() {
     void (async () => {
       // The bridge issues the session + HMAC token (api-contract.md §2, D4).
       const apiBase = exchange?.api ?? process.env.NEXT_PUBLIC_API_URL ?? "";
+      // A directory entry can name a bridge system: the hub seeds world 1 with
+      // the flagship's own slots, and a period system there (the school, PAN
+      // AM) is dialled as a system session, not as a WOPR line. sessionBody
+      // drops the room and the processor for those — see its note.
       const s = await mintSession(
         apiBase,
-        sessionBody("home-terminal", room.code, null, joshuaFromLocation()),
+        sessionBody("home-terminal", room.code, exchange?.system ?? null, joshuaFromLocation()),
         target,
       );
       if (!s) {

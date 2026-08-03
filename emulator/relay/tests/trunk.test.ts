@@ -7,6 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   Switchboard,
+  type DirectoryEntry,
   decodeTrunkFrame,
   restAllowed,
   newExchangeCode,
@@ -30,13 +31,26 @@ function fakePort() {
   };
 }
 
+// `register` returns a world/slot placement (or a refusal string) and the
+// directory is grouped by world — see tests/worlds.test.ts for those rules.
+// The tests below predate worlds and care only about the exchange code and
+// the flat roster of live exchanges; these two adapters keep them at that
+// altitude instead of restating placement in every case.
+const codeOf = (r: ReturnType<Switchboard["register"]>): string => {
+  assert.equal(typeof r, "object", `expected a placement, got ${String(r)}`);
+  return (r as { code: string }).code;
+};
+const flatDir = (sb: Switchboard, base: string): DirectoryEntry[] =>
+  sb.directory(base).flatMap((w) => w.slots);
+
 // ---- codec round-trip ----------------------------------------------------
 
 test("codec: round-trips every frame type through JSON", () => {
   const frames: TrunkFrame[] = [
     { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" },
     { t: "REGISTER", v: 1, name: "CRYSTAL PALACE", region: "SEATTLE US", joshua: "claude", operator: "DANIEL" },
-    { t: "ASSIGNED", exchange: "ABC234" },
+    { t: "REGISTER", v: 1, name: "SEATTLE SCHOOL", region: "SEATTLE US", joshua: "period", slot: "SCHOOL", world: 2 },
+    { t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" },
     { t: "OPEN", chan: 1, query: "" },
     { t: "FRAME", chan: 1, data: "HELLO" },
     { t: "CLOSE", chan: 1 },
@@ -126,6 +140,37 @@ test("codec: throws on CLOSE reason too long to relay as a ws close reason", () 
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "CLOSE", chan: 1, reason: "X".repeat(101) })), Error);
 });
 
+// ---- worlds and roster slots ----------------------------------------------
+
+test("REGISTER accepts a roster slot and a world number or NEW", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, slot: "SCHOOL" })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, slot: "OTHER-2", world: 3 })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, world: "NEW" })).t, "REGISTER");
+});
+
+test("REGISTER rejects an off-roster slot and a bad world", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "JOSHUA" })), /bad slot/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "wopr" })), /bad slot/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: 0 })), /bad world/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: "FRESH" })), /bad world/);
+});
+
+test("REGISTER carries an optional reserve key, bounded at 64 chars", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, key: "K" })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, key: "X".repeat(64) })).t, "REGISTER");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, key: "X".repeat(65) })), /bad key/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, key: 7 })), /bad key/);
+});
+
+test("ASSIGNED requires world and slot", () => {
+  assert.equal(decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" })).t, "ASSIGNED");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234" })), /bad world/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1 })), /bad slot/);
+});
+
 // ---- REST allowlist -------------------------------------------------------
 
 test("restAllowed: accepts the six allowlisted shapes", () => {
@@ -169,22 +214,24 @@ test("newExchangeCode: returns 6 chars from the alphabet", () => {
 test("Switchboard: register assigns a 6-char code and directory lists it", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" });
-  assert.ok(code && code.length === 6);
-  const dir = sb.directory("https://hub.example");
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
+  assert.equal(code.length, 6);
+  const dir = flatDir(sb, "https://hub.example");
   assert.equal(dir.length, 1);
   assert.equal(dir[0].api, `https://hub.example/x/${code}`);
   assert.equal(dir[0].link, `wss://hub.example/x/${code}/link`);
 });
 
-test("Switchboard: second REGISTER on a full board returns null", () => {
+test("Switchboard: second REGISTER on a full board returns 'full'", () => {
   const sb = new Switchboard({ maxExchanges: 1 });
   const host1 = fakePort();
   const host2 = fakePort();
-  const code1 = sb.register(host1, { t: "REGISTER", v: 1, name: "FIRST EXCH", region: "PORTLAND US", joshua: "period" });
+  const code1 = codeOf(sb.register(host1, { t: "REGISTER", v: 1, name: "FIRST EXCH", region: "PORTLAND US", joshua: "period" }));
   assert.ok(code1);
   const code2 = sb.register(host2, { t: "REGISTER", v: 1, name: "SECOND EXCH", region: "SEATTLE US", joshua: "period" });
-  assert.equal(code2, null);
+  // The board cap is checked before placement: a free slot in world 1 does not
+  // make room on a full switchboard.
+  assert.equal(code2, "full");
 });
 
 // ---- Switchboard: openChannel ------------------------------------------
@@ -198,7 +245,7 @@ test("Switchboard: openChannel returns 'offline' for unknown code", () => {
 test("Switchboard: openChannel returns 'busy' (not offline) when over maxChannels", () => {
   const sb = new Switchboard({ maxChannels: 1 });
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client1 = fakePort();
   const client2 = fakePort();
   const chan1 = sb.openChannel(code, client1, "");
@@ -210,7 +257,7 @@ test("Switchboard: openChannel returns 'busy' (not offline) when over maxChannel
 test("Switchboard: openChannel refuses an OPEN whose wrapped query overflows the trunk cap", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const openCount = () => host.sent.filter((d) => JSON.parse(d).t === "OPEN").length;
   // A query that only overflows once JSON-wrapped: escaping doubles every `"`.
   const result = sb.openChannel(code, fakePort(), '"'.repeat(TRUNK_MAX_FRAME_BYTES - 100));
@@ -224,7 +271,7 @@ test("Switchboard: openChannel refuses an OPEN whose wrapped query overflows the
 test("Switchboard: openChannel sends OPEN to host and returns a chan id", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "q=1");
   assert.equal(chan, 1);
@@ -236,7 +283,7 @@ test("Switchboard: openChannel sends OPEN to host and returns a chan id", () => 
 test("Switchboard: clientFrame relays visitor -> host as FRAME", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.clientFrame(code, chan, "HELLO");
@@ -247,7 +294,7 @@ test("Switchboard: clientFrame relays visitor -> host as FRAME", () => {
 test("Switchboard: an escape-amplified client frame closes the call explicitly instead of a silent drop", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   // Legal raw size (< TRUNK_MAX_FRAME_BYTES), but JSON-escaping doubles every
@@ -271,7 +318,7 @@ test("Switchboard: an escape-amplified client frame closes the call explicitly i
 test("Switchboard: handleHostFrame relays host -> client FRAME", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.handleHostFrame(code, { t: "FRAME", chan, data: "WORLD" });
@@ -281,7 +328,7 @@ test("Switchboard: handleHostFrame relays host -> client FRAME", () => {
 test("Switchboard: handleHostFrame CLOSE closes and drops the client channel", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.handleHostFrame(code, { t: "CLOSE", chan, reason: "call ended" });
@@ -295,7 +342,7 @@ test("Switchboard: handleHostFrame CLOSE closes and drops the client channel", (
 test("Switchboard: handleHostFrame CLOSE propagates the host's reason to the visitor", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.handleHostFrame(code, { t: "CLOSE", chan, reason: "line busy" });
@@ -306,7 +353,7 @@ test("Switchboard: handleHostFrame CLOSE propagates the host's reason to the vis
 test("Switchboard: handleHostFrame CLOSE without a reason falls back to 'call ended'", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.handleHostFrame(code, { t: "CLOSE", chan });
@@ -316,7 +363,7 @@ test("Switchboard: handleHostFrame CLOSE without a reason falls back to 'call en
 test("Switchboard: closeChannel sends CLOSE to host for a client-initiated hangup", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   const chan = sb.openChannel(code, client, "") as number;
   sb.closeChannel(code, chan);
@@ -329,7 +376,7 @@ test("Switchboard: closeChannel sends CLOSE to host for a client-initiated hangu
 test("Switchboard: request resolves on matching RESPONSE", async () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const p = sb.request(code, "GET", "/health", undefined);
   const sent = JSON.parse(host.sent[host.sent.length - 1]);
   assert.equal(sent.t, "REQUEST");
@@ -343,7 +390,7 @@ test("Switchboard: request resolves on matching RESPONSE", async () => {
 test("Switchboard: request rejects with 'timeout' after timeoutMs", async () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   await assert.rejects(
     () => sb.request(code, "GET", "/health", undefined, 10),
     (err: unknown) => err === "timeout",
@@ -355,7 +402,7 @@ test("Switchboard: an in-flight request rejects with 'dropped' (not 'offline') o
   // that is a gateway failure (502 at the REST relay), not an unknown code.
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const p = sb.request(code, "GET", "/health", undefined, 5000);
   sb.unregister(code);
   await assert.rejects(
@@ -377,12 +424,12 @@ test("Switchboard: request rejects with 'offline' for unknown code immediately",
 test("Switchboard: unregister closes open channels and drops the exchange", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
   const client = fakePort();
   sb.openChannel(code, client, "");
   sb.unregister(code);
   assert.equal(client.closed, true);
-  assert.equal(sb.directory("https://hub.example").length, 0);
+  assert.equal(flatDir(sb, "https://hub.example").length, 0);
   // openChannel against a dropped code is now "unknown".
   assert.equal(sb.openChannel(code, fakePort(), ""), "offline");
 });
@@ -392,8 +439,8 @@ test("Switchboard: unregister closes open channels and drops the exchange", () =
 test("Switchboard: directory builds https api + wss link from a publicBase", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "claude", operator: "DANIEL" })!;
-  const dir = sb.directory("https://hub");
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "claude", operator: "DANIEL" }));
+  const dir = flatDir(sb, "https://hub");
   assert.equal(dir.length, 1);
   const entry = dir[0];
   assert.equal(entry.id, `trunk-${code.toLowerCase()}`);
@@ -411,25 +458,25 @@ test("Switchboard: directory builds https api + wss link from a publicBase", () 
 test("Switchboard: sweepDead unregisters after two missed pongs", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
 
   let dropped = sb.sweepDead();
   assert.deepEqual(dropped, []);
-  assert.equal(sb.directory("https://hub").length, 1);
+  assert.equal(flatDir(sb, "https://hub").length, 1);
 
   dropped = sb.sweepDead();
   assert.deepEqual(dropped, [code]);
-  assert.equal(sb.directory("https://hub").length, 0);
+  assert.equal(flatDir(sb, "https://hub").length, 0);
 });
 
 test("Switchboard: a host PONG frame resets the missed-pong counter", () => {
   const sb = new Switchboard();
   const host = fakePort();
-  const code = sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" })!;
+  const code = codeOf(sb.register(host, { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" }));
 
   sb.sweepDead(); // missed = 1
   sb.handleHostFrame(code, { t: "PONG" }); // missed = 0, via the same path server.ts routes
   const dropped = sb.sweepDead(); // missed = 1, still alive
   assert.deepEqual(dropped, []);
-  assert.equal(sb.directory("https://hub").length, 1);
+  assert.equal(flatDir(sb, "https://hub").length, 1);
 });

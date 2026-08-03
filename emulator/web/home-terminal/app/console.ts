@@ -37,6 +37,11 @@ export interface DirEntry {
   region?: string;
   number?: string; // the ATDT-dialable number, if the entry has one
   joshua?: "claude" | "period";
+  world?: number; // trunk world, when the entry came from a trunk directory
+  slot?: string;  // its role in that world (WOPR, SCHOOL, PANAM, ...)
+  /** Bridge system id, when this slot is a period system rather than a Joshua
+   *  line. Its presence is what tells the screen there is no Joshua here. */
+  system?: string;
   target: DialTarget | null; // null = the default WOPR line
 }
 
@@ -103,7 +108,10 @@ export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   const out: DirEntry[] = [];
   let i = 1;
   for (const e of ctx.exchanges ?? []) {
-    out.push({ index: i++, name: e.name, region: e.region, joshua: e.joshua, target: e });
+    out.push({
+      index: i++, name: e.name, region: e.region, joshua: e.joshua,
+      world: e.world, slot: e.slot, system: e.system, target: e,
+    });
   }
   for (const s of ctx.systems) {
     out.push({ index: i++, name: s.name, number: s.number, target: s });
@@ -115,15 +123,40 @@ export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   return out;
 }
 
-/** The DIRECTORY screen as plain teletype text. */
+/** The DIRECTORY screen as plain teletype text. Trunk entries arrive tagged
+ *  with the world they were placed in, so they print under a `-- WORLD n --`
+ *  heading; untagged entries (the local book, the SYSTEM/1 numbers, the
+ *  mystery carrier) print exactly as they always did. */
 export function directoryText(ctx: ConsoleContext): string {
   const lines = ["DIRECTORY", ""];
+  let lastWorld: number | undefined;
   for (const e of directoryEntries(ctx)) {
+    if (e.world !== undefined && e.world !== lastWorld) {
+      if (lines.length > 2) lines.push("");
+      lines.push(`-- WORLD ${e.world} --`);
+      lastWorld = e.world;
+    } else if (e.world === undefined && lastWorld !== undefined) {
+      lines.push("");
+      lastWorld = undefined;
+    }
+    // 80 columns, worst case, with every field at its maximum at once:
+    //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 (PROTOVISION)
+    //   + " [" 2 + region 24 + "]" 1 + " (1983 MODE)" 12  =  80.
+    // The REGISTER wire caps name and region at 24 each and PROTOVISION is the
+    // longest roster slot, so that is the true ceiling. Both bracketed and
+    // parenthesised suffixes are delimited by their own punctuation, so they
+    // take a single leading space; the name/slot gap keeps two. (Suppressing
+    // the mode suffix below only ever shortens a line, so the ceiling holds.)
     const nn = String(e.index).padStart(2, "0");
-    const region = e.region ? `  [${e.region}]` : "";
+    const region = e.region ? ` [${e.region}]` : "";
     const num = e.number ? `  ${e.number}` : "";
-    const mode = e.joshua === "period" ? "  (1983 MODE)" : "";
-    lines.push(`${nn}  ${e.name}${region}${num}${mode}`);
+    // "(1983 MODE)" names the dialogue processor — period Lisp rather than
+    // Claude. A slot that is a period SYSTEM (the school's BASIC-PLUS box, PAN
+    // AM's reservations) never reaches Joshua at all, so the label would be
+    // answering a question that line does not raise.
+    const mode = e.joshua === "period" && !e.system ? " (1983 MODE)" : "";
+    const slot = e.slot ? `  ${e.slot}` : "";
+    lines.push(`${nn}  ${e.name}${slot}${region}${num}${mode}`);
   }
   lines.push("");
   lines.push("DIAL <NN>   DIAL <NAME>   ATDT <NUMBER>   OR JUST THE NUMBER");

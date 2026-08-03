@@ -240,3 +240,72 @@ test("sessionBody omits joshua when none was asked for", () => {
 test("sessionBody does not vet the processor name — the exchange owns that list", () => {
   assert.equal(sessionBody("home-terminal", undefined, null, "nonsense").joshua, "nonsense");
 });
+
+test("a seeded directory entry's system id opens a system session, not a WOPR one", () => {
+  // World 1 is seeded by the hub, so a period-system slot arrives as an
+  // ordinary directory entry carrying a bridge `system` id. Dialling it is the
+  // system path: no room, no joshua — the same body a local SYSTEM/1 number
+  // would mint (page.tsx passes `entry.system ?? null` here).
+  const entry = { system: "school" };
+  assert.deepEqual(sessionBody("home-terminal", "UXBB6B", entry.system ?? null, "claude"), {
+    surface: "home-terminal",
+    system: "school",
+  });
+  // The same call for a Joshua slot (no system id) is unchanged.
+  assert.deepEqual(sessionBody("home-terminal", "UXBB6B", {}.system ?? null, "claude"), {
+    surface: "home-terminal",
+    room_code: "UXBB6B",
+    joshua: "claude",
+  });
+});
+
+test("directoryText groups world-tagged exchanges under WORLD headings", () => {
+  const exchanges = [
+    { id: "a", name: "CHEYENNE EXCH", region: "SAO PAULO BR", api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "WOPR" },
+    { id: "b", name: "ANNEX EXCH", region: "PORTLAND US", api: "https://y", link: "wss://y", joshua: "period", world: 2, slot: "SCHOOL" },
+  ];
+  const text = directoryText({ exchanges, systems: [], hits: null });
+  const lines = text.split("\n");
+  const w1 = lines.indexOf("-- WORLD 1 --"), w2 = lines.indexOf("-- WORLD 2 --");
+  assert.ok(w1 >= 0 && w2 > w1);
+  assert.ok(lines[w1 + 1].includes("CHEYENNE EXCH") && lines[w1 + 1].includes("WOPR"));
+  assert.ok(lines[w2 + 1].includes("ANNEX EXCH"));
+});
+
+test("directoryText prints an untagged book with no WORLD headings", () => {
+  // A phone-book entry that never came from a trunk has no world; the
+  // directory must look exactly as it did before worlds existed.
+  assert.equal(/-- WORLD/.test(directoryText(ctx)), false);
+});
+
+test("directoryText hides (1983 MODE) on a slot that is a period system, not Joshua", () => {
+  // "(1983 MODE)" names the dialogue processor — period Lisp rather than
+  // Claude. A seeded SCHOOL or PANAM slot never reaches Joshua at all, so the
+  // suffix would be answering a question nobody asked about that line.
+  const base = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
+  const exchanges = [
+    { ...base, id: "local-school", name: "SUNNYVALE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+    { ...base, id: "local-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
+  ];
+  const lines = directoryText({ exchanges, systems: [], hits: null }).split("\n");
+  const school = lines.find((l) => l.includes("SUNNYVALE SCHOOL DIST"));
+  const wopr = lines.find((l) => l.includes("CHEYENNE MOUNTAIN"));
+  assert.equal(school.includes("1983 MODE"), false, "a period system has no Joshua flavour to report");
+  assert.ok(wopr.includes("(1983 MODE)"), "a period Joshua line still says so");
+});
+
+test("directoryText fits an 80-column terminal in the worst case", () => {
+  // The IMSAI's screen is 80 columns; a wrapped directory line is a visible
+  // defect. Worst case is every field at its maximum simultaneously: a 24-char
+  // name and a 24-char region (the REGISTER wire caps both at 24), the longest
+  // roster slot (PROTOVISION, 11), and the period-engine suffix.
+  const exchanges = [{
+    id: "a", name: "X".repeat(24), region: "Y".repeat(24),
+    api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "PROTOVISION",
+  }];
+  const lines = directoryText({ exchanges, systems: [], hits: null }).split("\n");
+  const entry = lines.find((l) => l.includes("PROTOVISION"));
+  assert.ok(entry, "the worst-case entry must be printed");
+  assert.ok(entry.length <= 80, `worst-case entry is ${entry.length} cols: ${JSON.stringify(entry)}`);
+  for (const l of lines) assert.ok(l.length <= 80, `line over 80 cols: ${JSON.stringify(l)}`);
+});
