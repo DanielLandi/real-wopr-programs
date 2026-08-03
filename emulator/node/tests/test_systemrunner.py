@@ -172,7 +172,7 @@ def test_ws_system_session_dials_airline_and_books_paris(system_client):
 
 @needs_school
 def test_ws_system_session_dials_school_and_changes_grade(system_client):
-    # The home terminal's "GOOSE LAKE" dial (Rung 4) — same WS path as the
+    # The home terminal's "SEATTLE SCHOOL" dial (Rung 4) — same WS path as the
     # airline, bound to system: "school". Drives the S2 grade change F->A
     # through the real bwBASIC program built in Task 1.
     r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "school"})
@@ -183,7 +183,7 @@ def test_ws_system_session_dials_school_and_changes_grade(system_client):
         # from the DISPLAY frame that precedes it (Task 5) — a non-empty
         # DISPLAY yields an "output" frame, and any PROMPT yields its own
         # "prompt" frame (app/main.py). DISPLAY 0 turns emit only the prompt.
-        ws.receive_text()                                     # display: GOOSE LAKE banner
+        ws.receive_text()                                     # display: SEATTLE banner
         assert "PASSWORD:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
         ws.receive_text()                                     # display: welcome + menu

@@ -142,14 +142,14 @@ test("the federation, end to end", async (t) => {
 
   await t.test("dialling the school reaches the school", async () => {
   const line = await dialTracked(relays.pstn, "(206) 555-0142");
-  await line.untilPrompt("PASSWORD:");
-  assert.match(flat(line.transcript()), /GOOSE LAKE UNIFIED SCHOOL DISTRICT/);
+  await line.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
+  assert.match(flat(line.transcript()), /WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET/);
   line.hangUp();
 });
 
   await t.test("a phone number reaches the same line however it is punctuated", async () => {
   const line = await dialTracked(relays.pstn, "2065550142");
-  await line.untilPrompt("PASSWORD:");
+  await line.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
   line.hangUp();
 });
 
@@ -157,7 +157,7 @@ test("the federation, end to end", async (t) => {
   // The claim this whole sub-project exists to make good: these grades are not
   // in the school. They come out of school-db, across the bus.
   const line = await dialTracked(relays.pstn, "(206) 555-0142");
-  await line.untilPrompt("PASSWORD:");
+  await line.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
   line.send("PENCIL");
   await line.untilPrompt("SELECT:");
   line.send("1");
@@ -172,7 +172,7 @@ test("the federation, end to end", async (t) => {
 
   await t.test("a grade set on one call is there on the next — the store remembers", async () => {
   const first = await dialTracked(relays.pstn, "(206) 555-0142");
-  await first.untilPrompt("PASSWORD:");
+  await first.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
   first.send("PENCIL");
   await first.untilPrompt("SELECT:");
   first.send("2");
@@ -187,7 +187,7 @@ test("the federation, end to end", async (t) => {
 
   // A separate call, and for the school a separate session entirely.
   const second = await dialTracked(relays.pstn, "(206) 555-0142");
-  await second.untilPrompt("PASSWORD:");
+  await second.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
   second.send("PENCIL");
   await second.untilPrompt("SELECT:");
   second.send("1");
@@ -244,7 +244,7 @@ test("the federation, end to end", async (t) => {
 
   await t.test("with the store gone, the school says so and keeps the line up", async () => {
   const line = await dialTracked(relays.pstn, "(206) 555-0142");
-  await line.untilPrompt("PASSWORD:");
+  await line.untilPrompt("PLEASE LOGON WITH USER PASSWORD:");
   line.send("PENCIL");
   await line.untilPrompt("SELECT:");
 

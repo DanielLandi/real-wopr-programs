@@ -87,7 +87,7 @@ export function sessionBody(
   systemId: string | null,
   joshua?: string,
 ): Record<string, unknown> {
-  // A system dial (PAN AM, GOOSE LAKE) never reaches Joshua, so naming a
+  // A system dial (PAN AM, SEATTLE SCHOOL) never reaches Joshua, so naming a
   // dialogue processor there is meaningless — and sending one would earn a 400
   // that the terminal can only report as the system being unreachable.
   if (systemId !== null) return { surface, system: systemId };
@@ -107,7 +107,7 @@ export function sessionBody(
  *
  *  One line per machine. A seeded world slot and a number on David's paper
  *  list (`DIAL_SYSTEMS`) can be the same box reached two ways — the school is
- *  both `GOOSE LAKE SCHOOL DIST  SCHOOL` and `(206) 555-0142`. Where the
+ *  both `SEATTLE SCHOOL DIST  SCHOOL` and `(206) 555-0142`. Where the
  *  exchange's bridge `system` id matches a local sim's `systemId`, the world
  *  entry ABSORBS the sim: it takes the sim's number (so `ATDT` off the paper
  *  list still lands) and the sim drops out of the standalone list. The world
