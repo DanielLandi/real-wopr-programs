@@ -103,17 +103,40 @@ export function sessionBody(
 
 /** The canonical numbered directory: phone-book exchanges first, then the
  *  local SYSTEM/1 numbers, then the default WOPR line. Both DIRECTORY and
- *  DIAL-by-index/name resolve against this single ordered list. */
+ *  DIAL-by-index/name resolve against this single ordered list.
+ *
+ *  One line per machine. A seeded world slot and a number on David's paper
+ *  list (`DIAL_SYSTEMS`) can be the same box reached two ways — the school is
+ *  both `GOOSE LAKE SCHOOL DIST  SCHOOL` and `(206) 555-0142`. Where the
+ *  exchange's bridge `system` id matches a local sim's `systemId`, the world
+ *  entry ABSORBS the sim: it takes the sim's number (so `ATDT` off the paper
+ *  list still lands) and the sim drops out of the standalone list. The world
+ *  entry stays the target — in production both roads reach the same bridge,
+ *  and the world's line is the canonical one.
+ *
+ *  Nothing else changes: with no trunk directory loaded (local dev, classic
+ *  mode) no sim matches and the list is exactly the pre-worlds one, an
+ *  exchange without a `system` (a Joshua line: WOPR, CHEYENNE MOUNTAIN) can
+ *  never match, and UNKNOWN — the mystery carrier, no systemId — is untouched.
+ *  This is display/resolution only; sims.ts still owns the paper list, and
+ *  WARDIAL sweeps `ctx.systems` directly, so its hit list keeps all four. */
 export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   const out: DirEntry[] = [];
   let i = 1;
+  const absorbed = new Set<DialSystem>();
   for (const e of ctx.exchanges ?? []) {
+    const twin = e.system
+      ? ctx.systems.find((s) => s.systemId === e.system && !absorbed.has(s))
+      : undefined;
+    if (twin) absorbed.add(twin);
     out.push({
       index: i++, name: e.name, region: e.region, joshua: e.joshua,
-      world: e.world, slot: e.slot, system: e.system, target: e,
+      world: e.world, slot: e.slot, system: e.system,
+      number: twin?.number, target: e,
     });
   }
   for (const s of ctx.systems) {
+    if (absorbed.has(s)) continue;
     out.push({ index: i++, name: s.name, number: s.number, target: s });
   }
   // The mystery carrier: David war-dialed this number without knowing what
@@ -139,14 +162,21 @@ export function directoryText(ctx: ConsoleContext): string {
       lines.push("");
       lastWorld = undefined;
     }
-    // 80 columns, worst case, with every printed field at its maximum at once:
+    // 80 columns, worst case, with every printed field at its maximum at once.
+    // The number and the mode suffix are mutually exclusive: a number reaches
+    // an exchange line only by absorbing a sim, which requires a `system` id,
+    // and the suffix is suppressed on exactly those. So there are two ceilings,
+    // and the taller one is the merged line:
     //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 (PROTOVISION)
-    //   + " (1983 MODE)" 12  =  53.
+    //     + "  " 2 + number 14 ("(206) 555-0142")   =  57
+    //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 + " (1983 MODE)" 12  =  53
     // The REGISTER wire caps name at 24 and PROTOVISION is the longest roster
-    // slot, so that is the true ceiling. The parenthesised suffix is delimited
+    // slot, so 57 is the true ceiling. The parenthesised suffix is delimited
     // by its own punctuation, so it takes a single leading space; the
-    // name/slot gap keeps two. (Suppressing the mode suffix below only ever
-    // shortens a line, so the ceiling holds.)
+    // name/slot and slot/number gaps keep two.
+    //
+    // An unabsorbed sim prints nn 2 + "  " 2 + name + "  " 2 + number 14; its
+    // names are local constants (26 at the longest), so it never binds.
     //
     // The region used to print here as a ` [SAO PAULO BR]` suffix, and it was
     // what made 80 the binding constraint. It is no longer shown to a visitor
