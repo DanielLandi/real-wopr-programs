@@ -136,10 +136,17 @@ export function directoryText(ctx: ConsoleContext): string {
       lines.push("");
       lastWorld = undefined;
     }
+    // 80 columns, worst case, with every field at its maximum at once:
+    //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 (PROTOVISION)
+    //   + " [" 2 + region 24 + "]" 1 + " (1983 MODE)" 12  =  80.
+    // The REGISTER wire caps name and region at 24 each and PROTOVISION is the
+    // longest roster slot, so that is the true ceiling. Both bracketed and
+    // parenthesised suffixes are delimited by their own punctuation, so they
+    // take a single leading space; the name/slot gap keeps two.
     const nn = String(e.index).padStart(2, "0");
-    const region = e.region ? `  [${e.region}]` : "";
+    const region = e.region ? ` [${e.region}]` : "";
     const num = e.number ? `  ${e.number}` : "";
-    const mode = e.joshua === "period" ? "  (1983 MODE)" : "";
+    const mode = e.joshua === "period" ? " (1983 MODE)" : "";
     const slot = e.slot ? `  ${e.slot}` : "";
     lines.push(`${nn}  ${e.name}${slot}${region}${num}${mode}`);
   }

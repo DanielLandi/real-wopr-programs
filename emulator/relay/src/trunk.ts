@@ -4,7 +4,7 @@
 
 export type TrunkFrame =
   | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period";
-      operator?: string; slot?: string; world?: number | "NEW" }
+      operator?: string; slot?: string; world?: number | "NEW"; key?: string }
   | { t: "ASSIGNED"; exchange: string; world: number; slot: string }
   | { t: "OPEN"; chan: number; query: string }
   | { t: "FRAME"; chan: number; data: string }
@@ -41,6 +41,10 @@ export function decodeTrunkFrame(raw: string): TrunkFrame {
     if (f.operator !== undefined && (typeof f.operator !== "string" || f.operator.length > 24)) throw new Error("bad operator");
     if (f.slot !== undefined && (typeof f.slot !== "string" || !ALL_SLOTS.includes(f.slot))) throw new Error("bad slot");
     if (f.world !== undefined && f.world !== "NEW" && (!Number.isInteger(f.world) || f.world < 1)) throw new Error("bad world");
+    // The reserve key is opaque to the wire — the hub compares it, nothing
+    // parses it — but it is still operator-supplied text on a public socket,
+    // so bound it like every other REGISTER field.
+    if (f.key !== undefined && (typeof f.key !== "string" || f.key.length > 64)) throw new Error("bad key");
   } else if (f.t === "ASSIGNED") {
     if (typeof f.exchange !== "string") throw new Error("bad exchange");
     if (!Number.isInteger(f.world) || f.world < 1) throw new Error("bad world");
@@ -99,7 +103,9 @@ export interface DirectoryEntry {
   joshua: string; operator?: string; online: true;
   world: number; slot: string;
 }
-export interface WorldDirectory { n: number; slots: DirectoryEntry[] }
+/** `reserved` is present (and always literal `true`) only for a world the hub
+ *  holds back for a keyed caller — surfaces print it, they never infer it. */
+export interface WorldDirectory { n: number; reserved?: true; slots: DirectoryEntry[] }
 
 // TrunkPort is the minimal socket shape the registry needs (ws WebSocket satisfies it);
 // tests pass fakes.
@@ -123,17 +129,30 @@ export class Switchboard {
   private maxExchanges: number;
   private maxChannels: number;
   private maxWorlds: number;
+  private reservedWorlds: number[];
+  private reserveKey: string | undefined;
 
-  constructor(opts: { maxExchanges?: number; maxChannels?: number; maxWorlds?: number } = {}) {
+  constructor(opts: { maxExchanges?: number; maxChannels?: number; maxWorlds?: number;
+                      reservedWorlds?: number[]; reserveKey?: string } = {}) {
     this.maxExchanges = opts.maxExchanges ?? 32;
     this.maxChannels = opts.maxChannels ?? 16;
     this.maxWorlds = opts.maxWorlds ?? 8;
+    // World 1 is the flagship's by default. With no reserveKey configured
+    // NOTHING unlocks it: a hub that has not been told the key holds the world
+    // closed rather than handing it to the first caller who guesses.
+    this.reservedWorlds = opts.reservedWorlds ?? [1];
+    this.reserveKey = opts.reserveKey;
   }
 
   /** Where does a REGISTER land? Worlds are derived, not stored: a world is
-   *  the set of live exchanges tagged with its number. World 1 is pinned. */
-  private place(req: { slot?: string; world?: number | "NEW" }):
-      { world: number; slot: string } | "no-circuits" | "slot-taken" {
+   *  the set of live exchanges tagged with its number. World 1 is pinned —
+   *  and, unless the caller carries the hub's key, reserved. */
+  private place(req: { slot?: string; world?: number | "NEW"; key?: string }):
+      { world: number; slot: string } | "no-circuits" | "slot-taken" | "world-reserved" {
+    // One comparison decides the whole placement: with the hub's key the
+    // reserved worlds behave like any other, without it they do not exist.
+    const unlocked = this.reserveKey !== undefined && req.key === this.reserveKey;
+    const reserved = (w: number) => !unlocked && this.reservedWorlds.includes(w);
     const occ = new Map<number, Set<string>>();
     for (const ex of this.exchanges.values()) {
       let s = occ.get(ex.world);
@@ -150,6 +169,10 @@ export class Switchboard {
       // repeated here so an in-process caller cannot place an exchange into
       // world 0 or a negative world that the directory would then expose.
       if (req.world < 1 || req.world > this.maxWorlds) return "no-circuits";
+      // Before the occupancy check, deliberately: "slot taken" would tell an
+      // unkeyed caller who is living in the reserved world. Not their world,
+      // not their business.
+      if (reserved(req.world)) return "world-reserved";
       const slot = open(req.world);
       return slot === null ? "slot-taken" : { world: req.world, slot };
     }
@@ -158,12 +181,13 @@ export class Switchboard {
     const live = [...new Set([1, ...occ.keys()])].sort((a, b) => a - b);
     if (req.world !== "NEW") {
       for (const w of live) {
+        if (reserved(w)) continue;
         const slot = open(w);
         if (slot !== null) return { world: w, slot };
       }
     }
     for (let w = 1; w <= this.maxWorlds; w++) {
-      if (live.includes(w)) continue;
+      if (live.includes(w) || reserved(w)) continue;
       const slot = open(w);
       if (slot !== null) return { world: w, slot };
     }
@@ -171,9 +195,9 @@ export class Switchboard {
   }
 
   register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>):
-      { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" {
+      { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" | "world-reserved" {
     if (this.exchanges.size >= this.maxExchanges) return "full";
-    const placed = this.place({ slot: f.slot, world: f.world });
+    const placed = this.place({ slot: f.slot, world: f.world, key: f.key });
     if (typeof placed === "string") return placed;
     let code = newExchangeCode();
     while (this.exchanges.has(code)) code = newExchangeCode();
@@ -280,7 +304,12 @@ export class Switchboard {
       });
     }
     return [...byWorld.entries()].sort((a, b) => a[0] - b[0]).map(([n, slots]) => ({
-      n, slots: slots.sort((a, b) => ALL_SLOTS.indexOf(a.slot) - ALL_SLOTS.indexOf(b.slot)),
+      n,
+      // Spread, not `reserved: cond || undefined`: an own key with an
+      // undefined value is a different object to a deepStrictEqual and a
+      // different document once a surface round-trips it.
+      ...(this.reservedWorlds.includes(n) ? { reserved: true as const } : {}),
+      slots: slots.sort((a, b) => ALL_SLOTS.indexOf(a.slot) - ALL_SLOTS.indexOf(b.slot)),
     }));
   }
 

@@ -157,6 +157,14 @@ test("REGISTER rejects an off-roster slot and a bad world", () => {
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: "FRESH" })), /bad world/);
 });
 
+test("REGISTER carries an optional reserve key, bounded at 64 chars", () => {
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, key: "K" })).t, "REGISTER");
+  assert.equal(decodeTrunkFrame(JSON.stringify({ ...base, key: "X".repeat(64) })).t, "REGISTER");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, key: "X".repeat(65) })), /bad key/);
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, key: 7 })), /bad key/);
+});
+
 test("ASSIGNED requires world and slot", () => {
   assert.equal(decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" })).t, "ASSIGNED");
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234" })), /bad world/);

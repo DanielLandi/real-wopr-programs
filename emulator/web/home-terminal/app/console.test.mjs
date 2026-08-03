@@ -259,3 +259,19 @@ test("directoryText prints an untagged book with no WORLD headings", () => {
   // directory must look exactly as it did before worlds existed.
   assert.equal(/-- WORLD/.test(directoryText(ctx)), false);
 });
+
+test("directoryText fits an 80-column terminal in the worst case", () => {
+  // The IMSAI's screen is 80 columns; a wrapped directory line is a visible
+  // defect. Worst case is every field at its maximum simultaneously: a 24-char
+  // name and a 24-char region (the REGISTER wire caps both at 24), the longest
+  // roster slot (PROTOVISION, 11), and the period-engine suffix.
+  const exchanges = [{
+    id: "a", name: "X".repeat(24), region: "Y".repeat(24),
+    api: "https://x", link: "wss://x", joshua: "period", world: 1, slot: "PROTOVISION",
+  }];
+  const lines = directoryText({ exchanges, systems: [], hits: null }).split("\n");
+  const entry = lines.find((l) => l.includes("PROTOVISION"));
+  assert.ok(entry, "the worst-case entry must be printed");
+  assert.ok(entry.length <= 80, `worst-case entry is ${entry.length} cols: ${JSON.stringify(entry)}`);
+  for (const l of lines) assert.ok(l.length <= 80, `line over 80 cols: ${JSON.stringify(l)}`);
+});

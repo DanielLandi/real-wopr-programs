@@ -26,6 +26,8 @@ export interface ServerOpts {
     maxExchanges?: number;
     maxChannels?: number;
     maxWorlds?: number;
+    reservedWorlds?: number[];
+    reserveKey?: string;
     pingIntervalMs?: number;
     relayPingMs?: number;
     registerTimeoutMs?: number;
@@ -56,9 +58,23 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // is honored; anything else falls back to the documented default of 8.
   const envMaxWorlds = Number(process.env.TRUNK_MAX_WORLDS);
   const defaultMaxWorlds = Number.isInteger(envMaxWorlds) && envMaxWorlds >= 1 ? envMaxWorlds : 8;
+  // TRUNK_RESERVED_WORLDS is a comma list, vetted token by token the same way
+  // TRUNK_MAX_WORLDS is: a token that is not a whole number >= 1 is dropped
+  // rather than reserving world NaN. Unset means the documented default (world
+  // 1, the flagship's); set-but-with-nothing-usable means an open board, which
+  // is the only way an operator can say "reserve nothing".
+  const envReserved = process.env.TRUNK_RESERVED_WORLDS;
+  const defaultReservedWorlds = envReserved === undefined
+    ? [1]
+    : envReserved.split(",").map((t) => Number(t.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 1);
   const switchboard = new Switchboard({
     ...opts.trunk,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
+    reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
+    // An empty TRUNK_RESERVE_KEY is no key at all: treating "" as a real key
+    // would mean a REGISTER that simply omits `key` unlocks the world.
+    reserveKey: opts.trunk?.reserveKey ?? (process.env.TRUNK_RESERVE_KEY || undefined),
   });
 
   const httpServer = createServer((req, res) => { void handleHttp(req, res); });
@@ -252,13 +268,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       if (f.t === "REGISTER") {
         if (code !== null) return;                       // one REGISTER per socket
         const placed = switchboard.register(host, f);
-        // Three refusals, three codes: the host operator has to be able to tell
+        // Four refusals, four codes: the host operator has to be able to tell
         // "this hub is out of room entirely" from "the world you asked for is
-        // out of circuits" from "someone else already holds that slot" — only
-        // the last two are fixable by asking for a different world or slot.
+        // out of circuits" from "someone else already holds that slot" from
+        // "that world is not open to you" — the middle two are fixable by
+        // asking for a different world or slot, the last needs the hub
+        // operator's key.
         if (placed === "full") { host.close(4409, "switchboard full"); return; }
         if (placed === "no-circuits") { host.close(4460, "no circuits available"); return; }
         if (placed === "slot-taken") { host.close(4461, "slot taken"); return; }
+        if (placed === "world-reserved") { host.close(4462, "world reserved"); return; }
         code = placed.code;
         clearTimeout(registerTimer);
         host.send(JSON.stringify({ t: "ASSIGNED", exchange: placed.code, world: placed.world, slot: placed.slot }));

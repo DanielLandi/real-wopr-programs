@@ -13,6 +13,7 @@ export interface TielineOpts {
   // places the exchange and answers with the placement it actually made.
   slot?: string;           // WOPR, SCHOOL, ... ; omitted = next free wildcard
   world?: number | "NEW";  // a specific world, or a fresh one
+  key?: string;            // the hub operator's key for a reserved world
   localComms: string;      // ws://127.0.0.1:8081
   localBridge: string;     // http://127.0.0.1:8000
   reconnect?: boolean;     // default true; tests pass false
@@ -63,7 +64,7 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
       backoffMs = 5_000;
       send({ t: "REGISTER", v: 1, name: opts.name, region: opts.region,
              joshua: opts.joshua, operator: opts.operator,
-             slot: opts.slot, world: opts.world });
+             slot: opts.slot, world: opts.world, key: opts.key });
     });
     hub.on("message", (data) => {
       let f: TrunkFrame;
@@ -88,9 +89,10 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
     };
     hub.on("close", (closeCode: number, reason: Buffer) => {
       // A refusal is an answer, not an outage: NO CIRCUITS (4460), SLOT TAKEN
-      // (4461), switchboard full (4409). Redialling would spam the hub with a
-      // REGISTER it just refused, so stop for good and say why.
-      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461) {
+      // (4461), WORLD RESERVED (4462), switchboard full (4409). Redialling
+      // would spam the hub with a REGISTER it just refused, so stop for good
+      // and say why.
+      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462) {
         stopped = true;
         console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
       } else if (closeCode === 4400) {
@@ -143,6 +145,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     operator: process.env.TIELINE_OPERATOR,
     slot: rawSlot,
     world: rawWorld === "NEW" ? "NEW" : rawWorld ? Number(rawWorld) : undefined,
+    // Only needed for a reserved world (world 1 is the flagship's); the hub
+    // operator issues it. Opaque here — the hub is the only thing that reads it.
+    key: process.env.TIELINE_RESERVE_KEY || undefined,
     localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
     localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
     onAssigned: (exchange, world, slot) => {

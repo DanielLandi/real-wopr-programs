@@ -21,9 +21,11 @@ cd "$(dirname "$0")/.."
 # whatever the surrounding shell already set, source the file, put the
 # snapshot back. (bash 3.2: no associative arrays, no `${!name}` games beyond
 # eval on these fixed identifiers.)
+# TIELINE_RESERVE_KEY is snapshotted like the rest but never validated: it is
+# opaque here — only the hub can say whether it is the right key.
 HOST_ENV_VARS="TIELINE_SLOT TIELINE_WORLD TIELINE_NAME TIELINE_REGION
-TIELINE_JOSHUA TIELINE_OPERATOR TRUNK_HUB_URL BRIDGE_LOGON_BANNER
-WOPR_OPERATORS JOSHUA_ENGINE COMMS_MODE"
+TIELINE_JOSHUA TIELINE_OPERATOR TIELINE_RESERVE_KEY TRUNK_HUB_URL
+BRIDGE_LOGON_BANNER WOPR_OPERATORS JOSHUA_ENGINE COMMS_MODE"
 if [ -f .env ]; then
   host_preset=""
   for v in $HOST_ENV_VARS; do

@@ -182,7 +182,13 @@ test("trunk e2e: visitor -> hub -> tieline -> real comms -> bridge and back, byt
 
   // The hub. publicBase is explicit: with port 0 the default is computed
   // before listen and would read :0 (see switchboard-server.test.ts).
-  const hub = await startServer({ port: 0, publicBase: "https://hub.example" });
+  // The board is opened (`reservedWorlds: []`) because the subject here is
+  // byte-identity between a relayed call and a direct one — reservation would
+  // only move the exchange to world 2 and add noise to every assertion below.
+  // World 1 reservation is proved end-to-end in the two-tielines test.
+  const hub = await startServer({
+    port: 0, publicBase: "https://hub.example", trunk: { reservedWorlds: [] },
+  });
 
   interface Placement { code: string; world: number; slot: string }
   let resolveAssigned!: (p: Placement) => void;
@@ -286,10 +292,15 @@ test("trunk e2e: visitor -> hub -> tieline -> real comms -> bridge and back, byt
 // answer (ASSIGNED), not something either host asserted for itself. Hanging up
 // one tie line frees its slot for the next caller while the world stays live.
 //
+// The hub runs its real default board, so the shared world is world 2: world 1
+// is reserved for the flagship, and neither of these hosts carries the key.
+// That is the reservation proved through two real tielines — no host asked to
+// avoid world 1, the switchboard simply never offered it.
+//
 // Neither tieline places a call here, so the host comms and stub bridge are
 // only present because a tieline requires local endpoints to exist; nothing
 // crosses them. The subject is the switchboard's occupancy board.
-test("two tielines share world 1 in different slots; hangup frees the slot", { timeout: 10_000 }, async () => {
+test("two tielines share world 2 in different slots (world 1 is reserved); hangup frees the slot", { timeout: 10_000 }, async () => {
   const bridge = await startStubBridge();
   const hostComms = await startServer({
     port: 0,
@@ -321,10 +332,13 @@ test("two tielines share world 1 in different slots; hangup frees the slot", { t
     });
   });
 
+  // World 1 is listed, flagged reserved, and stays empty throughout: the two
+  // hosts live in world 2.
   const dirSlots = async (): Promise<string[]> => {
     const dir = JSON.parse((await httpJson("GET", `http://127.0.0.1:${hub.port}/trunk/directory`)).body);
-    assert.deepEqual(dir.worlds.map((w: { n: number }) => w.n), [1]);
-    return dir.worlds[0].slots.map((s: { slot: string }) => s.slot);
+    assert.deepEqual(dir.worlds.map((w: { n: number }) => w.n), [1, 2]);
+    assert.deepEqual(dir.worlds[0], { n: 1, reserved: true, slots: [] });
+    return dir.worlds[1].slots.map((s: { slot: string }) => s.slot);
   };
 
   // Sequential, not parallel: the second REGISTER must see the first already
@@ -332,9 +346,9 @@ test("two tielines share world 1 in different slots; hangup frees the slot", { t
   const wopr = await mk("WOPR");
   const school = await mk("SCHOOL");
   try {
-    assert.equal(wopr.world, 1);
+    assert.equal(wopr.world, 2, "an unkeyed host must never be placed in the reserved world");
     assert.equal(wopr.slot, "WOPR");
-    assert.equal(school.world, 1);
+    assert.equal(school.world, 2);
     assert.equal(school.slot, "SCHOOL");
 
     // One world, two slots, in roster order.

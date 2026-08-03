@@ -2,6 +2,12 @@
 // GET /trunk/directory, and the allowlisted REST relay (trunk-federation
 // spec, Task 2). `/link` itself is NOT touched here — its regression gate is
 // server.test.ts continuing to pass unmodified.
+//
+// World 1 is reserved by default (the flagship's), so a plain REGISTER now
+// lands in world 2. Tests whose subject is placement or a refusal that
+// reservation would pre-empt start their hub with
+// `trunk: { reservedWorlds: [] }`; tests whose subject is directory or URL
+// shape keep the default board and read the exchange out of world 2.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -76,12 +82,14 @@ test("trunk hub: register -> ASSIGNED -> directory lists the exchange with relay
   try {
     const { host, code } = await registerHost(base, wsBase);
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.equal(dir.worlds.length, 1);
-    assert.equal(dir.worlds[0].n, 1);
-    assert.equal(dir.worlds[0].slots.length, 1);
-    assert.equal(dir.worlds[0].slots[0].id, `trunk-${code.toLowerCase()}`);
-    assert.equal(dir.worlds[0].slots[0].api, `${publicBase}/x/${code}`);
-    assert.equal(dir.worlds[0].slots[0].link, `wss://hub.example/x/${code}/link`);
+    // Default board: world 1 is reserved and stays empty, so the exchange is
+    // listed under the world the hub actually opened for it.
+    assert.deepEqual(dir.worlds.map((w: { n: number }) => w.n), [1, 2]);
+    assert.deepEqual(dir.worlds[0], { n: 1, reserved: true, slots: [] });
+    assert.equal(dir.worlds[1].slots.length, 1);
+    assert.equal(dir.worlds[1].slots[0].id, `trunk-${code.toLowerCase()}`);
+    assert.equal(dir.worlds[1].slots[0].api, `${publicBase}/x/${code}`);
+    assert.equal(dir.worlds[1].slots[0].link, `wss://hub.example/x/${code}/link`);
     host.close();
   } finally {
     await server.close();
@@ -90,8 +98,10 @@ test("trunk hub: register -> ASSIGNED -> directory lists the exchange with relay
 
 // ---- world/slot placement over the wire ------------------------------------
 
-test("trunk hub: slot collision opens world 2; explicit collision closes 4461", async () => {
-  const server = await startServer({ port: 0, trunk: {} });
+test("trunk hub: slot collision opens world 2; explicit collision closes 4461", { timeout: 5000 }, async () => {
+  // Subject: the collision refusal, not reservation — an open board, so the
+  // explicit world 1 below is refused for the slot, not for being reserved.
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
   const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
   try {
     const a = await registerHost(base, wsBase, { slot: "WOPR" });
@@ -106,8 +116,10 @@ test("trunk hub: slot collision opens world 2; explicit collision closes 4461", 
   } finally { await server.close(); }
 });
 
-test("trunk hub: maxWorlds cap closes 4460 no circuits", async () => {
-  const server = await startServer({ port: 0, trunk: { maxWorlds: 1 } });
+test("trunk hub: maxWorlds cap closes 4460 no circuits", { timeout: 5000 }, async () => {
+  // Subject: the cap. The single permitted world has to be placeable, so the
+  // board is open — otherwise the first REGISTER is refused for reservation.
+  const server = await startServer({ port: 0, trunk: { maxWorlds: 1, reservedWorlds: [] } });
   const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
   try {
     const a = await registerHost(base, wsBase, { slot: "WOPR" });
@@ -118,7 +130,7 @@ test("trunk hub: maxWorlds cap closes 4460 no circuits", async () => {
   } finally { await server.close(); }
 });
 
-test("trunk hub: a full switchboard still closes 4409, distinct from a world refusal", async () => {
+test("trunk hub: a full switchboard still closes 4409, distinct from a world refusal", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0, trunk: { maxExchanges: 1 } });
   const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
   try {
@@ -132,12 +144,91 @@ test("trunk hub: a full switchboard still closes 4409, distinct from a world ref
   } finally { await server.close(); }
 });
 
-test("trunk hub: directory pins world 1 even when empty", async () => {
+test("trunk hub: directory pins world 1 even when empty, and marks it reserved", async () => {
   const server = await startServer({ port: 0 });
   try {
     const res = await httpJson("GET", `http://127.0.0.1:${server.port}/trunk/directory`);
-    assert.deepEqual(JSON.parse(res.body), { worlds: [{ n: 1, slots: [] }] });
+    assert.deepEqual(JSON.parse(res.body), { worlds: [{ n: 1, reserved: true, slots: [] }] });
   } finally { await server.close(); }
+});
+
+test("trunk hub: an unkeyed REGISTER for the reserved world closes 4462", { timeout: 5000 }, async () => {
+  const server = await startServer({ port: 0 });
+  const wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const h = await connect(`${wsBase}/trunk`);
+    h.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PRETENDER", region: "NOWHERE US", joshua: "period", world: 1, slot: "WOPR" }));
+    const closed = await nextClose(h);
+    assert.equal(closed.code, 4462);
+    assert.equal(closed.reason, "world reserved");
+    // Nothing was placed: the reserved world is still empty.
+    const dir = JSON.parse((await httpJson("GET", `http://127.0.0.1:${server.port}/trunk/directory`)).body);
+    assert.deepEqual(dir, { worlds: [{ n: 1, reserved: true, slots: [] }] });
+  } finally { await server.close(); }
+});
+
+test("trunk hub: the reserve key claims the reserved world over the wire", { timeout: 5000 }, async () => {
+  const server = await startServer({ port: 0, trunk: { reserveKey: "K" } });
+  const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const a = await registerHost(base, wsBase, { key: "K", world: 1, slot: "WOPR" });
+    assert.deepEqual([a.world, a.slot], [1, "WOPR"]);
+    // The world stays flagged as reserved while it is occupied, and an
+    // unkeyed caller is still refused — with 4462, not 4461: it must not
+    // learn that WOPR is taken.
+    const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
+    assert.equal(dir.worlds[0].reserved, true);
+    assert.deepEqual(dir.worlds[0].slots.map((s: { slot: string }) => s.slot), ["WOPR"]);
+    const b = await connect(`${wsBase}/trunk`);
+    b.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PRETENDER", region: "NOWHERE US", joshua: "period", world: 1, slot: "WOPR" }));
+    assert.equal((await nextClose(b)).code, 4462);
+    a.host.close();
+  } finally { await server.close(); }
+});
+
+test("trunk hub: TRUNK_RESERVED_WORLDS and TRUNK_RESERVE_KEY configure the hub", { timeout: 5000 }, async () => {
+  const beforeWorlds = process.env.TRUNK_RESERVED_WORLDS;
+  const beforeKey = process.env.TRUNK_RESERVE_KEY;
+  // "banana" and the empty token are dropped; world 2 is the one reserved, so
+  // world 1 is placeable again and the overflow skips world 2 for world 3.
+  process.env.TRUNK_RESERVED_WORLDS = "2, banana,,0";
+  process.env.TRUNK_RESERVE_KEY = "ENV-KEY";
+  const server = await startServer({ port: 0 });
+  const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const a = await registerHost(base, wsBase, { slot: "WOPR" });
+    assert.equal(a.world, 1);
+    const b = await registerHost(base, wsBase, { slot: "WOPR" });
+    assert.equal(b.world, 3, "the overflow must skip the reserved world 2");
+    const c = await connect(`${wsBase}/trunk`);
+    c.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PRETENDER", region: "NOWHERE US", joshua: "period", world: 2, slot: "SCHOOL" }));
+    assert.equal((await nextClose(c)).code, 4462);
+    const d = await registerHost(base, wsBase, { key: "ENV-KEY", world: 2, slot: "SCHOOL" });
+    assert.deepEqual([d.world, d.slot], [2, "SCHOOL"]);
+    a.host.close(); b.host.close(); d.host.close();
+  } finally {
+    if (beforeWorlds === undefined) delete process.env.TRUNK_RESERVED_WORLDS;
+    else process.env.TRUNK_RESERVED_WORLDS = beforeWorlds;
+    if (beforeKey === undefined) delete process.env.TRUNK_RESERVE_KEY;
+    else process.env.TRUNK_RESERVE_KEY = beforeKey;
+    await server.close();
+  }
+});
+
+test("trunk hub: opts.trunk.reservedWorlds beats TRUNK_RESERVED_WORLDS", { timeout: 5000 }, async () => {
+  const before = process.env.TRUNK_RESERVED_WORLDS;
+  process.env.TRUNK_RESERVED_WORLDS = "1";
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
+  try {
+    const a = await registerHost(base, wsBase, { world: 1, slot: "WOPR" });
+    assert.equal(a.world, 1);
+    a.host.close();
+  } finally {
+    if (before === undefined) delete process.env.TRUNK_RESERVED_WORLDS;
+    else process.env.TRUNK_RESERVED_WORLDS = before;
+    await server.close();
+  }
 });
 
 // Timeout, both env tests below: on regression the hub ACCEPTS the REGISTER
@@ -165,7 +256,9 @@ test("trunk hub: a malformed TRUNK_MAX_WORLDS falls back to 8, it does not go un
 test("trunk hub: TRUNK_MAX_WORLDS caps the hub when opts.trunk does not", { timeout: 5000 }, async () => {
   const before = process.env.TRUNK_MAX_WORLDS;
   process.env.TRUNK_MAX_WORLDS = "1";
-  const server = await startServer({ port: 0 });
+  // Subject: the env cap. maxWorlds stays unset in opts (that is the point);
+  // the board is opened so the one permitted world can actually be filled.
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
   const base = `http://127.0.0.1:${server.port}`, wsBase = `ws://127.0.0.1:${server.port}`;
   try {
     const a = await registerHost(base, wsBase, { slot: "WOPR" });
@@ -191,8 +284,8 @@ test("trunk hub: default publicBase reflects the post-listen bound port under po
     const wsBase = `ws://127.0.0.1:${server.port}`;
     const { host, code } = await registerHost(base, wsBase);
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.equal(dir.worlds[0].slots[0].api, `http://localhost:${server.port}/x/${code}`);
-    assert.equal(dir.worlds[0].slots[0].link, `ws://localhost:${server.port}/x/${code}/link`);
+    assert.equal(dir.worlds[1].slots[0].api, `http://localhost:${server.port}/x/${code}`);
+    assert.equal(dir.worlds[1].slots[0].link, `ws://localhost:${server.port}/x/${code}/link`);
     host.close();
   } finally {
     if (before !== undefined) process.env.TRUNK_PUBLIC_BASE = before;
@@ -271,7 +364,7 @@ test("trunk hub: non-allowlisted REST path returns 404", async () => {
   }
 });
 
-test("trunk hub: visitor to unknown exchange code closes 4404 'exchange offline'", async () => {
+test("trunk hub: visitor to unknown exchange code closes 4404 'exchange offline'", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0 });
   const wsBase = `ws://127.0.0.1:${server.port}`;
   try {
@@ -284,7 +377,7 @@ test("trunk hub: visitor to unknown exchange code closes 4404 'exchange offline'
   }
 });
 
-test("trunk hub: visitor to a full exchange gets a distinct BUSY close, not 'offline'", async () => {
+test("trunk hub: visitor to a full exchange gets a distinct BUSY close, not 'offline'", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0, trunk: { maxChannels: 1 } });
   const base = `http://127.0.0.1:${server.port}`;
   const wsBase = `ws://127.0.0.1:${server.port}`;
@@ -331,7 +424,7 @@ test("trunk hub: an aborted relay upload does not crash the hub", async () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     const resp = await httpJson("GET", `${base}/trunk/directory`);
     assert.equal(resp.status, 200);
-    assert.deepEqual(JSON.parse(resp.body), { worlds: [{ n: 1, slots: [] }] });
+    assert.deepEqual(JSON.parse(resp.body), { worlds: [{ n: 1, reserved: true, slots: [] }] });
   } finally {
     await server.close();
   }
@@ -353,7 +446,7 @@ test("trunk hub: REST relay rejects an oversize body with 413", async () => {
 
 // ---- frame-size caps (hardening pass) --------------------------------------
 
-test("trunk hub: an oversize visitor frame closes the relay socket (1009) and never reaches the host", async () => {
+test("trunk hub: an oversize visitor frame closes the relay socket (1009) and never reaches the host", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0 });
   const base = `http://127.0.0.1:${server.port}`;
   const wsBase = `ws://127.0.0.1:${server.port}`;
@@ -379,7 +472,7 @@ test("trunk hub: an oversize visitor frame closes the relay socket (1009) and ne
     // The hub itself stays alive: the directory still answers and the
     // exchange (unrelated to the visitor socket) is still registered.
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.equal(dir.worlds[0].slots.length, 1);
+    assert.equal(dir.worlds[1].slots.length, 1);
 
     host.close();
   } finally {
@@ -387,7 +480,7 @@ test("trunk hub: an oversize visitor frame closes the relay socket (1009) and ne
   }
 });
 
-test("trunk hub: an oversize host frame at /trunk closes the socket (1009), hub stays alive", async () => {
+test("trunk hub: an oversize host frame at /trunk closes the socket (1009), hub stays alive", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0 });
   const base = `http://127.0.0.1:${server.port}`;
   const wsBase = `ws://127.0.0.1:${server.port}`;
@@ -399,7 +492,7 @@ test("trunk hub: an oversize host frame at /trunk closes the socket (1009), hub 
 
     // Hub alive, and the dropped host's exchange is cleaned out of the directory.
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.deepEqual(dir.worlds, [{ n: 1, slots: [] }]);
+    assert.deepEqual(dir.worlds, [{ n: 1, reserved: true, slots: [] }]);
   } finally {
     await server.close();
   }
@@ -427,7 +520,7 @@ test("trunk hub: relayed visitor sockets get periodic pings (tunnel idle-timeout
 
 // ---- register-or-die timer (hardening pass) --------------------------------
 
-test("trunk hub: a /trunk socket that never REGISTERs is closed 4408 after the register timeout", async () => {
+test("trunk hub: a /trunk socket that never REGISTERs is closed 4408 after the register timeout", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0, trunk: { registerTimeoutMs: 20 } });
   const wsBase = `ws://127.0.0.1:${server.port}`;
   try {
@@ -470,13 +563,13 @@ test("trunk hub: host disconnect empties the directory and 502s a queued request
     assert.equal(resp.status, 502);
 
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.deepEqual(dir.worlds, [{ n: 1, slots: [] }]);
+    assert.deepEqual(dir.worlds, [{ n: 1, reserved: true, slots: [] }]);
   } finally {
     await server.close();
   }
 });
 
-test("trunk hub: an escape-amplified visitor frame closes the call explicitly, host sees CLOSE not FRAME", async () => {
+test("trunk hub: an escape-amplified visitor frame closes the call explicitly, host sees CLOSE not FRAME", { timeout: 5000 }, async () => {
   const server = await startServer({ port: 0 });
   const base = `http://127.0.0.1:${server.port}`;
   const wsBase = `ws://127.0.0.1:${server.port}`;
@@ -502,7 +595,7 @@ test("trunk hub: an escape-amplified visitor frame closes the call explicitly, h
 
     // Hub still alive.
     const dir = JSON.parse((await httpJson("GET", `${base}/trunk/directory`)).body);
-    assert.equal(dir.worlds[0].slots.length, 1);
+    assert.equal(dir.worlds[1].slots.length, 1);
     host.close();
   } finally {
     await server.close();

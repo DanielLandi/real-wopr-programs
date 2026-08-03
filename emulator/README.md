@@ -63,6 +63,7 @@ TIELINE_SLOT=SCHOOL TIELINE_NAME="CHEYENNE ANNEX" TIELINE_REGION="SAO PAULO BR" 
 | --- | --- |
 | `TIELINE_SLOT` | `WOPR` `SCHOOL` `PANAM` `PROTOVISION` `PACTEL` `HOME` `OTHER-1` `OTHER-2` |
 | `TIELINE_WORLD` | a world number, or `NEW` for a fresh world (default: lowest world with the slot open) |
+| `TIELINE_RESERVE_KEY` | only needed to claim a reserved world — world 1 is the flagship's; the hub operator issues it |
 | `TIELINE_NAME` / `TIELINE_REGION` / `TIELINE_OPERATOR` | how the phone book lists you |
 | `TIELINE_JOSHUA` | `period` (default) or `claude` |
 | `TRUNK_HUB_URL` | defaults to `wss://wopr.realwopr.ai/trunk` |
