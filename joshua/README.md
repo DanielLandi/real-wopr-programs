@@ -52,7 +52,8 @@ and a replayed conversation reproduces its memory behavior exactly. Memory repli
 are deterministic table lookups addressed by `(topic index)` — they consume no RNG.
 
 The greeting chain (`GREETINGS PROFESSOR FALKEN.` → `HOW ARE YOU FEELING TODAY?`
-→ `EXCELLENT...`) normally consumes the next two inputs regardless of content, but
+→ `EXCELLENT...` and the 6/23/73 account question → `YES THEY DO.` and the game
+offer) normally consumes the next three inputs regardless of content, but
 yields to an *explicit* game request mid-chain — a recognized `*game-titles*` title
 present together with a play intent, or a bare title typed exactly — so
 `GLOBAL THERMONUCLEAR WAR` after the greeting falls through to the chess counter-offer

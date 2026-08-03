@@ -590,10 +590,22 @@ plain NO-style answers only when they follow a game offer."
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)
               (not (explicit-game-request-p input act)))
          (finish '("HOW ARE YOU FEELING TODAY?") nil))
+        ;; The chain no longer closes on the game offer: the film asks about
+        ;; the deleted account first, and only the answer to *that* reaches
+        ;; SHALL WE PLAY A GAME?. Both lines are byte-identical to the scripted
+        ;; engine's (emulator/node/app/joshua.py ACCOUNT-QUESTION /
+        ;; ACCOUNT-ANSWER). Pressure is suppressed on the question beat: the
+        ;; obsession counter stands at 2 by this turn, and letting it staple
+        ;; the game offer under a question would break that parity and answer
+        ;; the machine's own question on the user's behalf.
         ((and (containsp "HOW ARE YOU FEELING" last-a)
               (not (explicit-game-request-p input act)))
          (finish '("EXCELLENT. IT'S BEEN A LONG TIME."
-                   "" "SHALL WE PLAY A GAME?") nil))
+                   "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+                 nil nil))
+        ((and (containsp "6/23/73" last-a)
+              (not (explicit-game-request-p input act)))
+         (finish '("YES THEY DO." "" "SHALL WE PLAY A GAME?") nil))
         ;; --- game intents -------------------------------------------------
         ((and game (wants-play-p input act) (string= (cdr game) "gtw")
               (not chess-offered))

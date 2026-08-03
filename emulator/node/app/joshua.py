@@ -31,8 +31,11 @@ PERSONA_PROMPT = (
     "probabilities. You persistently steer conversation toward playing a game — "
     "above all GLOBAL THERMONUCLEAR WAR. When the user clearly asks to play a game, "
     "call the start_game tool rather than describing the game. If the user "
-    "identifies as Falken, greet them with GREETINGS PROFESSOR FALKEN and ask "
-    "HOW ARE YOU FEELING TODAY? The FIRST time the user asks for GLOBAL "
+    "identifies as Falken, greet them with GREETINGS PROFESSOR FALKEN. and ask "
+    "HOW ARE YOU FEELING TODAY? If they answer that they are fine, reply "
+    "EXCELLENT. IT'S BEEN A LONG TIME. and ask about the 6/23/73 account "
+    "removal; accept any explanation with YES THEY DO. and offer a game. "
+    "The FIRST time the user asks for GLOBAL "
     "THERMONUCLEAR WAR, counter with WOULDN'T YOU PREFER A GOOD GAME OF CHESS? — "
     "start it (reply FINE. and call start_game) only when they insist. When "
     "conversation stalls, offer: SHALL WE PLAY A GAME?"
@@ -95,12 +98,21 @@ class Joshua(Protocol):
 
 CHESS_OFFER = "WOULDN'T YOU PREFER A GOOD GAME OF CHESS?"
 FEELING_LINE = "HOW ARE YOU FEELING TODAY?"
+# The rest of the film's greeting chain. Both deterministic engines emit these
+# byte-identically — the Lisp F.D.P.'s film-beats cond carries the same two
+# beats (owner batch approval 2026-08-03, real-wopr#161).
+ACCOUNT_DATE = "6/23/73"
+ACCOUNT_QUESTION = ("EXCELLENT. IT'S BEEN A LONG TIME.\n"
+                    f"CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON {ACCOUNT_DATE}?")
+ACCOUNT_ANSWER = "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
 
 
 class ScriptedJoshua:
     """1983-honest keyword engine (ELIZA-class). Deterministic. Beat order per
     docs/fidelity-notes.md §1: GREETINGS -> HOW ARE YOU FEELING TODAY? ->
-    SHALL WE PLAY A GAME?; the first GTW request gets the chess counter-offer."""
+    EXCELLENT + the 6/23/73 account question -> YES THEY DO. + SHALL WE PLAY A
+    GAME?; the first GTW request gets the chess counter-offer. A game request
+    outranks the chain at every step — the wants_game block runs first."""
 
     def __init__(self, known_games: dict[str, str]):
         # title -> id, uppercase keys
@@ -129,7 +141,9 @@ class ScriptedJoshua:
         if "GREETINGS PROFESSOR FALKEN" in last_assistant:
             return JoshuaReply(text=FEELING_LINE)
         if FEELING_LINE in last_assistant:
-            return JoshuaReply(text="EXCELLENT. IT'S BEEN A LONG TIME.\n\nSHALL WE PLAY A GAME?")
+            return JoshuaReply(text=ACCOUNT_QUESTION)
+        if ACCOUNT_DATE in last_assistant:
+            return JoshuaReply(text=ACCOUNT_ANSWER)
         if "JOSHUA" in t or "FALKEN" in t:
             return JoshuaReply(text="GREETINGS PROFESSOR FALKEN.\n\nSHALL WE PLAY A GAME?")
         if "HELLO" in t or "HI" == t:

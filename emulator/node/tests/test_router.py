@@ -180,7 +180,8 @@ def test_logon_is_rejected_by_the_bridge():
 
 
 def test_joshua_backdoor_and_film_beat_order():
-    """fidelity-notes.md §1: JOSHUA -> GREETINGS -> HOW ARE YOU FEELING TODAY?"""
+    """The film's greeting chain, whole: GREETINGS -> HOW ARE YOU FEELING
+    TODAY? -> EXCELLENT + the 6/23/73 account question -> YES THEY DO."""
     store = MemoryStore()
     router = make_router(store)
 
@@ -192,7 +193,28 @@ def test_joshua_backdoor_and_film_beat_order():
         r = await router.handle(sid, "HELLO. ARE YOU STILL THERE?")
         assert "HOW ARE YOU FEELING TODAY?" in r.text
         r = await router.handle(sid, "I'M FINE. HOW ARE YOU?")
-        assert "SHALL WE PLAY A GAME?" in r.text
+        assert r.text == ("EXCELLENT. IT'S BEEN A LONG TIME.\n"
+                          "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+        r = await router.handle(sid, "PEOPLE SOMETIMES MAKE MISTAKES.")
+        assert r.text == "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_the_account_question_yields_to_an_explicit_game_request():
+    """The chain never traps a player: asking for a game still starts one."""
+    store = MemoryStore()
+    router = make_router(store)
+
+    async def flow():
+        sid = await new_session(store)
+        await router.handle(sid, "JOSHUA")
+        await router.handle(sid, "HELLO.")
+        r = await router.handle(sid, "I'M FINE.")
+        assert "6/23/73" in r.text
+        await router.handle(sid, "LET'S PLAY TIC-TAC-TOE")
+        assert (await store.get_active_game(sid)) is not None
 
     asyncio.run(flow())
 

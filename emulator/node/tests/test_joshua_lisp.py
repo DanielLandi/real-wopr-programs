@@ -41,6 +41,38 @@ def test_falken_beat_chain():
 
 
 @needs_lisp
+def test_the_account_beats_are_byte_identical_in_both_deterministic_engines():
+    """One character, two reconstructions: the film beats must not drift apart.
+
+    Both engines are deterministic, so the greeting chain is comparable byte
+    for byte — and it is the one place where a silent divergence would show up
+    as two different Joshuas answering in the same exchange."""
+    lisp, scripted = make_lisp(), ScriptedJoshua({})
+    chain = [
+        {"role": "user", "content": "THIS IS PROFESSOR FALKEN"},
+        {"role": "assistant", "content": "GREETINGS PROFESSOR FALKEN."},
+        {"role": "user", "content": "HELLO JOSHUA"},
+        {"role": "assistant", "content": "HOW ARE YOU FEELING TODAY?"},
+    ]
+
+    async def flow():
+        a = await lisp.chat("s", chain, "I AM FINE. HOW ARE YOU")
+        b = await scripted.chat("s", chain, "I AM FINE. HOW ARE YOU")
+        assert a.text == b.text == (
+            "EXCELLENT. IT'S BEEN A LONG TIME.\n"
+            "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+        after = chain + [
+            {"role": "user", "content": "I AM FINE. HOW ARE YOU"},
+            {"role": "assistant", "content": a.text},
+        ]
+        a = await lisp.chat("s", after, "PEOPLE SOMETIMES MAKE MISTAKES")
+        b = await scripted.chat("s", after, "PEOPLE SOMETIMES MAKE MISTAKES")
+        assert a.text == b.text == "YES THEY DO.\n\nSHALL WE PLAY A GAME?"
+
+    asyncio.run(flow())
+
+
+@needs_lisp
 def test_gtw_chess_counter_then_intent():
     j = make_lisp()
 
