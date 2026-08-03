@@ -39,6 +39,9 @@ export interface DirEntry {
   joshua?: "claude" | "period";
   world?: number; // trunk world, when the entry came from a trunk directory
   slot?: string;  // its role in that world (WOPR, SCHOOL, PANAM, ...)
+  /** Bridge system id, when this slot is a period system rather than a Joshua
+   *  line. Its presence is what tells the screen there is no Joshua here. */
+  system?: string;
   target: DialTarget | null; // null = the default WOPR line
 }
 
@@ -107,7 +110,7 @@ export function directoryEntries(ctx: ConsoleContext): DirEntry[] {
   for (const e of ctx.exchanges ?? []) {
     out.push({
       index: i++, name: e.name, region: e.region, joshua: e.joshua,
-      world: e.world, slot: e.slot, target: e,
+      world: e.world, slot: e.slot, system: e.system, target: e,
     });
   }
   for (const s of ctx.systems) {
@@ -142,11 +145,16 @@ export function directoryText(ctx: ConsoleContext): string {
     // The REGISTER wire caps name and region at 24 each and PROTOVISION is the
     // longest roster slot, so that is the true ceiling. Both bracketed and
     // parenthesised suffixes are delimited by their own punctuation, so they
-    // take a single leading space; the name/slot gap keeps two.
+    // take a single leading space; the name/slot gap keeps two. (Suppressing
+    // the mode suffix below only ever shortens a line, so the ceiling holds.)
     const nn = String(e.index).padStart(2, "0");
     const region = e.region ? ` [${e.region}]` : "";
     const num = e.number ? `  ${e.number}` : "";
-    const mode = e.joshua === "period" ? " (1983 MODE)" : "";
+    // "(1983 MODE)" names the dialogue processor — period Lisp rather than
+    // Claude. A slot that is a period SYSTEM (the school's BASIC-PLUS box, PAN
+    // AM's reservations) never reaches Joshua at all, so the label would be
+    // answering a question that line does not raise.
+    const mode = e.joshua === "period" && !e.system ? " (1983 MODE)" : "";
     const slot = e.slot ? `  ${e.slot}` : "";
     lines.push(`${nn}  ${e.name}${slot}${region}${num}${mode}`);
   }

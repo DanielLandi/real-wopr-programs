@@ -147,6 +147,10 @@ export interface LocalSlot {
 function checkLocalWorld(seeds: LocalSlot[]): LocalSlot[] {
   const seen = new Set<string>();
   return seeds.map((s) => {
+    // The manifest is parsed JSON, so an element need not be an object: check
+    // that before reading a field off it, or `[null]` in TRUNK_LOCAL_WORLD
+    // aborts startup with a raw TypeError instead of naming the problem.
+    if (!s || typeof s !== "object") throw new Error("local world: bad entry");
     // HOME is on the roster (it is a dialable slot for a registrant's own
     // line) but it is the *visitor's* end of the call: the flagship never
     // publishes one, so it is not seedable. Wildcards are what the hub hands
@@ -365,7 +369,12 @@ export class Switchboard {
     });
   }
 
-  directory(publicBase: string): WorldDirectory[] {
+  directory(rawPublicBase: string): WorldDirectory[] {
+    // Normalized once, for every entry. A relayed entry always appends
+    // `/x/<CODE>`, so a stray trailing slash on TRUNK_PUBLIC_BASE was harmless
+    // there — but a SEEDED entry's api IS the base, and `https://hub/` would
+    // have the terminal POST to `//api/session`.
+    const publicBase = rawPublicBase.replace(/\/+$/, "");
     const wsBase = publicBase.replace(/^http/, "ws");
     const byWorld = new Map<number, DirectoryEntry[]>([[1, []]]); // world 1 pinned
     // The flagship's own slots, synthesized rather than registered. No

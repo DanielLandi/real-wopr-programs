@@ -232,6 +232,11 @@ test("seeding world 1 does not disturb auto placement: a plain REGISTER lands wo
 
 test("a malformed manifest is a deploy error: the Switchboard refuses to construct", () => {
   const bad = (localWorld: LocalSlot[]) => () => new Switchboard({ localWorld });
+  // The manifest arrives as parsed JSON, so an element need not be an object at
+  // all. `[null]` is a bad manifest to report, not a raw TypeError from reading
+  // `.slot` of null — the operator has to be able to read what went wrong.
+  assert.throws(bad([null as unknown as LocalSlot]), /bad entry/);
+  assert.throws(bad(["WOPR" as unknown as LocalSlot]), /bad entry/);
   // HOME is on the roster but is the visitor's own line — it is never listed.
   assert.throws(bad([{ slot: "HOME", name: "DAVID LIGHTMAN", region: "SEATTLE US" }]), /HOME/);
   // Wildcards are for registrants who did not ask for a slot; a manifest names
@@ -250,6 +255,19 @@ test("a malformed manifest is a deploy error: the Switchboard refuses to constru
   assert.throws(bad([{ slot: "WOPR", name: 42, region: "SAO PAULO BR" } as unknown as LocalSlot]), /name/);
   assert.throws(bad([{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", system: 7 } as unknown as LocalSlot]), /system/);
   assert.throws(bad([{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", joshua: "gpt" } as unknown as LocalSlot]), /joshua/);
+});
+
+test("a trailing slash on the public base does not double up in the URLs", () => {
+  // `TRUNK_PUBLIC_BASE=https://hub.example/` is an easy thing to write, and a
+  // seeded entry's api IS the base — so an unnormalized slash would have the
+  // terminal POST to `//api/session`. Relayed entries share the normalized
+  // base, so their /x/<CODE> URLs are unchanged.
+  const sb = new Switchboard({ reserveKey: "K", localWorld: [SEEDS[0]] });
+  const live = place(sb, { key: "K", world: 1, slot: "SCHOOL" });
+  const slots = sb.directory("https://hub.example///")[0].slots;
+  assert.deepEqual([slots[0].api, slots[0].link], ["https://hub.example", "wss://hub.example/link"]);
+  assert.deepEqual([slots[1].api, slots[1].link],
+                   [`https://hub.example/x/${live.code}`, `wss://hub.example/x/${live.code}/link`]);
 });
 
 test("a seed's name and region are uppercased, like a REGISTER's", () => {

@@ -278,6 +278,22 @@ test("directoryText prints an untagged book with no WORLD headings", () => {
   assert.equal(/-- WORLD/.test(directoryText(ctx)), false);
 });
 
+test("directoryText hides (1983 MODE) on a slot that is a period system, not Joshua", () => {
+  // "(1983 MODE)" names the dialogue processor — period Lisp rather than
+  // Claude. A seeded SCHOOL or PANAM slot never reaches Joshua at all, so the
+  // suffix would be answering a question nobody asked about that line.
+  const base = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
+  const exchanges = [
+    { ...base, id: "local-school", name: "SUNNYVALE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+    { ...base, id: "local-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
+  ];
+  const lines = directoryText({ exchanges, systems: [], hits: null }).split("\n");
+  const school = lines.find((l) => l.includes("SUNNYVALE SCHOOL DIST"));
+  const wopr = lines.find((l) => l.includes("CHEYENNE MOUNTAIN"));
+  assert.equal(school.includes("1983 MODE"), false, "a period system has no Joshua flavour to report");
+  assert.ok(wopr.includes("(1983 MODE)"), "a period Joshua line still says so");
+});
+
 test("directoryText fits an 80-column terminal in the worst case", () => {
   // The IMSAI's screen is 80 columns; a wrapped directory line is a visible
   // defect. Worst case is every field at its maximum simultaneously: a 24-char
