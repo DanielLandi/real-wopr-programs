@@ -1,12 +1,16 @@
 WOPR/1 tictactoe OK
-STATE 2
+STATE 3
+MODE ASK
 .........
 TURN X
-DISPLAY 5
+DISPLAY 8
  . | . | .
 -----------
  . | . | .
 -----------
  . | . | .
+
+ONE OR TWO PLAYERS?
+PLEASE LIST NUMBER OF PLAYERS:
 STATUS PLAYING
 END

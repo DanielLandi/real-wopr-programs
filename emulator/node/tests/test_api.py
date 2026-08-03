@@ -174,6 +174,16 @@ def test_ws_full_exchange_list_games_and_play(client):
         # NEW tictactoe attaches the terminal to the game; tictactoe's
         # manifest abbrev is TTT (games/tictactoe/core/harness/manifest.json).
         assert prompt_frame["payload"] == "[TTT]>"
+        assert "ONE OR TWO PLAYERS?" in out["payload"]
+
+        # The film's finale order: number of players, then side, then a cell.
+        ws.send_text(ws_envelope(sid, "1"))
+        out = json.loads(ws.receive_text())
+        assert "X OR O?" in out["payload"]
+        json.loads(ws.receive_text())  # prompt
+        ws.send_text(ws_envelope(sid, "X"))
+        json.loads(ws.receive_text())  # empty grid
+        json.loads(ws.receive_text())  # prompt
 
         ws.send_text(ws_envelope(sid, "5"))
         out = json.loads(ws.receive_text())

@@ -1,5 +1,6 @@
 WOPR/1 tictactoe MOVE
-STATE 2
+STATE 3
+MODE ONE-O
 X........
 TURN O
 INPUT 1

@@ -35,13 +35,21 @@ def test_real_core_new_and_move():
     runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
 
     async def flow():
+        # The film's opening question comes first: players, then side, then
+        # cells. The game is self-resolving, so the engine's reply arrives
+        # inside the human's own MOVE — there is no inputless follow-up.
         new = await runner.run("tictactoe", "NEW", interp_dir="core")
         assert new.status == "PLAYING"
-        assert new.state == ".........\nTURN X"
-        moved = await runner.run("tictactoe", "MOVE", new.state, "5", interp_dir="core")
-        assert moved.state == "....X....\nTURN O"
-        engine = await runner.run("tictactoe", "MOVE", moved.state, None, interp_dir="core")
-        assert engine.state == "O...X....\nTURN X"  # deterministic corner reply
+        assert new.state == "MODE ASK\n.........\nTURN X"
+        assert "ONE OR TWO PLAYERS?" in new.display
+        one = await runner.run("tictactoe", "MOVE", new.state, "1", interp_dir="core")
+        assert one.state == "MODE PICK\n.........\nTURN X"
+        assert one.display == "X OR O?"
+        picked = await runner.run("tictactoe", "MOVE", one.state, "X", interp_dir="core")
+        assert picked.state == "MODE ONE-X\n.........\nTURN X"
+        moved = await runner.run("tictactoe", "MOVE", picked.state, "5", interp_dir="core")
+        # deterministic corner reply, played in the same response
+        assert moved.state == "MODE ONE-X\nO...X....\nTURN X"
 
     asyncio.run(flow())
 

@@ -288,13 +288,19 @@ def test_full_game_flow_move_routes_to_core_and_wopr_replies():
         started = await router.handle(sid, "NEW tictactoe")
         assert started.route == "bridge"
         assert (await store.get_active_game(sid)) is not None
+        assert "ONE OR TWO PLAYERS?" in started.text
+
+        # The film's finale order: number of players, then side, then a cell.
+        assert "X OR O?" in (await router.handle(sid, "1")).text
+        await router.handle(sid, "X")
 
         r = await router.handle(sid, "5")
         assert r.route == "core"
-        # WOPR played its own move after the human's: board shows an O reply
-        # and the turn is back with the human (X).
+        # WOPR played its own move inside the human's move — the game is
+        # self-resolving now, so there is no second frame.
         game = store.games[sid]
-        board, turn_line = game.state.splitlines()
+        mode_line, board, turn_line = game.state.splitlines()
+        assert mode_line == "MODE ONE-X"
         assert board.count("X") == 1 and board.count("O") == 1
         assert turn_line == "TURN X"
         assert game.status == "PLAYING"
@@ -420,6 +426,9 @@ def test_room_terminals_share_one_game(router_with_memory_store):
         await router.handle(sa.id, "NEW tictactoe")
         joined = await router.handle(sb.id, "NEW tictactoe")
         assert joined.detail.get("attached") is True
+        # A answers the game's opening questions; B then plays a cell into it.
+        await router.handle(sa.id, "1")
+        await router.handle(sa.id, "X")
         before = await store.get_latest_game("tictactoe", room.code)
         moved = await router.handle(sb.id, "5")
         assert moved.route == "core"
@@ -454,7 +463,8 @@ def test_room_terminals_share_one_game_no_longer_without_joining(router_with_mem
         after = await store.get_latest_game("tictactoe", room.code)
         assert after.turn == before_turn  # A's game did not move
         assert after.state == before_state
-        assert after.state.splitlines()[0] == "........."  # board still empty
+        # STATE is MODE / board / TURN — still on the opening question.
+        assert after.state.splitlines()[:2] == ["MODE ASK", "........."]
 
     asyncio.run(flow())
 

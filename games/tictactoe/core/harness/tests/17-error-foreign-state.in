@@ -1,5 +1,7 @@
 WOPR/1 tictactoe MOVE
-STATE 2
-XX.OO....
+STATE 3
+TTT-H
+.........
 TURN X
+INPUT 5
 END

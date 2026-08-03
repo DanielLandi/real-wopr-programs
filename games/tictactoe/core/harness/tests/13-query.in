@@ -1,5 +1,6 @@
 WOPR/1 tictactoe QUERY
-STATE 2
+STATE 3
+MODE ONE-X
 X...O....
 TURN X
 END

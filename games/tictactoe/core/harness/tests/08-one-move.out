@@ -1,9 +1,10 @@
 WOPR/1 tictactoe OK
-STATE 2
-....X....
-TURN O
+STATE 3
+MODE ONE-X
+O...X....
+TURN X
 DISPLAY 5
- . | . | .
+ O | . | .
 -----------
  . | X | .
 -----------

@@ -275,12 +275,17 @@ def test_a_terminal_status_detaches_without_being_asked():
         session = await store.create_session("home-terminal", "dialup-300", None)
         await router.handle(session.id, "JOSHUA")
         await router.handle(session.id, "NEW TICTACTOE")
-        for move in ("1", "2", "3", "4", "5", "6", "7", "8", "9"):
+        # One player, X, then a line that draws against the engine. The full
+        # board is NOT the end: the game asks WANT TO PLAY AGAIN? and stays
+        # PLAYING, so the terminal is still attached to it.
+        for move in ("1", "X", "1", "2", "7", "6", "9"):
             result = await router.handle(session.id, move)
-            if router.attachment(session.id).mode == JOSHUA:
-                break
-        else:
-            pytest.fail("tictactoe never reached a terminal status in nine moves")
+            assert router.attachment(session.id).mode == GAME
+        assert "STALEMATE." in result.text
+        assert "WANT TO PLAY AGAIN?" in result.text
+        # Declining is the terminal status, and the monitor detaches on it.
+        result = await router.handle(session.id, "NO")
+        assert "STALEMATE" in result.text
         assert router.attachment(session.id).mode == JOSHUA
 
     asyncio.run(flow())
