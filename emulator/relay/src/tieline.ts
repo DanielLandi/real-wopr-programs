@@ -59,6 +59,11 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
 
   function connect(): void {
     if (stopped) return;
+    // Did THIS attempt get as far as an ASSIGNED? The hub closes 4400 for any
+    // frame it cannot decode, not only a REGISTER — so the code alone does not
+    // say whether the placement was rejected or a live trunk hit one bad frame.
+    // Reset per attempt, set in the ASSIGNED handler below.
+    let assigned = false;
     hub = new WebSocket(opts.hubUrl);
     hub.on("open", () => {
       backoffMs = 5_000;
@@ -69,7 +74,7 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
     hub.on("message", (data) => {
       let f: TrunkFrame;
       try { f = decodeTrunkFrame(data.toString()); } catch { return; }
-      if (f.t === "ASSIGNED") opts.onAssigned?.(f.exchange, f.world, f.slot);
+      if (f.t === "ASSIGNED") { assigned = true; opts.onAssigned?.(f.exchange, f.world, f.slot); }
       else if (f.t === "OPEN") openChannel(f);
       else if (f.t === "FRAME") {
         const c = channels.get(f.chan);
@@ -95,12 +100,19 @@ export function startTieline(opts: TielineOpts): { stop: () => void } {
       if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462) {
         stopped = true;
         console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
-      } else if (closeCode === 4400) {
+      } else if (closeCode === 4400 && !assigned) {
         // The hub could not even read our REGISTER — an off-roster slot, a
         // world that is not a number or NEW. That verdict is deterministic:
         // the same frame will be rejected every time, so redialling is an
         // infinite loop with no LINE REFUSED to explain it. Stop and say what
         // to fix.
+        //
+        // Only BEFORE an ASSIGNED, though: the hub closes 4400 for any
+        // undecodable frame, including one arriving mid-call on an exchange it
+        // already placed. Treating that as terminal would let a single corrupt
+        // frame take a live exchange off the board for good — and blame
+        // TIELINE_SLOT/TIELINE_WORLD, which were fine. Post-ASSIGNED it is an
+        // outage like any other: fall through to the backoff retry.
         stopped = true;
         console.error(
           `LINE NOT ACCEPTED — ${reason.toString().toUpperCase() || "MALFORMED REGISTER"}` +

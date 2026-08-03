@@ -139,6 +139,10 @@ export interface LocalSlot {
   /** Bridge system id, for a slot that is a period system rather than Joshua. */
   system?: string;
   joshua?: "claude" | "period";
+  /** Who runs this line, as a REGISTER would carry it. A seeded slot has no
+   *  registrant to name itself, so the manifest names it — otherwise the
+   *  flagship's own world is the only one in the book with no operator. */
+  operator?: string;
 }
 
 /** Vet a manifest the way `decodeTrunkFrame` vets a REGISTER: a bad entry is a
@@ -179,6 +183,11 @@ function checkLocalWorld(seeds: LocalSlot[]): LocalSlot[] {
     }
     if (s.joshua !== undefined && s.joshua !== "claude" && s.joshua !== "period") {
       throw new Error(`local world: bad joshua for ${s.slot}`);
+    }
+    // The same ceiling decodeTrunkFrame puts on a REGISTER's operator: the
+    // directory prints seeded and registered entries in the same column.
+    if (s.operator !== undefined && (typeof s.operator !== "string" || s.operator.length > 24)) {
+      throw new Error(`local world: bad operator for ${s.slot}`);
     }
     return { ...s, name, region };
   });
@@ -384,7 +393,7 @@ export class Switchboard {
     byWorld.set(1, this.localWorld.map((s) => ({
       id: `local-${s.slot.toLowerCase()}`, name: s.name, region: s.region,
       api: publicBase, link: `${wsBase}/link`,
-      joshua: s.joshua ?? "period", operator: undefined, online: true as const,
+      joshua: s.joshua ?? "period", operator: s.operator, online: true as const,
       world: 1, slot: s.slot,
       // Spread, not an undefined value: an own `system` key with no value is a
       // different document once a surface round-trips it.

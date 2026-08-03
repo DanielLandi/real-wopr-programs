@@ -311,6 +311,60 @@ test("tieline: stops (no reconnect) when the hub cannot read the REGISTER", { ti
   }
 });
 
+test("tieline: a 4400 AFTER the placement is an outage, not a verdict", { timeout: 20_000 }, async () => {
+  // The hub closes 4400 for ANY frame it cannot decode, not only a REGISTER —
+  // server.ts does it on every host message. So a single corrupt frame on a
+  // trunk the hub already placed arrives here as the same close code as a
+  // typo'd slot. Treating it as terminal would take a LIVE exchange off the
+  // board for good, blaming TIELINE_SLOT/TIELINE_WORLD, which were fine.
+  // Once ASSIGNED has arrived, 4400 follows the ordinary backoff retry.
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+
+  let connections = 0;
+  const fakeHub = new WebSocketServer({ port: 0 });
+  fakeHub.on("connection", (ws) => {
+    connections += 1;
+    ws.on("message", (data) => {
+      if (JSON.parse(data.toString()).t !== "REGISTER") return;
+      // Placed — and then the hub chokes on something mid-stream.
+      ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 2, slot: "WOPR" }));
+      setTimeout(() => ws.close(4400, "malformed trunk frame"), 20);
+    });
+  });
+  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
+  const hubPort = (fakeHub.address() as { port: number }).port;
+
+  let assignedCalls = 0;
+  const tie = startTieline({
+    hubUrl: `ws://127.0.0.1:${hubPort}`,
+    name: "LIVE EXCH", region: "PORTLAND US", joshua: "period",
+    localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    reconnect: true,
+    onAssigned: () => { assignedCalls += 1; },
+  });
+
+  try {
+    // The first backoff is 5s: past it, a tieline that respected the retry path
+    // has redialled and been placed a second time.
+    const deadline = Date.now() + 12_000;
+    while (connections < 2 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(connections >= 2, `a post-ASSIGNED 4400 killed a live trunk: ${connections} connection(s)`);
+    assert.ok(assignedCalls >= 2, `the redial was never placed again: ${assignedCalls} ASSIGNED`);
+    assert.deepEqual(
+      errors.filter((e) => e.includes("LINE NOT ACCEPTED")), [],
+      `a live exchange was blamed on its slot/world config: ${JSON.stringify(errors)}`,
+    );
+  } finally {
+    console.error = origError;
+    tie.stop();
+    await new Promise<void>((resolve) => fakeHub.close(() => resolve()));
+  }
+});
+
 test("tieline: stops (no reconnect) when the hub refuses the slot", { timeout: 10_000 }, async () => {
   // A refusal is an answer, not an outage. `reconnect: true` asks for redials
   // through outages; a 4409/4460/4461 close must override it, or the host

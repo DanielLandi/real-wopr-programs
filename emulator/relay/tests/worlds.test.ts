@@ -191,6 +191,24 @@ test("world 1 seeds from the local manifest: direct-dial entries, system tag whe
   assert.equal("system" in dir[0].slots[0], false);
 });
 
+test("a seed carries its operator into the directory, bounded like a REGISTER's", () => {
+  // A seeded slot has no registrant to name itself. Without this the flagship's
+  // own world is the only one in the book whose lines have no operator.
+  const sb = new Switchboard({
+    localWorld: [{ ...SEEDS[0], operator: "DanielLandi" }],
+  });
+  assert.equal(sb.directory("http://hub")[0].slots[0].operator, "DanielLandi");
+  // Same 24-char ceiling decodeTrunkFrame puts on a REGISTER's operator.
+  assert.throws(
+    () => new Switchboard({ localWorld: [{ ...SEEDS[0], operator: "X".repeat(25) }] }),
+    /bad operator for WOPR/,
+  );
+  assert.throws(
+    () => new Switchboard({ localWorld: [{ ...SEEDS[0], operator: 7 } as unknown as LocalSlot] }),
+    /bad operator for WOPR/,
+  );
+});
+
 test("a seed's joshua defaults to period and can be named per slot", () => {
   const sb = new Switchboard({
     localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "SAO PAULO BR", joshua: "claude" }],
