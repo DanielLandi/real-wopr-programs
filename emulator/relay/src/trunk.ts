@@ -20,7 +20,13 @@ export const TRUNK_MAX_FRAME_BYTES = 8192;
 // The film's wardial cast (docs/period-systems.md in the engine repo) plus
 // overflow slots for original systems. Slot names double as the world-local
 // numbering plan in phase 2 — fixed here, never renamed.
-export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL", "HOME"] as const;
+//
+// HOME is deliberately absent. It is David's desk: the seat a caller dials
+// FROM, not a service anyone can host. Keeping it off the roster is what makes
+// that true on the wire — the REGISTER codec's membership check below refuses
+// it, the tieline CLI never offers it, and the directory's roster sort will
+// never meet one.
+export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL"] as const;
 export const WILDCARD_SLOTS = ["OTHER-1", "OTHER-2"] as const;
 export const ALL_SLOTS: readonly string[] = [...NAMED_SLOTS, ...WILDCARD_SLOTS];
 
@@ -155,12 +161,15 @@ function checkLocalWorld(seeds: LocalSlot[]): LocalSlot[] {
     // that before reading a field off it, or `[null]` in TRUNK_LOCAL_WORLD
     // aborts startup with a raw TypeError instead of naming the problem.
     if (!s || typeof s !== "object") throw new Error("local world: bad entry");
-    // HOME is on the roster (it is a dialable slot for a registrant's own
-    // line) but it is the *visitor's* end of the call: the flagship never
-    // publishes one, so it is not seedable. Wildcards are what the hub hands
-    // out to a registrant that did not ask for a slot; a manifest says what it
-    // is seeding by name.
-    if (s.slot === "HOME") throw new Error("local world: HOME is never listed");
+    // HOME is off the roster entirely, so the generic check below would already
+    // refuse it — but as a bare "bad slot", which reads like a typo. It is not:
+    // HOME is the *caller's* end of the call, the seat a visitor dials from,
+    // and an operator who tried to seed it made a conceptual mistake worth
+    // naming. Wildcards are what the hub hands out to a registrant that did not
+    // ask for a slot; a manifest says what it is seeding by name.
+    if (s.slot === "HOME") {
+      throw new Error("local world: HOME is the caller's own seat, never a hosted slot");
+    }
     if (!NAMED_SLOTS.includes(s.slot as (typeof NAMED_SLOTS)[number])) {
       throw new Error(`local world: bad slot ${JSON.stringify(s.slot)}`);
     }

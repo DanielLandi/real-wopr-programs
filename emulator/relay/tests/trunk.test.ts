@@ -11,6 +11,8 @@ import {
   decodeTrunkFrame,
   restAllowed,
   newExchangeCode,
+  ALL_SLOTS,
+  NAMED_SLOTS,
   TRUNK_ALPHABET,
   TRUNK_MAX_FRAME_BYTES,
   type TrunkFrame,
@@ -155,6 +157,20 @@ test("REGISTER rejects an off-roster slot and a bad world", () => {
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "wopr" })), /bad slot/);
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: 0 })), /bad world/);
   assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, world: "FRESH" })), /bad world/);
+});
+
+test("HOME is not a registrable slot: it is off the roster entirely", () => {
+  // HOME is David's desk — the seat a caller dials FROM, never a service
+  // anyone hosts. Keeping it off the roster is what makes that true on the
+  // wire, and it is the single fact three other behaviours derive from: the
+  // REGISTER codec's membership check, the tieline CLI's accepted-values list,
+  // and the directory's roster sort.
+  assert.equal(NAMED_SLOTS.includes("HOME" as (typeof NAMED_SLOTS)[number]), false);
+  assert.equal(ALL_SLOTS.includes("HOME"), false);
+  const base = { t: "REGISTER", v: 1, name: "BASEMENT EXCH", region: "PORTLAND US", joshua: "period" };
+  // So the hub cannot even decode a REGISTER that claims it: the trunk is
+  // closed as malformed rather than the seat being handed out.
+  assert.throws(() => decodeTrunkFrame(JSON.stringify({ ...base, slot: "HOME" })), /bad slot/);
 });
 
 test("REGISTER carries an optional reserve key, bounded at 64 chars", () => {

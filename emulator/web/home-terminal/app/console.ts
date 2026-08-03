@@ -139,16 +139,19 @@ export function directoryText(ctx: ConsoleContext): string {
       lines.push("");
       lastWorld = undefined;
     }
-    // 80 columns, worst case, with every field at its maximum at once:
+    // 80 columns, worst case, with every printed field at its maximum at once:
     //   nn 2 + "  " 2 + name 24 + "  " 2 + slot 11 (PROTOVISION)
-    //   + " [" 2 + region 24 + "]" 1 + " (1983 MODE)" 12  =  80.
-    // The REGISTER wire caps name and region at 24 each and PROTOVISION is the
-    // longest roster slot, so that is the true ceiling. Both bracketed and
-    // parenthesised suffixes are delimited by their own punctuation, so they
-    // take a single leading space; the name/slot gap keeps two. (Suppressing
-    // the mode suffix below only ever shortens a line, so the ceiling holds.)
+    //   + " (1983 MODE)" 12  =  53.
+    // The REGISTER wire caps name at 24 and PROTOVISION is the longest roster
+    // slot, so that is the true ceiling. The parenthesised suffix is delimited
+    // by its own punctuation, so it takes a single leading space; the
+    // name/slot gap keeps two. (Suppressing the mode suffix below only ever
+    // shortens a line, so the ceiling holds.)
+    //
+    // The region used to print here as a ` [SAO PAULO BR]` suffix, and it was
+    // what made 80 the binding constraint. It is no longer shown to a visitor
+    // anywhere; DirEntry still carries it, because the wire still sends it.
     const nn = String(e.index).padStart(2, "0");
-    const region = e.region ? ` [${e.region}]` : "";
     const num = e.number ? `  ${e.number}` : "";
     // "(1983 MODE)" names the dialogue processor — period Lisp rather than
     // Claude. A slot that is a period SYSTEM (the school's BASIC-PLUS box, PAN
@@ -156,7 +159,7 @@ export function directoryText(ctx: ConsoleContext): string {
     // answering a question that line does not raise.
     const mode = e.joshua === "period" && !e.system ? " (1983 MODE)" : "";
     const slot = e.slot ? `  ${e.slot}` : "";
-    lines.push(`${nn}  ${e.name}${slot}${region}${num}${mode}`);
+    lines.push(`${nn}  ${e.name}${slot}${num}${mode}`);
   }
   lines.push("");
   lines.push("DIAL <NN>   DIAL <NAME>   ATDT <NUMBER>   OR JUST THE NUMBER");
