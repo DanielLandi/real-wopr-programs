@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from pathlib import Path
 
@@ -6,6 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.execstack import Frame
+from app.execstack import decode as decode_stack
 from app.main import create_app
 from app.store import MemoryStore
 from app.systems import load_systems
@@ -298,7 +301,11 @@ def test_empty_display_sends_no_blank_frame(monkeypatch):
         # The very next frame is HELLO's echo — no blank frame in between.
         assert "ECHO HELLO" in ws.receive_text()
 
-    assert asyncio.run(store.get_system_state(sid)) == "2"  # NOP's STATE persisted
+    # The store now holds the encoded session stack (Task 6), not the bare
+    # STATE string — a single-program session is just a one-frame stack, so
+    # decode it back to check NOP's STATE persisted.
+    stack = decode_stack(asyncio.run(store.get_system_state(sid)), "reference")
+    assert stack == [Frame("reference", "2")]
 
 
 @needs_pactel
@@ -379,3 +386,82 @@ def test_two_sessions_do_not_share_a_store(system_client):
     second = system_client.post("/api/session",
                                 json={"surface": "home-terminal", "system": "school"}).json()
     assert re.search(r"BIOLOGY 2\s+F", grade_for(second)), "the store leaked between sessions"
+
+
+# -- the session stack (EXEC/RETURN), end to end through the websocket ------
+
+def _write_stub_system(systems_dir, sid, number, responses, manifest_extra=None):
+    """A minimal SYSTEM/1 system as a shell one-liner-per-command, so a stack
+    test does not depend on bwbasic/GnuCOBOL/etc. being built.
+
+    `number` is passed in, never derived from the id: Python's str hash is
+    salted per process (PYTHONHASHSEED), so a computed number would differ run
+    to run and this suite would stop being reproducible.
+    """
+    h = systems_dir / sid / "harness"
+    (h / "bin").mkdir(parents=True)
+    manifest = {"id": sid, "title": sid.upper(), "language": "sh",
+                "binary": sid, "number": number, "timeout_s": 2}
+    manifest.update(manifest_extra or {})
+    (h / "manifest.json").write_text(json.dumps(manifest))
+    cases = "\n".join(
+        f'    {cmd}) printf "SYSTEM/1 {sid} OK\\n{body}\\nEND\\n" ;;'
+        for cmd, body in responses.items())
+    script = f'''#!/usr/bin/env bash
+read -r header
+cmd=$(printf '%s' "$header" | cut -d' ' -f3)
+cat >/dev/null
+case "$cmd" in
+{cases}
+    *) printf "SYSTEM/1 {sid} OK\\nSTATE 0\\nDISPLAY 1\\nPROTOCOL ERROR\\nLINE DROP\\nEND\\n"; exit 1 ;;
+esac
+'''
+    binary = h / "bin" / sid
+    binary.write_text(script)
+    binary.chmod(0o755)
+
+
+def test_captive_exec_paints_the_child_and_drops_on_return(tmp_path):
+    """A monitor that EXECs a child: the caller sees the child's screen, not
+    the monitor's own DISPLAY 0 turn — proving app/main.py now runs a session
+    on execstack.decode/encode + session_turn.run_session_turn rather than a
+    single program's opaque STATE.
+
+    EXEC pushes rather than replaces (test_session_turn.py), so when the
+    child hits LINE RETURN the monitor is not simply gone: it is resumed with
+    exactly the STATE it held at EXEC time, via a RETURN turn. Here the
+    monitor's own RETURN handler is what ends the call (LINE DROP) — the
+    stack (mon alone) round-trips through store.set_system_state/
+    get_system_state between all three websocket turns, which is the part
+    this task actually wires up.
+    """
+    systems_dir = tmp_path / "systems"
+    _write_stub_system(systems_dir, "mon", "(206) 555-0001", responses={
+        "CONNECT": "STATE 0\nDISPLAY 1\nBANNER\nPROMPT PASSWORD:\nLINE UP",
+        "INPUT": "STATE 1\nPHASE EXEC\nDISPLAY 0\nEXEC kid\nLINE UP",
+        "RETURN": "STATE 1\nPHASE DONE\nDISPLAY 1\nGOODBYE.\nLINE DROP",
+    }, manifest_extra={"node": {"execs": ["kid"]}})
+    _write_stub_system(systems_dir, "kid", "(206) 555-0002", responses={
+        "CONNECT": "STATE 0\nDISPLAY 1\nCHILD SCREEN\nPROMPT SELECT:\nLINE UP",
+        "INPUT": "STATE 0\nDISPLAY 0\nLINE RETURN",
+    })
+
+    client = TestClient(create_app(settings=Settings(systems_dir=systems_dir), store=MemoryStore()))
+    r = client.post("/api/session", json={"surface": "home-terminal", "system": "mon"})
+    assert r.status_code == 201
+    sid, token = r.json()["session_id"], r.json()["token"]
+    with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        assert "BANNER" in ws.receive_text()
+        assert "PASSWORD:" in ws.receive_text()                    # prompt
+
+        ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
+        assert "CHILD SCREEN" in ws.receive_text()   # the child painted, not the monitor
+        assert "SELECT:" in ws.receive_text()                      # prompt
+
+        ws.send_text('{"v":1,"kind":"input","payload":"4","eom":true}')
+        # RETURN resumes the monitor rather than dropping outright — its
+        # own RETURN handler is what ends the call, so GOODBYE. (the
+        # monitor's display, not the child's) precedes NO CARRIER and no
+        # prompt frame is sent in between.
+        assert "GOODBYE." in ws.receive_text()
+        assert "NO CARRIER" in ws.receive_text()
