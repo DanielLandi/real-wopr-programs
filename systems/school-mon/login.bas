@@ -71,6 +71,10 @@
 3330 AK$ = AP$(AF)
 3335 TR = 0
 3340 IF AC(AF) = 0 THEN GOTO 3400
+3341 REM a captive account whose program did not resolve (8680) gets no
+3342 REM EXEC at all — 3390 refuses out loud instead of handing the host
+3343 REM an empty EXEC target to choke on.
+3344 IF AG$(AF) = "-" OR AG$(AF) = "" THEN GOTO 3390
 3345 REM captive: hand the terminal to the account's program
 3350 PH$ = "EXEC"
 3355 PRINT "SYSTEM/1 school-mon OK"
@@ -80,6 +84,16 @@
 3375 PRINT "LINE UP"
 3380 PRINT "END"
 3385 END
+3390 REM ---- captive account, but its program will not resolve: an
+3391 REM honest 1983 misconfiguration, not a crash. No EXEC, no Ready —
+3392 REM a captive account has nothing to fall back to.
+3393 PRINT "SYSTEM/1 school-mon OK"
+3394 GOSUB 7500
+3395 PRINT "DISPLAY 1"
+3396 PRINT "PROGRAM UNAVAILABLE - CALL PLANT SERVICE"
+3397 PRINT "LINE DROP"
+3398 PRINT "END"
+3399 END
 3400 REM non-captive: give the caller the monitor
 3405 PH$ = "READY"
 3410 PRINT "SYSTEM/1 school-mon OK"
@@ -191,7 +205,7 @@
 4505 GOSUB 8800
 4510 IF CF = 0 THEN GOTO 4600
 4515 IF CV(CF) > MV THEN GOTO 4640
-4520 IF CS$(CF) = "-" THEN GOTO 4670
+4520 IF CS$(CF) = "-" OR CS$(CF) = "" THEN GOTO 4670
 4525 PH$ = "EXEC"
 4530 GOSUB 7800
 4535 PRINT "DISPLAY 0"
@@ -260,14 +274,22 @@
 8670 CLOSE #1
 8675 RETURN
 8680 REM ---- resolve captive program ids through the catalog, so there is
-8682 REM one mapping (CATLOG.DAT's system-id column) rather than two ----
-8684 FOR I = 1 TO NA
-8686 IF AC(I) = 0 THEN GOTO 8694
-8688 FOR J = 1 TO NC
-8690 IF CN$(J) = AG$(I) + ".BAS" THEN AG$(I) = CS$(J)
-8692 NEXT J
-8694 NEXT I
-8696 RETURN
+8681 REM one mapping (CATLOG.DAT's system-id column) rather than two. A
+8682 REM captive account whose program will not resolve to a usable
+8683 REM system id is left with AG$ = "-", the same sentinel the catalog
+8684 REM itself uses for "no system here" — never a raw or blank id an
+8685 REM EXEC could be built from. 3344 depends on that to refuse
+8686 REM gracefully rather than hand the host an empty EXEC target.
+8687 FOR I = 1 TO NA
+8688 IF AC(I) = 0 THEN GOTO 8696
+8689 P8$ = AG$(I)
+8690 AG$(I) = "-"
+8691 FOR J = 1 TO NC
+8692 IF CN$(J) <> P8$ + ".BAS" THEN GOTO 8694
+8693 IF CS$(J) <> "-" AND CS$(J) <> "" THEN AG$(I) = CS$(J)
+8694 NEXT J
+8696 NEXT I
+8698 RETURN
 8800 REM ---- find AR$ in the catalog; CF = index or 0 ----
 8810 CF = 0
 8820 FOR J = 1 TO NC
