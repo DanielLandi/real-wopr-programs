@@ -17,8 +17,9 @@
 123 DIM CB(15)
 124 DIM CV(15)
 125 GOSUB 8500
-126 DIM CD$(15)
+126 DIM CD$(15), CS$(15)
 127 GOSUB 8600
+128 GOSUB 8680
 130 REM ---- parse the SYSTEM/1 request from stdin ----
 135 LINE INPUT H$
 140 IF LEFT$(H$, 20) <> "SYSTEM/1 school-mon " THEN GOTO 7000
@@ -186,16 +187,18 @@
 4385 CLOSE #2
 4390 GOSUB 7900
 4395 END
-4500 REM STUB: RUN is Task 10's (docs/systems.md 2.6's `Ready`). Until it
-4502 REM lands, accept the line and say so rather than fall off the end of
-4504 REM the program into a bwBASIC "line number not found" abort — the way
-4506 REM a half-finished 1983 system really answered a command it hadn't
-4508 REM wired up yet.
-4510 GOSUB 7800
-4512 PRINT "DISPLAY 1"
-4514 PRINT "?COMMAND NOT IMPLEMENTED"
-4516 GOSUB 7900
-4518 END
+4500 REM ---- RUN <file> ----
+4505 GOSUB 8800
+4510 IF CF = 0 THEN GOTO 4600
+4515 IF CV(CF) > MV THEN GOTO 4640
+4520 IF CS$(CF) = "-" THEN GOTO 4670
+4525 PH$ = "EXEC"
+4530 GOSUB 7800
+4535 PRINT "DISPLAY 0"
+4540 PRINT "EXEC " + CS$(CF)
+4545 PRINT "LINE UP"
+4550 PRINT "END"
+4555 END
 4600 REM ---- can't find file or account ----
 4605 GOSUB 7800
 4610 PRINT "DISPLAY 1"
@@ -208,6 +211,12 @@
 4655 PRINT "?Protection violation"
 4660 GOSUB 7900
 4665 END
+4670 REM ---- on the disk, but not a program ----
+4675 GOSUB 7800
+4680 PRINT "DISPLAY 1"
+4685 PRINT "?Not a runnable file"
+4690 GOSUB 7900
+4695 END
 4700 REM ---- BYE: the monitor really is ending the call, not returning ----
 4705 GOSUB 7800
 4710 PRINT "DISPLAY 1"
@@ -239,6 +248,9 @@
 8639 CB(NC) = VAL(MID$(L9$, 22, 3))
 8641 CV(NC) = VAL(MID$(L9$, 26, 1))
 8643 CD$(NC) = "-"
+8644 T9$ = MID$(L9$, 28, 8)
+8645 GOSUB 9000
+8646 CS$(NC) = T9$
 8660 IF CN$(NC) = "RUNBOOK.DOC" THEN CD$(NC) = "data/runbook.doc"
 8662 IF CN$(NC) = "ADANOT.DOC" THEN CD$(NC) = "data/adanot.doc"
 8664 IF CN$(NC) = "NOTES.TXT" THEN CD$(NC) = "data/notes.txt"
@@ -247,6 +259,15 @@
 8669 GOTO 8615
 8670 CLOSE #1
 8675 RETURN
+8680 REM ---- resolve captive program ids through the catalog, so there is
+8682 REM one mapping (CATLOG.DAT's system-id column) rather than two ----
+8684 FOR I = 1 TO NA
+8686 IF AC(I) = 0 THEN GOTO 8694
+8688 FOR J = 1 TO NC
+8690 IF CN$(J) = AG$(I) + ".BAS" THEN AG$(I) = CS$(J)
+8692 NEXT J
+8694 NEXT I
+8696 RETURN
 8800 REM ---- find AR$ in the catalog; CF = index or 0 ----
 8810 CF = 0
 8820 FOR J = 1 TO NC
@@ -301,7 +322,6 @@
 8543 T9$ = MID$(L9$, 26, 8)
 8545 GOSUB 9000
 8547 AG$(NA) = T9$
-8548 IF AG$(NA) = "RECORDS" THEN AG$(NA) = "school"
 8549 GOTO 8515
 8560 CLOSE #1
 8565 RETURN

@@ -262,38 +262,105 @@ def test_the_host_refuses_a_topology_with_errors(monkeypatch):
         NodeHost.for_node("school", PACK, {})
 
 
-def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer():
+def _stub_caller_pair(tmp_path, sid="stub-caller", peer="stub-peer"):
+    """A purpose-built pair of stub systems for the CALL/RESUME tests below.
+
+    `school` used to carry this coverage, but Task 7 moved its phone line to
+    school-mon: `school` is now reachable only over `bus`, the same network
+    its peer `school-db` sits on, and no single test double can both register
+    a node on a URL and answer as its peer on that same URL. So these tests
+    get their own pair instead of reusing a real pack system.
+
+    `stub-caller` is a real subprocess — harness/bin/<id>, the same shape
+    test_systemrunner.py's `_write_stub_system` uses, with an explicit
+    (unhashed) phone number — rather than a Python `system_runner` double,
+    so the CALL/RESUME loop is exercised the way a node host actually drives
+    a program. Unlike that helper's static per-command echo, turn 2 (RESUME)
+    has to read back whatever status the REPLY block actually carries — OK
+    with the peer's payload, or anything else with RECORDS UNAVAILABLE — so
+    both tests can share one script. `stub-peer` is never invoked as a
+    subprocess (nothing dials it *in*; `execute_call` only ever opens a raw
+    `/dial` leg to whatever URL the test wires up for its network), so it is
+    just a topology entry, not a second binary.
+    """
+    from app.topology import Address, NodeDecl, Topology
+
+    bindir = tmp_path / "systems" / sid / "harness" / "bin"
+    bindir.mkdir(parents=True)
+    script = rf"""#!/usr/bin/env bash
+set -uo pipefail
+read -r header
+cmd=$(printf '%s' "$header" | cut -d' ' -f3)
+case "$cmd" in
+  CONNECT)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nREADY\nLINE UP\nEND\n'
+    ;;
+  INPUT)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nSEARCHING...\nCALL {peer} 1\nLOOKUP GRADE 1 BIOLOGY 2\nLINE UP\nEND\n'
+    ;;
+  RESUME)
+    read -r _state_hdr
+    read -r reply_hdr
+    status=$(printf '%s' "$reply_hdr" | cut -d' ' -f3)
+    n=$(printf '%s' "$reply_hdr" | cut -d' ' -f4)
+    payload=""
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      read -r payload
+      i=$((i + 1))
+    done
+    read -r _end
+    if [ "$status" = "OK" ]; then
+      body="$payload"
+    else
+      body="RECORDS UNAVAILABLE"
+    fi
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\n%s\nLINE UP\nEND\n' "$body"
+    ;;
+  *)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nPROTOCOL ERROR\nLINE DROP\nEND\n'
+    exit 1
+    ;;
+esac
+exit 0
+"""
+    binary = bindir / sid
+    binary.write_text(script)
+    binary.chmod(0o755)
+
+    decl = NodeDecl(
+        id=sid, title=sid.upper(),
+        networks={
+            "pstn": Address(network="pstn", address="(555) 010-1000", protocol="SYSTEM/1"),
+            "bus": Address(network="bus", address=sid.upper(), protocol="SYSTEM/1"),
+        },
+        peers=(peer,),
+    )
+    peer_decl = NodeDecl(
+        id=peer, title=peer.upper(),
+        networks={"bus": Address(network="bus", address=peer.upper(), protocol="SYSTEM/1")},
+    )
+    topo = Topology(networks={}, nodes={sid: decl, peer: peer_decl})
+    return decl, topo
+
+
+def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer(tmp_path):
     """The whole point: a CALL becomes a real dial to another process, and the
     program is re-invoked with what came back."""
-    from app.systemwire import Call, SystemResponse
-
-    class CallingRunner:
-        """Turn 1 asks for a peer; turn 2 (RESUME) reports what it got."""
-        def __init__(self):
-            self.replies = []
-
-        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
-            if command == "CONNECT":
-                return SystemResponse(sid, "PHASE=MENU", "READY", "UP")
-            if reply is None:
-                return SystemResponse(
-                    sid, "PHASE=AWAIT", "SEARCHING...", "UP",
-                    call=Call(peer="school-db", payload="LOOKUP GRADE 1 BIOLOGY 2"))
-            self.replies.append(reply)
-            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
-            return SystemResponse(sid, "PHASE=MENU", body, "UP")
+    decl, topo = _stub_caller_pair(tmp_path)
 
     async def flow():
         async with FakeRelay() as relay, FakeDialTarget(answer="GRADE F") as store:
-            runner = CallingRunner()
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": store.url},
-                            system_runner=runner)
+            host = NodeHost(decl, tmp_path, {"pstn": relay.url, "bus": store.url},
+                            topology=topo)
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "5550101000"})
             await relay.wait_frames(2)
             relay.frames.clear()
 
@@ -302,38 +369,26 @@ def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer():
 
             text = relay.display_text()
             assert "SEARCHING..." in text, text   # shown while the call is in flight
-            assert "GRADE F" in text, text        # and the peer's answer after it
-            assert runner.replies[0].status == "OK"
+            assert "GRADE F" in text, text        # the peer's answer, verbatim, after it
             await host.stop()
 
     asyncio.run(flow())
 
 
-def test_a_dead_peer_degrades_instead_of_hanging():
-    from app.systemwire import Call, SystemResponse
-
-    class CallingRunner:
-        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
-            if command == "CONNECT":
-                return SystemResponse(sid, "", "READY", "UP")
-            if reply is None:
-                return SystemResponse(sid, "", "SEARCHING...", "UP",
-                                      call=Call(peer="school-db", payload="LOOKUP"))
-            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
-            return SystemResponse(sid, "", body, "UP")
+def test_a_dead_peer_degrades_instead_of_hanging(tmp_path):
+    decl, topo = _stub_caller_pair(tmp_path)
 
     async def flow():
-        # The bus relay is up and school registers on it; there is simply no
-        # store holding SCHOOL-DB, so the dial gets NO ANSWER.
+        # The bus relay is up and stub-caller registers on it; there is simply
+        # no target holding stub-peer's line, so the dial gets NO ANSWER.
         async with FakeRelay() as relay, FakeRelay() as bus:
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": bus.url},
-                            system_runner=CallingRunner())
+            host = NodeHost(decl, tmp_path, {"pstn": relay.url, "bus": bus.url},
+                            topology=topo)
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "5550101000"})
             await relay.wait_frames(2)
             relay.frames.clear()
 
