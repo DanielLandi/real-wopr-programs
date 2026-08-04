@@ -42,6 +42,8 @@ def decode(raw: str | None, root_program: str) -> list[Frame]:
         return [Frame(root_program, None)]
     try:
         blob = json.loads(raw)
+        if not isinstance(blob, dict):
+            return [Frame(root_program, None)]
         if blob.get("v") != FORMAT_VERSION:
             return [Frame(root_program, None)]
         frames = [Frame(program=e["p"], state=e["s"]) for e in blob["stack"]]
