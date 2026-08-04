@@ -116,6 +116,12 @@ export function sessionBody(
  *  entry stays the target — in production both roads reach the same bridge,
  *  and the world's line is the canonical one.
  *
+ *  The match is on the id alone, so the two sides have to be kept in step: the
+ *  hub's seeded slot (`TRUNK_LOCAL_WORLD`, in the emulator README) and
+ *  `sims.ts`'s `systemId`. Rename a system on one side only and it prints
+ *  twice — not a defect in this function, which is why the README says so
+ *  where the seed is actually written.
+ *
  *  Nothing else changes: with no trunk directory loaded (local dev, classic
  *  mode) no sim matches and the list is exactly the pre-worlds one, an
  *  exchange without a `system` (a Joshua line: WOPR, CHEYENNE MOUNTAIN) can

@@ -13,10 +13,13 @@ export interface SweepEntry {
   hit?: SweepHit;                // present iff status === "CARRIER"
 }
 
-/** systemId -> domain label for the hit list. */
+/** systemId -> domain label for the hit list. Keys are `sims.ts`'s `systemId`
+ *  values, so a stale one is not an error — it just costs that carrier its
+ *  domain label and prints a bare `CARRIER`. */
 const LABELS: Record<string, string> = {
   airline: "AIRLINE",
-  school: "SCHOOL DIST",
+  // The monitor answers the school's line since the split (systems.md §2.6).
+  "school-mon": "SCHOOL DIST",
   protovision: "GAME CO",
   pactel: "TELCO",
 };

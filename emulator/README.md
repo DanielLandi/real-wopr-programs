@@ -96,14 +96,23 @@ World 1 is not registered by anyone: the hub synthesizes it at startup from
 Each seeded entry dials the public base directly — there is no trunk hop,
 because the flagship is the hub's own machine — and a slot that is a period
 system names the bridge `system` id that opens a session against it
-(`airline`, `school`, `school-db`, `pactel`, `protovision`, `reference`).
+(`airline`, `school-mon`, `pactel`, `protovision`, `reference` — a dialable
+system is one whose manifest carries a `number`, which is why `school` and
+`school-db` are not on that list).
 
 ```
 TRUNK_LOCAL_WORLD='[
   {"slot":"WOPR","name":"CHEYENNE MOUNTAIN","region":"SAO PAULO BR"},
-  {"slot":"SCHOOL","name":"SUNNYVALE SCHOOL DIST","region":"SUNNYVALE CA","system":"school"}
+  {"slot":"SCHOOL","name":"SEATTLE SCHOOL DIST","region":"SEATTLE US","system":"school-mon"}
 ]'
 ```
+
+The `system` id has to be the one the home terminal's own paper list uses
+(`sims.ts`'s `systemId`). The DIRECTORY screen pairs a seeded world slot with
+the paper-list number by matching those two ids, so a slot whose id has gone
+stale costs twice over: the machine prints as two lines, and dialling the world
+entry names a system the bridge will not open. The school's id became
+`school-mon` when it was split into monitor + records (`docs/systems.md` §2.6).
 
 `slot` comes from the named roster (`WOPR` `SCHOOL` `PANAM` `PROTOVISION`
 `PACTEL`) — not a wildcard. `name` and `region` are 2-24 characters, the same

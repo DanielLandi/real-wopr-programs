@@ -254,10 +254,10 @@ test("a seeded directory entry's system id opens a system session, not a WOPR on
   // ordinary directory entry carrying a bridge `system` id. Dialling it is the
   // system path: no room, no joshua — the same body a local SYSTEM/1 number
   // would mint (page.tsx passes `entry.system ?? null` here).
-  const entry = { system: "school" };
+  const entry = { system: "school-mon" };
   assert.deepEqual(sessionBody("home-terminal", "UXBB6B", entry.system ?? null, "claude"), {
     surface: "home-terminal",
-    system: "school",
+    system: "school-mon",
   });
   // The same call for a Joshua slot (no system id) is unchanged.
   assert.deepEqual(sessionBody("home-terminal", "UXBB6B", {}.system ?? null, "claude"), {
@@ -292,7 +292,7 @@ test("directoryText hides (1983 MODE) on a slot that is a period system, not Jos
   // suffix would be answering a question nobody asked about that line.
   const base = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
   const exchanges = [
-    { ...base, id: "local-school", name: "SUNNYVALE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+    { ...base, id: "local-school", name: "SUNNYVALE SCHOOL DIST", slot: "SCHOOL", system: "school-mon" },
     { ...base, id: "local-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
   ];
   const lines = directoryText({ exchanges, systems: [], hits: null }).split("\n");
@@ -341,10 +341,15 @@ test("directoryText does not print an exchange's region", () => {
 // What production looks like: the hub seeds world 1 with the flagship's own
 // slots, four of which are the period systems that are ALSO on David's paper
 // list (sims.ts DIAL_SYSTEMS). Same machine, reached two ways.
-const SEED = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
+//
+// These `system` ids stand in for the operator's TRUNK_LOCAL_WORLD (see the
+// emulator README) and must equal sims.ts's `systemId` exactly — that equality
+// is the whole of the absorption below. When a system's id changes, both ends
+// have to move together or the machine prints as two lines.
+const SEED ={ region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
 const WORLD1 = [
   { ...SEED, id: "w1-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
-  { ...SEED, id: "w1-school", name: "SEATTLE SCHOOL DIST", slot: "SCHOOL", system: "school" },
+  { ...SEED, id: "w1-school", name: "SEATTLE SCHOOL DIST", slot: "SCHOOL", system: "school-mon" },
   { ...SEED, id: "w1-panam", name: "PAN AM", slot: "PANAM", system: "airline" },
   { ...SEED, id: "w1-proto", name: "PROTOVISION", slot: "PROTOVISION", system: "protovision" },
   { ...SEED, id: "w1-pactel", name: "PACIFIC TELEPHONE", slot: "PACTEL", system: "pactel" },
@@ -355,7 +360,7 @@ test("a world entry absorbs its local dial-list twin — one row, number kept", 
   const entries = directoryEntries(worldCtx);
   // The school is one machine, so it gets exactly one line: the world entry's
   // name and slot, carrying the paper list's number.
-  const school = entries.filter((e) => e.system === "school" || e.name.startsWith("SEATTLE SCHOOL"));
+  const school = entries.filter((e) => e.system === "school-mon" || e.name.startsWith("SEATTLE SCHOOL"));
   assert.equal(school.length, 1, `expected one school row, got ${JSON.stringify(school)}`);
   assert.equal(school[0].name, "SEATTLE SCHOOL DIST");
   assert.equal(school[0].slot, "SCHOOL");
