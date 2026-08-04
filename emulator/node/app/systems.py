@@ -66,14 +66,20 @@ def load_programs(systems_dir: Path) -> dict[str, Program]:
         return out
     for manifest in sorted(systems_dir.glob("*/harness/manifest.json")):
         data = json.loads(manifest.read_text())
+        program_id = data["id"]
         timeout = data.get("timeout_s")
         if timeout is not None:
             timeout = min(float(timeout), 10.0)   # same cap as load_systems
-        out[data["id"]] = Program(
-            id=data["id"],
+        execs_raw = data.get("node", {}).get("execs", ())
+        if execs_raw and not isinstance(execs_raw, list):
+            raise ValueError(
+                f"{program_id} manifest declares execs, but it is not a list: {execs_raw!r}"
+            )
+        out[program_id] = Program(
+            id=program_id,
             binary=data["binary"],
             timeout_s=timeout,
-            execs=tuple(data.get("node", {}).get("execs", ())),
+            execs=tuple(execs_raw),
         )
     return out
 

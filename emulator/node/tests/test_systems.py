@@ -52,3 +52,14 @@ def test_validate_execs_rejects_a_missing_target(tmp_path):
                                   "node": {"execs": ["payroll"]}})
     with pytest.raises(ValueError, match="school-mon declares EXEC target 'payroll'"):
         validate_execs(load_programs(pack))
+
+
+def test_load_programs_rejects_execs_as_string(tmp_path):
+    """Manifest typo: execs is a bare string instead of a list.
+    Must reject this at load time with a message pointing at the manifest,
+    not at phantom one-letter programs."""
+    pack = _write_pack(tmp_path, {"id": "school-mon", "title": "M",
+                                  "language": "basic", "binary": "school-mon",
+                                  "node": {"execs": "school"}})
+    with pytest.raises(ValueError, match="school-mon.*execs.*not a list"):
+        load_programs(pack)
