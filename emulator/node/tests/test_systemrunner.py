@@ -1,6 +1,8 @@
 import asyncio
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -489,3 +491,77 @@ def test_captive_exec_paints_the_child_and_drops_on_return(tmp_path):
         # prompt frame is sent in between.
         assert "GOODBYE." in ws.receive_text()
         assert "NO CARRIER" in ws.receive_text()
+
+
+# -- captive-account resolution failure (Task 10 review finding 2) ----------
+
+_PENCIL_LOGIN_FRAME = (
+    "SYSTEM/1 school-mon INPUT\n"
+    "STATE 3\n"
+    "PHASE LOGIN\n"
+    "ACCT -\n"
+    "TRIES 0\n"
+    "INPUT PENCIL\n"
+    "END\n"
+)
+
+
+def _school_mon_with_mutated_catlog(tmp_path, mutate):
+    """A private copy of the real school-mon system with only `catlog.dat`
+    changed, so the golden fixtures' rule (every catalog entry resolves to a
+    real file) never has to be broken in the committed data to reach a path
+    that only exists because a real installation's catalog could go stale.
+
+    `shutil.copytree` rather than `_write_stub_system`'s from-scratch
+    manifest+script: this needs the real `login.bas` and its real `RUN`/EXEC
+    resolution logic under test, not a canned echo standing in for it.
+    """
+    dest = tmp_path / "school-mon"
+    shutil.copytree(SYS_DIR / "school-mon", dest)
+    catlog = dest / "data" / "catlog.dat"
+    lines = catlog.read_text().splitlines()
+    catlog.write_text("\n".join(mutate(lines)) + "\n")
+    return dest / "harness" / "bin" / "school-mon"
+
+
+def _run_pencil_login(binary) -> str:
+    out = subprocess.run([str(binary)], input=_PENCIL_LOGIN_FRAME.encode("ascii"),
+                         capture_output=True, timeout=5)
+    return out.stdout.decode("ascii", errors="replace")
+
+
+@needs_school_mon
+def test_a_captive_account_whose_program_is_marked_unrunnable_refuses_instead_of_execing(tmp_path):
+    """PENCIL's captive program is RECORDS, resolved through catlog.dat's
+    RECORDS.BAS row. Force that row's system-id column to the "-" sentinel
+    (unrunnable, same as RUNBOOK.DOC's) and the login must refuse out loud —
+    not silently print an EXEC line with nothing usable after it, which is
+    what login.bas:8680-8698 used to do before this fix.
+    """
+    def mutate(lines):
+        return [l[:27] + "-" if l.startswith("RECORDS.BAS") else l for l in lines]
+
+    binary = _school_mon_with_mutated_catlog(tmp_path, mutate)
+    text = _run_pencil_login(binary)
+    assert "PROGRAM UNAVAILABLE - CALL PLANT SERVICE" in text, text
+    assert "LINE DROP" in text, text
+    # The actual defect: an EXEC line with a bad target crashing the turn
+    # downstream. A test that only checked the message above would still
+    # pass if a stray EXEC frame slipped out alongside it — assert its
+    # absence explicitly.
+    assert not any(line.startswith("EXEC ") for line in text.splitlines()), text
+
+
+@needs_school_mon
+def test_a_captive_account_whose_program_has_no_catalog_row_refuses_instead_of_execing(tmp_path):
+    """Same refusal when RECORDS.BAS is missing from the catalog entirely,
+    not just marked unrunnable — the other of the two holes Finding 2
+    covered (no match at all vs. a match that resolves to nothing usable)."""
+    def mutate(lines):
+        return [l for l in lines if not l.startswith("RECORDS.BAS")]
+
+    binary = _school_mon_with_mutated_catlog(tmp_path, mutate)
+    text = _run_pencil_login(binary)
+    assert "PROGRAM UNAVAILABLE - CALL PLANT SERVICE" in text, text
+    assert "LINE DROP" in text, text
+    assert not any(line.startswith("EXEC ") for line in text.splitlines()), text
