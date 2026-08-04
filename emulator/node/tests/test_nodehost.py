@@ -171,6 +171,39 @@ def test_input_drives_the_program_and_its_display_comes_back():
     asyncio.run(flow())
 
 
+def test_an_exec_hands_the_terminal_over_within_one_call():
+    """The film's dial, on a node: type PENCIL and you are in the records program.
+
+    The monitor answers with `EXEC school` and DISPLAY 0, so everything the
+    caller sees on this turn comes from a different program than the one that
+    was holding the line a moment earlier. The node host used to run its own
+    turn loop with no EXEC branch at all, which swallowed the hand-off and left
+    the line hanging with no SELECT: ever arriving. This is that regression,
+    caught without standing up the whole federation.
+    """
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            await relay.send({"t": "FRAME", "call": 1, "data": "PENCIL"})
+            await relay.wait_frames(2)
+
+            text = relay.display_text()
+            assert "1 - STUDENT RECORDS" in text, text
+            prompt = next(f for f in relay.frames if f["t"] == "PROMPT")
+            assert prompt["data"] == "SELECT:", relay.frames
+            await host.stop()
+
+    asyncio.run(flow())
+
+
 def test_the_program_can_end_the_call_itself():
     """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE.
 
