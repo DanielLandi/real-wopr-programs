@@ -11,7 +11,7 @@ from app.execstack import Frame
 from app.execstack import decode as decode_stack
 from app.main import create_app
 from app.store import MemoryStore
-from app.systems import load_systems
+from app.systems import load_programs, load_systems
 from app.systemrunner import SystemRunner, SystemRunnerConfig
 from app.systemwire import SystemResponse
 
@@ -334,12 +334,24 @@ def test_ws_system_session_dials_pactel_and_verifies_line(system_client):
         assert "206 555 1234" in shown and "IDLE" in shown  # selected line persisted via STATE
 
 
-def test_a_store_with_no_number_is_not_in_the_dial_in_registry():
-    """school-db lives on the local bus; nothing should be able to dial it."""
+def test_a_store_and_a_records_program_are_not_in_the_dial_in_registry():
+    """school-db lives on the local bus; nothing should be able to dial it.
+
+    school joins it as of Task 7: its phone line moved to school-mon, so it
+    too is reached only by EXEC now, never a direct RING. load_systems is the
+    *dial-in* phone book and must drop both — but load_programs, which the
+    session stack actually consults to resolve an EXEC target, must keep
+    both. This is the invariant Task 5 (load_systems/load_programs split)
+    exists to protect, now pinned against the real pack manifests rather than
+    only the synthetic ones in test_systems.py.
+    """
     systems = load_systems(SYS_DIR)
+    programs = load_programs(SYS_DIR)
     assert "school-db" in {p.parent.name for p in SYS_DIR.glob("*/harness")}
     assert "school-db" not in systems
-    assert "school" in systems
+    assert "school" not in systems
+    assert "school-db" in programs
+    assert "school" in programs
 
 
 def test_two_sessions_do_not_share_a_store(system_client):

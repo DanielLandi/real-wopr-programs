@@ -108,32 +108,39 @@ def decl_for(node_id: str):
 
 
 def test_the_host_claims_the_lines_its_declaration_names():
+    # `school` used to be the pack's one multi-network node (pstn + bus) and
+    # served as this test's example; Task 7 narrowed it to `bus` only (its
+    # phone line moves to school-mon). `reference` (pstn + norad) is now the
+    # multi-network case, so the claims-plural story moves to it.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url})
             await host.start()
-            await relay.wait_registered(("pstn", "bus"))
-            assert relay.node_names == {"school"}
-            assert ("pstn", "(206) 555-0142") in relay.claims
-            assert ("bus", "SCHOOL") in relay.claims
+            await relay.wait_registered(("pstn", "norad"))
+            assert relay.node_names == {"reference"}
+            assert ("pstn", "(311) 555-0101") in relay.claims
+            assert ("norad", "REFERENCE") in relay.claims
             await host.stop()
 
     asyncio.run(flow())
 
 
 def test_a_ring_is_answered_and_the_program_greets():
+    # `school` no longer answers a phone line directly (Task 7 moved that to
+    # school-mon, next task), so this generic RING/ANSWER/greeting mechanic
+    # moves to `reference`, which is unaffected by the split.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url})
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(2)
 
             assert any(f["t"] == "ANSWER" for f in relay.frames)
-            assert "SEATTLE PUBLIC SCHOOL DISTRICT" in relay.display_text()
+            assert "REFERENCE SYSTEM READY" in relay.display_text()
             await host.stop()
 
     asyncio.run(flow())
@@ -194,7 +201,10 @@ def test_the_program_can_end_the_call_itself():
 
 def test_a_prompt_follows_the_display_frame():
     """A response carrying `prompt` sends a PROMPT frame after the FRAME that
-    delivers the display, so the input line can repaint the question."""
+    delivers the display, so the input line can repaint the question.
+
+    Uses a fully mocked runner, so which system answers is incidental; moved
+    off `school` to `reference` (Task 7 took school's phone line away)."""
     from app.systemwire import SystemResponse
 
     class PromptingRunner:
@@ -203,13 +213,13 @@ def test_a_prompt_follows_the_display_frame():
 
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url},
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url},
                             system_runner=PromptingRunner())
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(3)
 
             assert [f["t"] for f in relay.frames] == ["ANSWER", "FRAME", "PROMPT"]
@@ -362,16 +372,19 @@ def test_a_persistent_store_remembers_across_separate_calls(tmp_path):
 
 
 def test_an_ephemeral_node_writes_no_store_file(tmp_path):
-    """The school is not a store; nothing should be persisted for it."""
+    """A dial-in system with no declared state is not a store; nothing should
+    be persisted for it. Moved off `school` to `reference` (Task 7 took
+    school's phone line away) — the ephemeral-vs-persistent distinction this
+    test pins is generic, not specific to school."""
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": relay.url}, runtime_dir=tmp_path)
+            host = NodeHost(decl_for("reference"), PACK,
+                            {"pstn": relay.url, "norad": relay.url}, runtime_dir=tmp_path)
             assert host.store is None
             await host.start()
-            await relay.wait_registered(("pstn", "bus"))
+            await relay.wait_registered(("pstn", "norad"))
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(2)
             assert not (tmp_path / "state").exists()
             await host.stop()

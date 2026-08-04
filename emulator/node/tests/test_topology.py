@@ -24,22 +24,26 @@ def test_bus_is_private_and_has_no_baud():
     assert bus.baud is None
 
 
-def test_school_declares_itself_on_the_phone_network():
+def test_school_no_longer_declares_itself_on_the_phone_network():
+    """Task 7: school's phone line moved to school-mon (next task); school is
+    now bus-only, reached by EXEC rather than a direct RING."""
     school = load_nodes(PACK)["school"]
-    assert school.networks["pstn"].address == "(206) 555-0142"
-    assert school.networks["pstn"].protocol == "SYSTEM/1"
+    assert "pstn" not in school.networks
+    assert school.networks["bus"].address == "SCHOOL"
+    assert school.networks["bus"].protocol == "SYSTEM/1"
     assert school.source == "manifest"
 
 
 def test_every_dialable_system_keeps_the_number_its_manifest_already_had():
-    """The node block must not shift the phone book."""
+    """The node block must not shift the phone book — except school, which
+    Task 7 removed from it on purpose (see the test above)."""
     nodes = load_nodes(PACK)
     for sid, number in [
         ("airline", "(212) 555-0177"), ("pactel", "(311) 555-0100"),
         ("protovision", "(408) 555-0163"), ("reference", "(311) 555-0101"),
-        ("school", "(206) 555-0142"),
     ]:
         assert nodes[sid].networks["pstn"].address == number
+    assert "pstn" not in nodes["school"].networks
 
 
 def test_reference_is_also_on_the_norad_network():

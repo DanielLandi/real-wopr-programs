@@ -1,9 +1,11 @@
 10 REM SEATTLE PUBLIC SCHOOL DISTRICT - SYSTEM/1 school
 20 REM Menu-driven administrative datanet in plain line-numbered BASIC,
 30 REM run by the Bywater BASIC interpreter. Stateless per invocation:
-40 REM the session (auth flag, password tries, menu step, work-in-
-50 REM progress grade entry, roster-listing cursor) rides the opaque
-60 REM STATE block, echoed back each turn per docs/systems.md. No wall
+40 REM the session (menu step, work-in-progress grade entry, roster-
+50 REM listing cursor, a GRD cache) rides the opaque STATE block, echoed
+60 REM back each turn per docs/systems.md. Authentication is not this
+65 REM program's job: the monitor (school-mon) checks it before EXEC'ing
+67 REM here, so there is no password state to carry. No wall
 70 REM clock and no rng, so same request bytes give the same response.
 72 REM The grades themselves are NOT here: they live in school-db, on the
 74 REM local bus. This program owns the roster and the schedule and asks
@@ -285,7 +287,7 @@
 5060 PRINT "LINE UP"
 5070 PRINT "END"
 5080 END
-5200 REM option 4: log off and drop the line
+5200 REM option 4: log off and return to whatever EXEC'd us
 5230 ST$ = "MENU"
 5240 WP$ = "-"
 5250 WC$ = "-"
