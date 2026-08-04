@@ -17,8 +17,11 @@ REPLY_STATUSES = {"OK", "FAIL", "TIMEOUT"}
 MAX_CALL_DEPTH = 4
 
 # How deep the host will stack programs that hand each other the terminal.
-# Same bound as MAX_CALL_DEPTH, for the same reason: a program that keeps
-# handing over must not be able to keep the host in one turn forever.
+# Not the same kind of bound as MAX_CALL_DEPTH above: a chained CALL is bounded
+# within one program's turn, but this stack accumulates across the whole
+# session — a caller sits on it from its EXEC until the peer (or something the
+# peer itself EXECs) returns. Left unbounded, a chain of monitors handing off
+# to one another could grow the return stack for as long as the call lasts.
 MAX_EXEC_DEPTH = 4
 
 

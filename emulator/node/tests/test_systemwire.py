@@ -240,3 +240,21 @@ def test_line_return_may_not_accompany_prompt():
     )
     with pytest.raises(SystemWireError, match="PROMPT requires LINE UP"):
         parse_system_response(raw, "school")
+
+
+def test_line_return_may_not_accompany_call():
+    raw = _resp(
+        "SYSTEM/1 school OK", "STATE 0", "DISPLAY 0",
+        "CALL school-db 1", "LOOKUP 1", "LINE RETURN", "END",
+    )
+    with pytest.raises(SystemWireError, match="CALL requires LINE UP"):
+        parse_system_response(raw, "school")
+
+
+def test_line_return_may_not_accompany_exec():
+    raw = _resp(
+        "SYSTEM/1 school-mon OK", "STATE 0", "DISPLAY 0",
+        "EXEC school", "LINE RETURN", "END",
+    )
+    with pytest.raises(SystemWireError, match="EXEC requires LINE UP"):
+        parse_system_response(raw, "school-mon")
