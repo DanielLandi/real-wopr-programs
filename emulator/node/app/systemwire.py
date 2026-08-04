@@ -9,12 +9,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 PROTO_SYSTEM = "SYSTEM/1"
-LINE_STATES = {"UP", "DROP"}
+LINE_STATES = {"UP", "DROP", "RETURN"}
 REPLY_STATUSES = {"OK", "FAIL", "TIMEOUT"}
 
 # How many peer calls one user turn may chain before the host gives up. Bounds a
 # program that keeps asking; cycles are caught earlier, at topology validation.
 MAX_CALL_DEPTH = 4
+
+# How deep the host will stack programs that hand each other the terminal.
+# Same bound as MAX_CALL_DEPTH, for the same reason: a program that keeps
+# handing over must not be able to keep the host in one turn forever.
+MAX_EXEC_DEPTH = 4
 
 
 class SystemWireError(Exception):
@@ -45,9 +50,10 @@ class SystemResponse:
     system_id: str
     state: str      # opaque STATE block, newline-joined (no trailing newline)
     display: str    # human-facing teletype text
-    line: str       # UP | DROP
+    line: str       # UP | DROP | RETURN
     call: Call | None = None
     prompt: str | None = None   # what the system is asking, for the input line
+    exec_peer: str | None = None   # EXEC <peer>: hand the terminal over
 
 
 def build_system_request(system_id: str, command: str, state: str | None,
@@ -115,13 +121,30 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         call = Call(peer=parts[1], payload="\n".join(take() for _ in range(int(parts[2]))))
         peeked = take()
 
+    # Optional EXEC block: the program is handing the terminal to a peer. Sits
+    # in the same slot as CALL and is mutually exclusive with it — one turn
+    # hands over once.
+    exec_peer: str | None = None
+    if peeked.startswith("EXEC "):
+        if call is not None:
+            raise SystemWireError("EXEC may not accompany CALL")
+        parts = peeked.split()
+        if len(parts) != 2 or not parts[1]:
+            raise SystemWireError("bad EXEC header")
+        exec_peer = parts[1]
+        peeked = take()
+
     # Optional PROMPT: what the system is asking, delivered on the input line
     # rather than in the transcript. A continuation (CALL) is not ready for
-    # input, and a dropped line asks nothing — both are rejected.
+    # input, and a dropped line asks nothing — both are rejected. A program
+    # that hands over the terminal (EXEC) supplies no prompt of its own; the
+    # peer it hands to will.
     prompt: str | None = None
     if peeked.startswith("PROMPT "):
         if call is not None:
             raise SystemWireError("PROMPT may not accompany CALL")
+        if exec_peer is not None:
+            raise SystemWireError("PROMPT may not accompany EXEC")
         prompt = peeked[len("PROMPT "):]
         if not prompt.strip():
             raise SystemWireError("empty PROMPT")
@@ -137,6 +160,11 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         # line cannot be going away underneath it.
         raise SystemWireError("CALL requires LINE UP")
 
+    if exec_peer is not None and line != "UP":
+        # The caller is going to be resumed when the exec'd program returns,
+        # so the line cannot be going away underneath it.
+        raise SystemWireError("EXEC requires LINE UP")
+
     if prompt is not None and line != "UP":
         raise SystemWireError("PROMPT requires LINE UP")
 
@@ -144,4 +172,4 @@ def parse_system_response(raw: str, system_id: str) -> SystemResponse:
         raise SystemWireError("missing END")
 
     return SystemResponse(system_id=system_id, state=state, display=display,
-                          line=line, call=call, prompt=prompt)
+                          line=line, call=call, prompt=prompt, exec_peer=exec_peer)
