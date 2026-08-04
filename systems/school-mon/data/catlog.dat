@@ -1,0 +1,10 @@
+LOGIN.BAS    [1,2]   018 1 -
+RECORDS.BAS  [20,10] 022 0 school
+ACCT.DAT     [1,1]   001 1 -
+CATLOG.DAT   [1,2]   001 0 -
+STUDNT.DAT   [20,10] 013 0 -
+COURSE.DAT   [20,10] 002 0 -
+SCHED.DAT    [20,10] 078 0 -
+RUNBOOK.DOC  [1,2]   004 0 -
+ADANOT.DOC   [1,2]   003 0 -
+NOTES.TXT    [1,1]   002 1 -

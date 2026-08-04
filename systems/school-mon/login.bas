@@ -12,7 +12,13 @@
 110 DIM AV(40)
 115 DIM AC(40)
 120 DIM AG$(40)
+121 DIM CN$(15)
+122 DIM CO$(15)
+123 DIM CB(15)
+124 DIM CV(15)
 125 GOSUB 8500
+126 DIM CD$(15)
+127 GOSUB 8600
 130 REM ---- parse the SYSTEM/1 request from stdin ----
 135 LINE INPUT H$
 140 IF LEFT$(H$, 20) <> "SYSTEM/1 school-mon " THEN GOTO 7000
@@ -118,19 +124,131 @@
 3819 END
 3820 PH$ = "READY"
 3822 GOTO 3410
-4000 REM STUB: PHASE READY's command surface is Task 9's (docs/systems.md
-4002 REM 2.6's `Ready`). Until it lands, accept the line and say so rather
-4004 REM than fall off the end of the program into a bwBASIC "line number
-4006 REM not found" abort — the way a half-finished 1983 system really
-4008 REM answered a command it hadn't wired up yet.
-4010 PRINT "SYSTEM/1 school-mon OK"
-4012 GOSUB 7500
-4014 PRINT "DISPLAY 1"
-4016 PRINT "?COMMAND NOT IMPLEMENTED"
-4018 PRINT "PROMPT Ready"
-4020 PRINT "LINE UP"
-4022 PRINT "END"
-4024 END
+4000 REM ---- Ready: the monitor's own command surface ----
+4001 REM MV = privilege of the PPN this session logged in as. Derived,
+4002 REM never taken from STATE: STATE comes back from the caller and
+4003 REM must not be able to grant authority it was not given.
+4004 GOSUB 8900
+4005 CM$ = IN$
+4010 SP = INSTR(CM$, " ")
+4015 AR$ = ""
+4020 IF SP = 0 THEN GOTO 4035
+4025 AR$ = MID$(CM$, SP + 1)
+4030 CM$ = LEFT$(CM$, SP - 1)
+4035 IF CM$ = "CAT" THEN GOTO 4100
+4040 IF CM$ = "TYPE" THEN GOTO 4300
+4045 IF CM$ = "RUN" THEN GOTO 4500
+4050 IF CM$ = "BYE" THEN GOTO 4700
+4055 REM anything else
+4060 GOSUB 7800
+4065 PRINT "DISPLAY 1"
+4070 PRINT "?Illegal command"
+4075 GOSUB 7900
+4080 END
+4100 REM ---- CAT: the disk, as far as this account may see it ----
+4105 NL = 0
+4110 FOR J = 1 TO NC
+4115 IF CV(J) <= MV THEN NL = NL + 1
+4120 NEXT J
+4125 GOSUB 7800
+4130 PRINT "DISPLAY " + MID$(STR$(NL + 2), 2)
+4135 PRINT " NAME         PPN     SIZE"
+4140 FOR J = 1 TO NC
+4145 IF CV(J) > MV THEN GOTO 4165
+4150 L8$ = CN$(J) + SPACE$(13 - LEN(CN$(J)))
+4155 L8$ = L8$ + CO$(J) + SPACE$(8 - LEN(CO$(J)))
+4157 B8$ = MID$(STR$(CB(J)), 2)
+4160 PRINT L8$ + SPACE$(4 - LEN(B8$)) + B8$
+4165 NEXT J
+4170 PRINT "TOTAL " + MID$(STR$(NL), 2) + " FILES"
+4175 GOSUB 7900
+4180 END
+4300 REM ---- TYPE <file> ----
+4305 GOSUB 8800
+4310 IF CF = 0 THEN GOTO 4600
+4315 IF CV(CF) > MV THEN GOTO 4640
+4317 IF CD$(CF) = "-" THEN GOTO 4600
+4320 REM two passes: bwBASIC cannot rewind, so count, close, reopen, print
+4325 NL = 0
+4330 OPEN CD$(CF) FOR INPUT AS #2
+4335 IF EOF(2) THEN GOTO 4350
+4340 LINE INPUT #2, L9$
+4345 NL = NL + 1
+4347 GOTO 4335
+4350 CLOSE #2
+4355 GOSUB 7800
+4360 PRINT "DISPLAY " + MID$(STR$(NL), 2)
+4365 OPEN CD$(CF) FOR INPUT AS #2
+4370 IF EOF(2) THEN GOTO 4385
+4375 LINE INPUT #2, L9$
+4380 PRINT L9$
+4382 GOTO 4370
+4385 CLOSE #2
+4390 GOSUB 7900
+4395 END
+4600 REM ---- can't find file or account ----
+4605 GOSUB 7800
+4610 PRINT "DISPLAY 1"
+4615 PRINT "?Can't find file or account"
+4620 GOSUB 7900
+4625 END
+4640 REM ---- protection violation ----
+4645 GOSUB 7800
+4650 PRINT "DISPLAY 1"
+4655 PRINT "?Protection violation"
+4660 GOSUB 7900
+4665 END
+4700 REM ---- BYE: the monitor really is ending the call, not returning ----
+4705 GOSUB 7800
+4710 PRINT "DISPLAY 1"
+4715 PRINT "GOODBYE."
+4720 PRINT "LINE DROP"
+4725 PRINT "END"
+4730 END
+7800 REM ---- response header + STATE ----
+7810 PRINT "SYSTEM/1 school-mon OK"
+7820 GOSUB 7500
+7830 RETURN
+7900 REM ---- ordinary Ready tail ----
+7910 PRINT "PROMPT Ready"
+7920 PRINT "LINE UP"
+7930 PRINT "END"
+7940 RETURN
+8600 REM ---- load CATLOG.DAT ----
+8605 NC = 0
+8610 OPEN "data/catlog.dat" FOR INPUT AS #1
+8615 IF EOF(1) THEN GOTO 8670
+8620 LINE INPUT #1, L9$
+8625 NC = NC + 1
+8627 T9$ = LEFT$(L9$, 12)
+8629 GOSUB 9000
+8631 CN$(NC) = T9$
+8633 T9$ = MID$(L9$, 14, 7)
+8635 GOSUB 9000
+8637 CO$(NC) = T9$
+8639 CB(NC) = VAL(MID$(L9$, 22, 3))
+8641 CV(NC) = VAL(MID$(L9$, 26, 1))
+8643 CD$(NC) = "-"
+8660 IF CN$(NC) = "RUNBOOK.DOC" THEN CD$(NC) = "data/runbook.doc"
+8662 IF CN$(NC) = "ADANOT.DOC" THEN CD$(NC) = "data/adanot.doc"
+8664 IF CN$(NC) = "NOTES.TXT" THEN CD$(NC) = "data/notes.txt"
+8666 IF CN$(NC) = "CATLOG.DAT" THEN CD$(NC) = "data/catlog.dat"
+8668 IF CN$(NC) = "ACCT.DAT" THEN CD$(NC) = "data/acct.dat"
+8669 GOTO 8615
+8670 CLOSE #1
+8675 RETURN
+8800 REM ---- find AR$ in the catalog; CF = index or 0 ----
+8810 CF = 0
+8820 FOR J = 1 TO NC
+8830 IF CN$(J) = AR$ THEN CF = J
+8840 NEXT J
+8850 RETURN
+8900 REM ---- MV = privilege of account AK$, 0 if unknown ----
+8905 MV = 0
+8910 FOR J = 1 TO NA
+8915 IF AP$(J) = AK$ THEN MV = AV(J)
+8920 NEXT J
+8925 RETURN
 8950 REM ---- CP = captive flag of account AK$, 0 if unknown ----
 8960 CP = 0
 8970 FOR J = 1 TO NA
