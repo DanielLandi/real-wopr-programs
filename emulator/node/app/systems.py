@@ -71,7 +71,10 @@ def load_programs(systems_dir: Path) -> dict[str, Program]:
         if timeout is not None:
             timeout = min(float(timeout), 10.0)   # same cap as load_systems
         execs_raw = data.get("node", {}).get("execs", ())
-        if execs_raw and not isinstance(execs_raw, list):
+        # Every non-list, not merely the truthy ones. `"execs": null` used to
+        # short-circuit past this guard and die inside tuple() with a TypeError
+        # naming neither the manifest nor the field.
+        if not isinstance(execs_raw, (list, tuple)):
             raise ValueError(
                 f"{program_id} manifest declares execs, but it is not a list: {execs_raw!r}"
             )

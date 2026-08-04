@@ -12,12 +12,12 @@
 110 DIM AV(40)
 115 DIM AC(40)
 120 DIM AG$(40)
-121 DIM CN$(15)
-122 DIM CO$(15)
-123 DIM CB(15)
-124 DIM CV(15)
+121 DIM CN$(40)
+122 DIM CO$(40)
+123 DIM CB(40)
+124 DIM CV(40)
 125 GOSUB 8500
-126 DIM CD$(15), CS$(15)
+126 DIM CD$(40), CS$(40)
 127 GOSUB 8600
 128 GOSUB 8680
 130 REM ---- parse the SYSTEM/1 request from stdin ----
@@ -140,11 +140,12 @@
 3820 PH$ = "READY"
 3822 GOTO 3410
 4000 REM ---- Ready: the monitor's own command surface ----
-4001 REM MV = privilege of the PPN this session logged in as. Derived,
-4002 REM never taken from STATE: STATE comes back from the caller and
-4003 REM must not be able to grant authority it was not given.
-4004 GOSUB 8900
-4005 CM$ = IN$
+4001 REM MV = privilege of the account this session logged in as. The
+4002 REM PPN does come out of STATE (6020); the privilege never does -
+4003 REM 8900 looks it up in ACCT.DAT, so STATE can name an account but
+4004 REM cannot carry what that account may do.
+4005 GOSUB 8900
+4006 CM$ = IN$
 4010 SP = INSTR(CM$, " ")
 4015 AR$ = ""
 4020 IF SP = 0 THEN GOTO 4035

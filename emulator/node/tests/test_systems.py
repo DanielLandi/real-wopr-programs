@@ -63,3 +63,18 @@ def test_load_programs_rejects_execs_as_string(tmp_path):
                                   "node": {"execs": "school"}})
     with pytest.raises(ValueError, match="school-mon.*execs.*not a list"):
         load_programs(pack)
+
+
+@pytest.mark.parametrize("bad", [None, "", 0, {}])
+def test_load_programs_rejects_a_falsy_non_list_execs(tmp_path, bad):
+    """`"execs": null` is the same manifest typo wearing a falsy value.
+
+    The guard used to read `if execs_raw and not isinstance(...)`, so every one
+    of these slipped past it and reached `tuple(...)` — a TypeError naming
+    neither the manifest nor the field, or (for `{}`) a silent empty tuple.
+    """
+    pack = _write_pack(tmp_path, {"id": "school-mon", "title": "M",
+                                  "language": "basic", "binary": "school-mon",
+                                  "node": {"execs": bad}})
+    with pytest.raises(ValueError, match="school-mon.*execs.*not a list"):
+        load_programs(pack)
