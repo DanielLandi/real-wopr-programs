@@ -186,6 +186,16 @@
 4385 CLOSE #2
 4390 GOSUB 7900
 4395 END
+4500 REM STUB: RUN is Task 10's (docs/systems.md 2.6's `Ready`). Until it
+4502 REM lands, accept the line and say so rather than fall off the end of
+4504 REM the program into a bwBASIC "line number not found" abort — the way
+4506 REM a half-finished 1983 system really answered a command it hadn't
+4508 REM wired up yet.
+4510 GOSUB 7800
+4512 PRINT "DISPLAY 1"
+4514 PRINT "?COMMAND NOT IMPLEMENTED"
+4516 GOSUB 7900
+4518 END
 4600 REM ---- can't find file or account ----
 4605 GOSUB 7800
 4610 PRINT "DISPLAY 1"
