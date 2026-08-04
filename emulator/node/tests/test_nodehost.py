@@ -147,9 +147,13 @@ def test_a_ring_is_answered_and_the_program_greets():
 
 
 def test_input_drives_the_program_and_its_display_comes_back():
+    # `school` no longer answers a phone line directly (Task 7 moved that to
+    # school-mon), so the password reprompt this test drives moves with it —
+    # login.bas holds the same PENCIL/wrong-password/reprompt logic
+    # records.bas used to.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
             await host.start()
             await relay.wait_registered()
 
@@ -158,7 +162,7 @@ def test_input_drives_the_program_and_its_display_comes_back():
             await relay.wait_frames(2)
             relay.frames.clear()
 
-            # The school's password is PENCIL; a wrong one reprompts.
+            # school-mon's password is PENCIL; a wrong one reprompts.
             await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
             await relay.wait_frames(1)
             assert "INVALID PASSWORD" in relay.display_text()
@@ -168,10 +172,13 @@ def test_input_drives_the_program_and_its_display_comes_back():
 
 
 def test_the_program_can_end_the_call_itself():
-    """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE."""
+    """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE.
+
+    Moved to school-mon with the phone line (Task 7/8 split) — the
+    three-strikes lockout is login.bas's, not records.bas's."""
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
             await host.start()
             await relay.wait_registered()
 

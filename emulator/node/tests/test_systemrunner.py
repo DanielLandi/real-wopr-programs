@@ -20,6 +20,7 @@ SYS_DIR = REPO / "systems"
 REF_BIN = SYS_DIR / "reference" / "harness" / "bin" / "reference"
 AIRLINE_BIN = SYS_DIR / "airline" / "harness" / "bin" / "airline"
 SCHOOL_BIN = SYS_DIR / "school" / "harness" / "bin" / "school"
+SCHOOL_MON_BIN = SYS_DIR / "school-mon" / "harness" / "bin" / "school-mon"
 PROTOVISION_BIN = SYS_DIR / "protovision" / "harness" / "bin" / "protovision"
 PACTEL_BIN = SYS_DIR / "pactel" / "harness" / "bin" / "pactel"
 
@@ -31,6 +32,10 @@ needs_airline = pytest.mark.skipif(
 )
 needs_school = pytest.mark.skipif(
     not SCHOOL_BIN.exists(), reason="school not built (run tools/import-programs.sh)"
+)
+needs_school_mon = pytest.mark.skipif(
+    not (SCHOOL_BIN.exists() and SCHOOL_MON_BIN.exists()),
+    reason="school-mon not built (run tools/import-programs.sh)"
 )
 needs_protovision = pytest.mark.skipif(
     not PROTOVISION_BIN.exists(), reason="protovision not built (run tools/import-programs.sh)"
@@ -173,23 +178,25 @@ def test_ws_system_session_dials_airline_and_books_paris(system_client):
         assert m is not None, end
 
 
-@needs_school
+@needs_school_mon
 def test_ws_system_session_dials_school_and_changes_grade(system_client):
     # The home terminal's "SEATTLE SCHOOL" dial (Rung 4) — same WS path as the
-    # airline, bound to system: "school". Drives the S2 grade change F->A
-    # through the real bwBASIC program built in Task 1.
-    r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "school"})
+    # airline, but now the caller lands on the monitor (school-mon), not the
+    # records program directly (Task 7/8 split). Dialing in, typing PENCIL and
+    # landing on the menu crosses an EXEC hand-off (school-mon -> school) that
+    # the caller must never see: one INPUT turn spans two program invocations,
+    # collapsed into the single output/prompt pair below (session_turn.py).
+    r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "school-mon"})
     assert r.status_code == 201
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        # school.bas now speaks its asking-lines as a PROMPT frame, separate
-        # from the DISPLAY frame that precedes it (Task 5) — a non-empty
-        # DISPLAY yields an "output" frame, and any PROMPT yields its own
-        # "prompt" frame (app/main.py). DISPLAY 0 turns emit only the prompt.
-        ws.receive_text()                                     # display: SEATTLE banner
+        # A non-empty DISPLAY yields an "output" frame, and any PROMPT yields
+        # its own "prompt" frame (app/main.py). DISPLAY 0 turns emit only the
+        # prompt.
+        ws.receive_text()                                     # display: monitor banner
         assert "PASSWORD:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
-        ws.receive_text()                                     # display: welcome + menu
+        ws.receive_text()                                     # display: welcome + menu (EXEC'd into school)
         assert "SELECT:" in ws.receive_text()                  # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"2","eom":true}')
         assert "STUDENT NAME:" in ws.receive_text()            # DISPLAY 0: prompt only
@@ -354,11 +361,16 @@ def test_a_store_and_a_records_program_are_not_in_the_dial_in_registry():
     assert "school" in programs
 
 
+@needs_school_mon
 def test_two_sessions_do_not_share_a_store(system_client):
     """The monolith serves strangers on one box. If it shared a store, the
     first visitor to change David's biology grade would change it for everyone
     who dialled in afterwards — and the film's moment only works if each
-    visitor finds the F themselves."""
+    visitor finds the F themselves.
+
+    Now dials school-mon (Task 7/8 split): each visitor must independently
+    type PENCIL and get EXEC'd into their own school session — two session
+    stacks, not two record stores directly."""
     def grade_for(session_json):
         # See test_ws_system_session_dials_school_and_changes_grade: a
         # non-empty DISPLAY and any PROMPT are now separate frames, so a
@@ -377,7 +389,7 @@ def test_two_sessions_do_not_share_a_store(system_client):
             return ws.receive_text()                              # display: STUDENT: ... record
 
     first = system_client.post("/api/session",
-                               json={"surface": "home-terminal", "system": "school"}).json()
+                               json={"surface": "home-terminal", "system": "school-mon"}).json()
     sid, token = first["session_id"], first["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         ws.receive_text()                                        # display: banner
@@ -396,7 +408,7 @@ def test_two_sessions_do_not_share_a_store(system_client):
 
     # A different visitor entirely.
     second = system_client.post("/api/session",
-                                json={"surface": "home-terminal", "system": "school"}).json()
+                                json={"surface": "home-terminal", "system": "school-mon"}).json()
     assert re.search(r"BIOLOGY 2\s+F", grade_for(second)), "the store leaked between sessions"
 
 

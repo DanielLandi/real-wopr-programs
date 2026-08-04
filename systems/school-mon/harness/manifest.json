@@ -1,0 +1,15 @@
+{
+  "id": "school-mon",
+  "title": "SEATTLE SCHOOL DISTRICT",
+  "language": "basic",
+  "binary": "school-mon",
+  "number": "(206) 555-0142",
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": { "address": "(206) 555-0142", "protocol": "SYSTEM/1" },
+      "bus": { "address": "SCHOOL-MON", "protocol": "SYSTEM/1" }
+    },
+    "execs": ["school"]
+  }
+}
