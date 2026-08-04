@@ -98,8 +98,9 @@
 3600 REM three strikes
 3605 PRINT "SYSTEM/1 school-mon OK"
 3610 GOSUB 7500
-3615 PRINT "DISPLAY 1"
-3620 PRINT "ACCESS DENIED. CONTACT DISTRICT DATA PROCESSING."
+3615 PRINT "DISPLAY 2"
+3617 PRINT "INVALID PASSWORD"
+3620 PRINT "ACCESS DENIED - TERMINAL LOCKED OUT"
 3625 PRINT "LINE DROP"
 3630 PRINT "END"
 3635 END
@@ -117,6 +118,19 @@
 3819 END
 3820 PH$ = "READY"
 3822 GOTO 3410
+4000 REM STUB: PHASE READY's command surface is Task 9's (docs/systems.md
+4002 REM 2.6's `Ready`). Until it lands, accept the line and say so rather
+4004 REM than fall off the end of the program into a bwBASIC "line number
+4006 REM not found" abort — the way a half-finished 1983 system really
+4008 REM answered a command it hadn't wired up yet.
+4010 PRINT "SYSTEM/1 school-mon OK"
+4012 GOSUB 7500
+4014 PRINT "DISPLAY 1"
+4016 PRINT "?COMMAND NOT IMPLEMENTED"
+4018 PRINT "PROMPT Ready"
+4020 PRINT "LINE UP"
+4022 PRINT "END"
+4024 END
 8950 REM ---- CP = captive flag of account AK$, 0 if unknown ----
 8960 CP = 0
 8970 FOR J = 1 TO NA
