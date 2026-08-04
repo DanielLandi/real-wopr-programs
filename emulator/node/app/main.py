@@ -20,17 +20,18 @@ from pydantic import BaseModel, Field
 from .attachment import FRONT_DOOR
 from .budget import DailyBudget, MeteredJoshua
 from .config import load_settings
+from .execstack import decode as decode_stack, encode as encode_stack
 from .games import load_catalog
 from .gtwhub import GtwRoomHub
 from .joshua import ClaudeJoshua, Joshua, LispJoshua, ScriptedJoshua
-from .localcall import run_resolving_calls
 from .operators import parse_roster
 from .rooms import RoomLocks
 from .router import Router
 from .runner import CoreRunner, RunnerConfig
+from .session_turn import run_session_turn
 from .store import make_store, normalize_room_code
 from .systemrunner import SystemBusy, SystemFault, SystemRunner, SystemRunnerConfig, SystemTimeout
-from .systems import load_systems
+from .systems import load_programs, load_systems, validate_execs
 from .tokens import sign_session, verify_session
 
 log = logging.getLogger("wopr.bridge")
@@ -76,6 +77,18 @@ def _session_store_dir(settings, session_id: str):
     So here, and only here, a store is scoped to the session that dialled it.
     """
     return settings.systems_dir.parent / ".wopr" / "sessions" / str(session_id)
+
+
+def _timeout_for(programs):
+    """Per-frame timeout for run_session_turn: each program on the stack keeps
+    its own manifest timeout, including one an EXEC pushes mid-turn."""
+    return lambda program: programs[program].timeout_s if program in programs else None
+
+
+def _execs_for(programs):
+    """Per-frame allow-list for run_session_turn: what a program may EXEC,
+    straight from its manifest (validated once at startup, not per turn)."""
+    return lambda program: programs[program].execs if program in programs else ()
 
 
 # Processors a session may ask for by name. `scripted` is deliberately absent:
@@ -150,6 +163,14 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     default_engine=default_engine)
     gtw_hub = GtwRoomHub(store, runner, catalog, locks)
     systems = load_systems(settings.systems_dir)
+    # The dial-in phone book (systems) and the full program registry (programs)
+    # answer different questions (systems.py docstring): a records program
+    # reached only by EXEC has no number and so is invisible to load_systems,
+    # but the stack still needs its timeout and its declared EXEC targets.
+    # validate_execs runs once here, at process start, so a manifest typo is a
+    # boot failure and never a caller's turn.
+    programs = load_programs(settings.systems_dir)
+    validate_execs(programs)
     system_runner = SystemRunner(
         SystemRunnerConfig(systems_dir=settings.systems_dir, timeout_s=settings.system_timeout_s),
         systems,
@@ -337,19 +358,20 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         # film's LOGON: prompt as soon as the line is up. A system-bound
         # session instead dials straight into that system's own greeting.
         if session.system_id is not None:
-            system_timeout = systems[session.system_id].timeout_s
             try:
-                resp = await run_resolving_calls(
-                    system_runner, session.system_id, "CONNECT", None, None,
+                resp = await run_session_turn(
+                    system_runner, decode_stack(None, session.system_id),
+                    "CONNECT", None,
                     runtime_dir=_session_store_dir(settings, session_id),
-                    timeout_s=system_timeout)
+                    timeout_for=_timeout_for(programs),
+                    execs_for=_execs_for(programs))
             except (SystemFault, SystemTimeout, SystemBusy) as exc:
                 log.warning("system %s CONNECT failed, dropping line: %r",
                             session.system_id, exc)
                 await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                 await ws.close()
                 return
-            await store.set_system_state(session_id, resp.state)
+            await store.set_system_state(session_id, encode_stack(resp.frames))
             # Event-log parity with the router path: a system session must be
             # visible in event history, not a silent stream of DISPLAY frames.
             await store.log_event(session_id, "route", "system",
@@ -415,18 +437,21 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     # (router.handle) — system turns are part of the history.
                     await store.log_event(session_id, "input", "user", {"text": message})
                     try:
-                        resp = await run_resolving_calls(
-                            system_runner, session.system_id, "INPUT",
-                            await store.get_system_state(session_id), message,
+                        resp = await run_session_turn(
+                            system_runner,
+                            decode_stack(await store.get_system_state(session_id),
+                                         session.system_id),
+                            "INPUT", message,
                             runtime_dir=_session_store_dir(settings, session_id),
-                            timeout_s=systems[session.system_id].timeout_s)
+                            timeout_for=_timeout_for(programs),
+                            execs_for=_execs_for(programs))
                     except (SystemFault, SystemTimeout, SystemBusy) as exc:
                         log.warning("system %s INPUT failed, dropping line: %r",
                                     session.system_id, exc)
                         await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                         await ws.close()
                         return
-                    await store.set_system_state(session_id, resp.state)
+                    await store.set_system_state(session_id, encode_stack(resp.frames))
                     await store.log_event(session_id, "route", "system",
                                           {"input": message, "route": "system",
                                            "system": session.system_id,

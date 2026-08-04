@@ -108,41 +108,52 @@ def decl_for(node_id: str):
 
 
 def test_the_host_claims_the_lines_its_declaration_names():
+    # `school` used to be the pack's one multi-network node (pstn + bus) and
+    # served as this test's example; Task 7 narrowed it to `bus` only (its
+    # phone line moves to school-mon). `reference` (pstn + norad) is now the
+    # multi-network case, so the claims-plural story moves to it.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url})
             await host.start()
-            await relay.wait_registered(("pstn", "bus"))
-            assert relay.node_names == {"school"}
-            assert ("pstn", "(206) 555-0142") in relay.claims
-            assert ("bus", "SCHOOL") in relay.claims
+            await relay.wait_registered(("pstn", "norad"))
+            assert relay.node_names == {"reference"}
+            assert ("pstn", "(311) 555-0101") in relay.claims
+            assert ("norad", "REFERENCE") in relay.claims
             await host.stop()
 
     asyncio.run(flow())
 
 
 def test_a_ring_is_answered_and_the_program_greets():
+    # `school` no longer answers a phone line directly (Task 7 moved that to
+    # school-mon, next task), so this generic RING/ANSWER/greeting mechanic
+    # moves to `reference`, which is unaffected by the split.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url})
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(2)
 
             assert any(f["t"] == "ANSWER" for f in relay.frames)
-            assert "SEATTLE PUBLIC SCHOOL DISTRICT" in relay.display_text()
+            assert "REFERENCE SYSTEM READY" in relay.display_text()
             await host.stop()
 
     asyncio.run(flow())
 
 
 def test_input_drives_the_program_and_its_display_comes_back():
+    # `school` no longer answers a phone line directly (Task 7 moved that to
+    # school-mon), so the password reprompt this test drives moves with it —
+    # login.bas holds the same PENCIL/wrong-password/reprompt logic
+    # records.bas used to.
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
             await host.start()
             await relay.wait_registered()
 
@@ -151,7 +162,7 @@ def test_input_drives_the_program_and_its_display_comes_back():
             await relay.wait_frames(2)
             relay.frames.clear()
 
-            # The school's password is PENCIL; a wrong one reprompts.
+            # school-mon's password is PENCIL; a wrong one reprompts.
             await relay.send({"t": "FRAME", "call": 1, "data": "WRONG"})
             await relay.wait_frames(1)
             assert "INVALID PASSWORD" in relay.display_text()
@@ -160,11 +171,47 @@ def test_input_drives_the_program_and_its_display_comes_back():
     asyncio.run(flow())
 
 
-def test_the_program_can_end_the_call_itself():
-    """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE."""
+def test_an_exec_hands_the_terminal_over_within_one_call():
+    """The film's dial, on a node: type PENCIL and you are in the records program.
+
+    The monitor answers with `EXEC school` and DISPLAY 0, so everything the
+    caller sees on this turn comes from a different program than the one that
+    was holding the line a moment earlier. The node host used to run its own
+    turn loop with no EXEC branch at all, which swallowed the hand-off and left
+    the line hanging with no SELECT: ever arriving. This is that regression,
+    caught without standing up the whole federation.
+    """
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url})
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
+            await host.start()
+            await relay.wait_registered()
+
+            await relay.send({"t": "RING", "call": 1, "from": "console",
+                              "network": "pstn", "address": "2065550142"})
+            await relay.wait_frames(2)
+            relay.frames.clear()
+
+            await relay.send({"t": "FRAME", "call": 1, "data": "PENCIL"})
+            await relay.wait_frames(2)
+
+            text = relay.display_text()
+            assert "1 - STUDENT RECORDS" in text, text
+            prompt = next(f for f in relay.frames if f["t"] == "PROMPT")
+            assert prompt["data"] == "SELECT:", relay.frames
+            await host.stop()
+
+    asyncio.run(flow())
+
+
+def test_the_program_can_end_the_call_itself():
+    """Three wrong passwords locks the terminal: LINE DROP becomes a CLOSE.
+
+    Moved to school-mon with the phone line (Task 7/8 split) — the
+    three-strikes lockout is login.bas's, not records.bas's."""
+    async def flow():
+        async with FakeRelay() as relay:
+            host = NodeHost(decl_for("school-mon"), PACK, {"pstn": relay.url, "bus": relay.url})
             await host.start()
             await relay.wait_registered()
 
@@ -194,7 +241,10 @@ def test_the_program_can_end_the_call_itself():
 
 def test_a_prompt_follows_the_display_frame():
     """A response carrying `prompt` sends a PROMPT frame after the FRAME that
-    delivers the display, so the input line can repaint the question."""
+    delivers the display, so the input line can repaint the question.
+
+    Uses a fully mocked runner, so which system answers is incidental; moved
+    off `school` to `reference` (Task 7 took school's phone line away)."""
     from app.systemwire import SystemResponse
 
     class PromptingRunner:
@@ -203,13 +253,13 @@ def test_a_prompt_follows_the_display_frame():
 
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK, {"pstn": relay.url, "bus": relay.url},
+            host = NodeHost(decl_for("reference"), PACK, {"pstn": relay.url, "norad": relay.url},
                             system_runner=PromptingRunner())
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(3)
 
             assert [f["t"] for f in relay.frames] == ["ANSWER", "FRAME", "PROMPT"]
@@ -245,38 +295,105 @@ def test_the_host_refuses_a_topology_with_errors(monkeypatch):
         NodeHost.for_node("school", PACK, {})
 
 
-def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer():
+def _stub_caller_pair(tmp_path, sid="stub-caller", peer="stub-peer"):
+    """A purpose-built pair of stub systems for the CALL/RESUME tests below.
+
+    `school` used to carry this coverage, but Task 7 moved its phone line to
+    school-mon: `school` is now reachable only over `bus`, the same network
+    its peer `school-db` sits on, and no single test double can both register
+    a node on a URL and answer as its peer on that same URL. So these tests
+    get their own pair instead of reusing a real pack system.
+
+    `stub-caller` is a real subprocess — harness/bin/<id>, the same shape
+    test_systemrunner.py's `_write_stub_system` uses, with an explicit
+    (unhashed) phone number — rather than a Python `system_runner` double,
+    so the CALL/RESUME loop is exercised the way a node host actually drives
+    a program. Unlike that helper's static per-command echo, turn 2 (RESUME)
+    has to read back whatever status the REPLY block actually carries — OK
+    with the peer's payload, or anything else with RECORDS UNAVAILABLE — so
+    both tests can share one script. `stub-peer` is never invoked as a
+    subprocess (nothing dials it *in*; `execute_call` only ever opens a raw
+    `/dial` leg to whatever URL the test wires up for its network), so it is
+    just a topology entry, not a second binary.
+    """
+    from app.topology import Address, NodeDecl, Topology
+
+    bindir = tmp_path / "systems" / sid / "harness" / "bin"
+    bindir.mkdir(parents=True)
+    script = rf"""#!/usr/bin/env bash
+set -uo pipefail
+read -r header
+cmd=$(printf '%s' "$header" | cut -d' ' -f3)
+case "$cmd" in
+  CONNECT)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nREADY\nLINE UP\nEND\n'
+    ;;
+  INPUT)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nSEARCHING...\nCALL {peer} 1\nLOOKUP GRADE 1 BIOLOGY 2\nLINE UP\nEND\n'
+    ;;
+  RESUME)
+    read -r _state_hdr
+    read -r reply_hdr
+    status=$(printf '%s' "$reply_hdr" | cut -d' ' -f3)
+    n=$(printf '%s' "$reply_hdr" | cut -d' ' -f4)
+    payload=""
+    i=0
+    while [ "$i" -lt "$n" ]; do
+      read -r payload
+      i=$((i + 1))
+    done
+    read -r _end
+    if [ "$status" = "OK" ]; then
+      body="$payload"
+    else
+      body="RECORDS UNAVAILABLE"
+    fi
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\n%s\nLINE UP\nEND\n' "$body"
+    ;;
+  *)
+    cat >/dev/null
+    printf 'SYSTEM/1 {sid} OK\nSTATE 0\nDISPLAY 1\nPROTOCOL ERROR\nLINE DROP\nEND\n'
+    exit 1
+    ;;
+esac
+exit 0
+"""
+    binary = bindir / sid
+    binary.write_text(script)
+    binary.chmod(0o755)
+
+    decl = NodeDecl(
+        id=sid, title=sid.upper(),
+        networks={
+            "pstn": Address(network="pstn", address="(555) 010-1000", protocol="SYSTEM/1"),
+            "bus": Address(network="bus", address=sid.upper(), protocol="SYSTEM/1"),
+        },
+        peers=(peer,),
+    )
+    peer_decl = NodeDecl(
+        id=peer, title=peer.upper(),
+        networks={"bus": Address(network="bus", address=peer.upper(), protocol="SYSTEM/1")},
+    )
+    topo = Topology(networks={}, nodes={sid: decl, peer: peer_decl})
+    return decl, topo
+
+
+def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer(tmp_path):
     """The whole point: a CALL becomes a real dial to another process, and the
     program is re-invoked with what came back."""
-    from app.systemwire import Call, SystemResponse
-
-    class CallingRunner:
-        """Turn 1 asks for a peer; turn 2 (RESUME) reports what it got."""
-        def __init__(self):
-            self.replies = []
-
-        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
-            if command == "CONNECT":
-                return SystemResponse(sid, "PHASE=MENU", "READY", "UP")
-            if reply is None:
-                return SystemResponse(
-                    sid, "PHASE=AWAIT", "SEARCHING...", "UP",
-                    call=Call(peer="school-db", payload="LOOKUP GRADE 1 BIOLOGY 2"))
-            self.replies.append(reply)
-            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
-            return SystemResponse(sid, "PHASE=MENU", body, "UP")
+    decl, topo = _stub_caller_pair(tmp_path)
 
     async def flow():
         async with FakeRelay() as relay, FakeDialTarget(answer="GRADE F") as store:
-            runner = CallingRunner()
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": store.url},
-                            system_runner=runner)
+            host = NodeHost(decl, tmp_path, {"pstn": relay.url, "bus": store.url},
+                            topology=topo)
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "5550101000"})
             await relay.wait_frames(2)
             relay.frames.clear()
 
@@ -285,38 +402,26 @@ def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer():
 
             text = relay.display_text()
             assert "SEARCHING..." in text, text   # shown while the call is in flight
-            assert "GRADE F" in text, text        # and the peer's answer after it
-            assert runner.replies[0].status == "OK"
+            assert "GRADE F" in text, text        # the peer's answer, verbatim, after it
             await host.stop()
 
     asyncio.run(flow())
 
 
-def test_a_dead_peer_degrades_instead_of_hanging():
-    from app.systemwire import Call, SystemResponse
-
-    class CallingRunner:
-        async def run(self, sid, command, state, user_input, timeout_s=None, reply=None):
-            if command == "CONNECT":
-                return SystemResponse(sid, "", "READY", "UP")
-            if reply is None:
-                return SystemResponse(sid, "", "SEARCHING...", "UP",
-                                      call=Call(peer="school-db", payload="LOOKUP"))
-            body = reply.payload if reply.status == "OK" else "RECORDS UNAVAILABLE"
-            return SystemResponse(sid, "", body, "UP")
+def test_a_dead_peer_degrades_instead_of_hanging(tmp_path):
+    decl, topo = _stub_caller_pair(tmp_path)
 
     async def flow():
-        # The bus relay is up and school registers on it; there is simply no
-        # store holding SCHOOL-DB, so the dial gets NO ANSWER.
+        # The bus relay is up and stub-caller registers on it; there is simply
+        # no target holding stub-peer's line, so the dial gets NO ANSWER.
         async with FakeRelay() as relay, FakeRelay() as bus:
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": bus.url},
-                            system_runner=CallingRunner())
+            host = NodeHost(decl, tmp_path, {"pstn": relay.url, "bus": bus.url},
+                            topology=topo)
             await host.start()
             await relay.wait_registered()
 
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "5550101000"})
             await relay.wait_frames(2)
             relay.frames.clear()
 
@@ -362,16 +467,19 @@ def test_a_persistent_store_remembers_across_separate_calls(tmp_path):
 
 
 def test_an_ephemeral_node_writes_no_store_file(tmp_path):
-    """The school is not a store; nothing should be persisted for it."""
+    """A dial-in system with no declared state is not a store; nothing should
+    be persisted for it. Moved off `school` to `reference` (Task 7 took
+    school's phone line away) — the ephemeral-vs-persistent distinction this
+    test pins is generic, not specific to school."""
     async def flow():
         async with FakeRelay() as relay:
-            host = NodeHost(decl_for("school"), PACK,
-                            {"pstn": relay.url, "bus": relay.url}, runtime_dir=tmp_path)
+            host = NodeHost(decl_for("reference"), PACK,
+                            {"pstn": relay.url, "norad": relay.url}, runtime_dir=tmp_path)
             assert host.store is None
             await host.start()
-            await relay.wait_registered(("pstn", "bus"))
+            await relay.wait_registered(("pstn", "norad"))
             await relay.send({"t": "RING", "call": 1, "from": "console",
-                              "network": "pstn", "address": "2065550142"})
+                              "network": "pstn", "address": "3115550101"})
             await relay.wait_frames(2)
             assert not (tmp_path / "state").exists()
             await host.stop()

@@ -5,7 +5,7 @@ import { DEFAULT_WOPR_NUMBER } from "./console.ts";
 
 const SYSTEMS = [
   { kind: "system", id: "sys-airline", name: "PAN AM", number: "(212) 555-0177", systemId: "airline" },
-  { kind: "system", id: "sys-school", name: "SEATTLE SCHOOL DISTRICT", number: "(206) 555-0142", systemId: "school" },
+  { kind: "system", id: "sys-school", name: "SEATTLE SCHOOL DISTRICT", number: "(206) 555-0142", systemId: "school-mon" },
   { kind: "system", id: "sys-protovision", name: "PROTOVISION", number: "(408) 555-0163", systemId: "protovision" },
   { kind: "system", id: "sys-pactel", name: "PACIFIC TELEPHONE", number: "(311) 555-0100", systemId: "pactel" },
 ];

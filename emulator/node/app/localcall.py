@@ -78,4 +78,9 @@ async def run_resolving_calls(
         line=resp.line,
         call=None,
         prompt=resp.prompt,
+        # EXEC (docs/systems.md §2.6) can't accompany CALL, so a response that
+        # reaches here with exec_peer set never took the reply loop above —
+        # but it still has to survive the trip out, or the layer above this
+        # one (session_turn) can never see a program handing off the line.
+        exec_peer=resp.exec_peer,
     )

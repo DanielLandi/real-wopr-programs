@@ -157,11 +157,20 @@
       "binary": "reference"
     },
     {
-      "id": "school",
+      "id": "school-mon",
       "kind": "system",
       "protocol": "SYSTEM/1",
       "language": "basic",
       "title": "SEATTLE SCHOOL DISTRICT",
+      "path": "systems/school-mon",
+      "binary": "school-mon"
+    },
+    {
+      "id": "school",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "basic",
+      "title": "SEATTLE SCHOOL DISTRICT RECORDS",
       "path": "systems/school",
       "binary": "school"
     },

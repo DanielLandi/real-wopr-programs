@@ -34,7 +34,13 @@ export const DIAL_SYSTEMS: DialSystem[] = [
     id: "sys-school",
     name: "SEATTLE SCHOOL DISTRICT",
     number: "(206) 555-0142",
-    systemId: "school",
+    // The monitor, not the records program. The school was split in two
+    // (docs/systems.md §2.6): `school-mon` owns the phone number and the
+    // password prompt, and hands the terminal to `school` once you are in.
+    // `school` has no `number` in its manifest any more, so it is not in the
+    // dial-in phone book at all — naming it here would earn a 400 and print
+    // SYSTEM UNREACHABLE on the film's own school dial.
+    systemId: "school-mon",
   },
   {
     kind: "system",

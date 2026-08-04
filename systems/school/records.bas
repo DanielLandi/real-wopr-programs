@@ -1,9 +1,11 @@
 10 REM SEATTLE PUBLIC SCHOOL DISTRICT - SYSTEM/1 school
 20 REM Menu-driven administrative datanet in plain line-numbered BASIC,
 30 REM run by the Bywater BASIC interpreter. Stateless per invocation:
-40 REM the session (auth flag, password tries, menu step, work-in-
-50 REM progress grade entry, roster-listing cursor) rides the opaque
-60 REM STATE block, echoed back each turn per docs/systems.md. No wall
+40 REM the session (menu step, work-in-progress grade entry, roster-
+50 REM listing cursor, a GRD cache) rides the opaque STATE block, echoed
+60 REM back each turn per docs/systems.md. Authentication is not this
+65 REM program's job: the monitor (school-mon) checks it before EXEC'ing
+67 REM here, so there is no password state to carry. No wall
 70 REM clock and no rng, so same request bytes give the same response.
 72 REM The grades themselves are NOT here: they live in school-db, on the
 74 REM local bus. This program owns the roster and the schedule and asks
@@ -33,8 +35,6 @@
 150 IF LEFT$(S$, 6) <> "STATE " THEN GOTO 7000
 160 SN = VAL(MID$(S$, 7))
 200 REM resting-session defaults; overwritten by parsed STATE lines
-210 AU = 0
-220 TR = 0
 230 ST$ = "MENU"
 240 WP$ = "-"
 250 WC$ = "-"
@@ -81,56 +81,19 @@
 620 IF CMD$ = "INPUT" THEN GOTO 3300
 625 IF CMD$ = "RESUME" THEN GOTO 3900
 630 GOTO 7000
-3000 REM CONNECT: greeting + password prompt, resting STATE
+3000 REM CONNECT: the monitor has already authenticated this caller and
+3005 REM EXEC'd us, so there is no password to ask for. Paint the menu.
 3010 PRINT "SYSTEM/1 school OK"
 3020 GOSUB 7500
-3030 PRINT "DISPLAY 4"
-3040 PRINT "PDP 11/270 PRB TIP #45"
-3045 PRINT "TTY 34/984"
-3050 PRINT ""
-3055 PRINT "WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET"
-3065 PRINT "PROMPT PLEASE LOGON WITH USER PASSWORD:"
-3070 PRINT "LINE UP"
-3080 PRINT "END"
-3090 END
+3030 PRINT "DISPLAY 7"
+3040 PRINT "WELCOME TO DISTRICT DATANET"
+3050 GOSUB 7700
+3060 PRINT "LINE UP"
+3070 PRINT "END"
+3080 END
 3300 REM INPUT: an INPUT command must carry a user line
 3310 IF HI = 0 THEN GOTO 7000
-3320 IF AU = 1 THEN GOTO 3700
-3330 REM unauthenticated: treat the line as a password attempt
-3340 IF IN$ = "PENCIL" THEN GOTO 3400
-3350 TR = TR + 1
-3360 IF TR >= 3 THEN GOTO 3600
-3370 GOTO 3500
-3400 REM correct password: authenticate and show the main menu
-3410 AU = 1
-3420 TR = 0
-3430 ST$ = "MENU"
-3440 PRINT "SYSTEM/1 school OK"
-3450 GOSUB 7500
-3460 PRINT "DISPLAY 7"
-3470 PRINT "WELCOME TO DISTRICT DATANET"
-3480 GOSUB 7700
-3490 PRINT "LINE UP"
-3492 PRINT "END"
-3494 END
-3500 REM wrong password, tries remaining: reprompt
-3510 PRINT "SYSTEM/1 school OK"
-3520 GOSUB 7500
-3530 PRINT "DISPLAY 1"
-3540 PRINT "INVALID PASSWORD"
-3550 PRINT "PROMPT PLEASE LOGON WITH USER PASSWORD:"
-3560 PRINT "LINE UP"
-3570 PRINT "END"
-3580 END
-3600 REM third wrong password: lock the terminal and drop the line
-3610 PRINT "SYSTEM/1 school OK"
-3620 GOSUB 7500
-3630 PRINT "DISPLAY 2"
-3640 PRINT "INVALID PASSWORD"
-3650 PRINT "ACCESS DENIED - TERMINAL LOCKED OUT"
-3660 PRINT "LINE DROP"
-3670 PRINT "END"
-3680 END
+3320 GOTO 3700
 3700 REM authenticated: route by the menu step carried in STATE
 3710 IF ST$ = "MENU" THEN GOTO 4000
 3720 IF ST$ = "RECNAME" THEN GOTO 4200
@@ -324,9 +287,7 @@
 5060 PRINT "LINE UP"
 5070 PRINT "END"
 5080 END
-5200 REM option 4: log off and drop the line
-5210 AU = 0
-5220 TR = 0
+5200 REM option 4: log off and return to whatever EXEC'd us
 5230 ST$ = "MENU"
 5240 WP$ = "-"
 5250 WC$ = "-"
@@ -335,7 +296,7 @@
 5280 GOSUB 7500
 5290 PRINT "DISPLAY 1"
 5292 PRINT "LOGGED OFF. GOODBYE."
-5294 PRINT "LINE DROP"
+5294 PRINT "LINE RETURN"
 5296 PRINT "END"
 5298 END
 5400 REM unrecognized menu selection
@@ -459,8 +420,6 @@
 6470 PRINT "END"
 6472 END
 6000 REM ---- parse one opaque STATE line in L$ ----
-6010 IF LEFT$(L$, 5) = "AUTH " THEN AU = VAL(MID$(L$, 6))
-6020 IF LEFT$(L$, 6) = "TRIES " THEN TR = VAL(MID$(L$, 7))
 6030 IF LEFT$(L$, 5) = "STEP " THEN ST$ = MID$(L$, 6)
 6040 IF LEFT$(L$, 5) = "WIPC " THEN WC$ = MID$(L$, 6)
 6050 IF LEFT$(L$, 4) = "WIP " THEN WP$ = MID$(L$, 5)
@@ -506,19 +465,17 @@
 7060 PRINT "LINE DROP"
 7070 PRINT "END"
 7080 END
-7500 REM ---- emit the STATE block: 5 resting tags + NG GRD lines ----
-7510 SC = 5 + NG
+7500 REM ---- emit the STATE block: 3 resting tags + NG GRD lines ----
+7510 SC = 3 + NG
 7520 PRINT "STATE " + MID$(STR$(SC), 2)
-7530 PRINT "AUTH " + MID$(STR$(AU), 2)
-7540 PRINT "TRIES " + MID$(STR$(TR), 2)
-7550 PRINT "STEP " + ST$
-7560 PRINT "WIP " + WP$
-7570 PRINT "WIPC " + WC$
-7580 IF NG <= 0 THEN RETURN
-7590 FOR GI = 1 TO NG
-7600 PRINT "GRD " + GS$(GI) + " " + GC$(GI) + " " + GG$(GI)
-7610 NEXT GI
-7620 RETURN
+7530 PRINT "STEP " + ST$
+7540 PRINT "WIP " + WP$
+7550 PRINT "WIPC " + WC$
+7560 IF NG <= 0 THEN RETURN
+7570 FOR GI = 1 TO NG
+7580 PRINT "GRD " + GS$(GI) + " " + GC$(GI) + " " + GG$(GI)
+7590 NEXT GI
+7600 RETURN
 7700 REM emit the 6-line main menu (MENU6)
 7710 PRINT "1 - STUDENT RECORDS"
 7720 PRINT "2 - GRADE ENTRY"

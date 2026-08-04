@@ -59,15 +59,17 @@ program.
 
 A program that is not just something another program runs, but a machine you can *reach*,
 adds a `node` block. It says which networks the program answers on, what address it answers
-at, what it runs locally, and which peers it may call:
+at, what it runs locally, which peers it may call, and which programs it may hand the
+terminal to. This is `systems/school-mon` — the school district's login monitor, which
+answers the phone and runs the records program for whoever gets past it:
 
 ```json
 "node": {
   "networks": {
     "pstn": { "address": "(206) 555-0142", "protocol": "SYSTEM/1" },
-    "bus":  { "address": "SCHOOL",         "protocol": "SYSTEM/1" }
+    "bus":  { "address": "SCHOOL-MON",     "protocol": "SYSTEM/1" }
   },
-  "peers": ["school-db"],
+  "execs": ["school"],
   "state": "ephemeral",
   "callable_by": null
 }
@@ -77,15 +79,20 @@ at, what it runs locally, and which peers it may call:
 | --- | --- |
 | `networks` | Which networks this answers on, and at what address. Networks are declared once in `pack.json`. |
 | `mounts` | Program ids or globs (`games/*`) this node runs locally, as subprocesses. |
-| `peers` | Node ids this may `CALL`. A node with no `peers` cannot make calls at all. |
+| `peers` | Node ids this may `CALL` — ask a question of, mid-turn, and be resumed with the answer. `systems/school` declares `"peers": ["school-db"]`. A node with no `peers` cannot make calls at all. |
+| `execs` | Program ids this may `EXEC` — *hand the terminal to*, rather than ask. The program taking over owns the session until it says `LINE RETURN`, and never learns it was exec'd. A program id here need not be a node: an exec'd program is run by whoever is serving the call, not dialled. Undeclared targets are rejected before anything runs. See [`docs/systems.md` §2.6](https://github.com/DanielLandi/real-wopr/blob/main/docs/systems.md) for the wire format and the return stack. |
 | `state` | `ephemeral` (default) or `persistent`. `persistent` makes the host own this program's `STATE` between calls — what a data store needs. |
 | `callable_by` | Node ids permitted to call this one. Omit for "anyone sharing a network". |
+
+`peers` and `execs` are different verbs and are checked separately: `CALL` gets you an answer
+and keeps the terminal, `EXEC` gives the terminal away.
 
 **A program with no `node` block is not a node** — it is somebody's mount. The games are
 mounts: `GTW` is not something you dial, it is something W.O.P.R. runs for you.
 
 A node's declaration is checked before anything runs: unknown networks, duplicate addresses,
-unknown or unreachable peers, empty mount globs and cycles are all rejected.
+unknown or unreachable peers, undeclared `EXEC` targets, empty mount globs and cycles are all
+rejected.
 
 ## Wire protocols
 

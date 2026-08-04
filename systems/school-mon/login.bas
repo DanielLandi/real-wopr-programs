@@ -1,0 +1,361 @@
+10 REM SEATTLE PUBLIC SCHOOL DISTRICT - SYSTEM/1 school-mon
+20 REM The monitor. Answers the district's dial-in line, authenticates
+30 REM against ACCT.DAT, then either EXECs the account's captive program
+40 REM or gives the caller `Ready` (docs/systems.md 2.6).
+50 REM Stateless per invocation: PHASE, ACCT and TRIES ride the STATE
+60 REM block. No wall clock, no rng.
+70 REM ACCT.DAT keys on the password, not the PPN: the film's terminal
+80 REM asks for a password alone, and the film is authority. See
+90 REM docs/fidelity-notes.md section 7.
+100 DIM AP$(40)
+105 DIM AW$(40)
+110 DIM AV(40)
+115 DIM AC(40)
+120 DIM AG$(40)
+121 DIM CN$(40)
+122 DIM CO$(40)
+123 DIM CB(40)
+124 DIM CV(40)
+125 GOSUB 8500
+126 DIM CD$(40), CS$(40)
+127 GOSUB 8600
+128 GOSUB 8680
+130 REM ---- parse the SYSTEM/1 request from stdin ----
+135 LINE INPUT H$
+140 IF LEFT$(H$, 20) <> "SYSTEM/1 school-mon " THEN GOTO 7000
+145 CMD$ = MID$(H$, 21)
+150 LINE INPUT S$
+155 IF LEFT$(S$, 6) <> "STATE " THEN GOTO 7000
+160 SN = VAL(MID$(S$, 7))
+200 PH$ = "LOGIN"
+205 AK$ = "-"
+210 TR = 0
+215 IF SN <= 0 THEN GOTO 300
+220 FOR I = 1 TO SN
+225 LINE INPUT L$
+230 GOSUB 6000
+235 NEXT I
+300 LINE INPUT T$
+305 HI = 0
+310 IF LEFT$(T$, 6) <> "INPUT " THEN GOTO 330
+315 IN$ = MID$(T$, 7)
+320 HI = 1
+325 GOTO 340
+330 IF T$ <> "END" THEN GOTO 7000
+335 GOTO 400
+340 LINE INPUT E$
+345 IF E$ <> "END" THEN GOTO 7000
+400 REM ---- dispatch ----
+405 IF CMD$ = "CONNECT" THEN GOTO 3000
+410 IF CMD$ = "INPUT" THEN GOTO 3300
+415 IF CMD$ = "RETURN" THEN GOTO 3800
+420 GOTO 7000
+3000 REM CONNECT: the film's banner and password prompt
+3010 PRINT "SYSTEM/1 school-mon OK"
+3020 GOSUB 7500
+3030 PRINT "DISPLAY 4"
+3040 PRINT "PDP 11/270 PRB TIP #45"
+3050 PRINT "TTY 34/984"
+3060 PRINT ""
+3070 PRINT "WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET"
+3080 PRINT "PROMPT PLEASE LOGON WITH USER PASSWORD:"
+3090 PRINT "LINE UP"
+3095 PRINT "END"
+3099 END
+3300 REM INPUT
+3305 IF HI = 0 THEN GOTO 7000
+3310 IF PH$ = "READY" THEN GOTO 4000
+3315 REM unauthenticated: the line is a password attempt
+3320 GOSUB 8700
+3325 IF AF = 0 THEN GOTO 3500
+3330 AK$ = AP$(AF)
+3335 TR = 0
+3340 IF AC(AF) = 0 THEN GOTO 3400
+3341 REM a captive account whose program did not resolve (8680) gets no
+3342 REM EXEC at all — 3390 refuses out loud instead of handing the host
+3343 REM an empty EXEC target to choke on.
+3344 IF AG$(AF) = "-" OR AG$(AF) = "" THEN GOTO 3390
+3345 REM captive: hand the terminal to the account's program
+3350 PH$ = "EXEC"
+3355 PRINT "SYSTEM/1 school-mon OK"
+3360 GOSUB 7500
+3365 PRINT "DISPLAY 0"
+3370 PRINT "EXEC " + AG$(AF)
+3375 PRINT "LINE UP"
+3380 PRINT "END"
+3385 END
+3390 REM ---- captive account, but its program will not resolve: an
+3391 REM honest 1983 misconfiguration, not a crash. No EXEC, no Ready —
+3392 REM a captive account has nothing to fall back to.
+3393 PRINT "SYSTEM/1 school-mon OK"
+3394 GOSUB 7500
+3395 PRINT "DISPLAY 1"
+3396 PRINT "PROGRAM UNAVAILABLE - CALL PLANT SERVICE"
+3397 PRINT "LINE DROP"
+3398 PRINT "END"
+3399 END
+3400 REM non-captive: give the caller the monitor
+3405 PH$ = "READY"
+3410 PRINT "SYSTEM/1 school-mon OK"
+3415 GOSUB 7500
+3420 PRINT "DISPLAY 2"
+3425 PRINT "RSTS V7.0-07  JOB 12  " + AK$ + "  KB34"
+3430 PRINT "CAT, TYPE <FILE>, RUN <FILE>, BYE"
+3435 PRINT "PROMPT Ready"
+3440 PRINT "LINE UP"
+3445 PRINT "END"
+3450 END
+3500 REM wrong password
+3505 TR = TR + 1
+3510 IF TR >= 3 THEN GOTO 3600
+3515 PRINT "SYSTEM/1 school-mon OK"
+3520 GOSUB 7500
+3525 PRINT "DISPLAY 1"
+3530 PRINT "INVALID PASSWORD"
+3535 PRINT "PROMPT PLEASE LOGON WITH USER PASSWORD:"
+3540 PRINT "LINE UP"
+3545 PRINT "END"
+3550 END
+3600 REM three strikes
+3605 PRINT "SYSTEM/1 school-mon OK"
+3610 GOSUB 7500
+3615 PRINT "DISPLAY 2"
+3617 PRINT "INVALID PASSWORD"
+3620 PRINT "ACCESS DENIED - TERMINAL LOCKED OUT"
+3625 PRINT "LINE DROP"
+3630 PRINT "END"
+3635 END
+3800 REM RETURN: the exec'd program finished. Where the caller lands depends
+3802 REM on the account, not on the program: a captive account has no command
+3804 REM surface to return to, so its program finishing ends the call. Only a
+3806 REM non-captive account sees `Ready`.
+3808 GOSUB 8950
+3810 IF CP = 0 THEN GOTO 3820
+3812 PRINT "SYSTEM/1 school-mon OK"
+3814 GOSUB 7500
+3816 PRINT "DISPLAY 0"
+3817 PRINT "LINE DROP"
+3818 PRINT "END"
+3819 END
+3820 PH$ = "READY"
+3822 GOTO 3410
+4000 REM ---- Ready: the monitor's own command surface ----
+4001 REM MV = privilege of the account this session logged in as. The
+4002 REM PPN does come out of STATE (6020); the privilege never does -
+4003 REM 8900 looks it up in ACCT.DAT, so STATE can name an account but
+4004 REM cannot carry what that account may do.
+4005 GOSUB 8900
+4006 CM$ = IN$
+4010 SP = INSTR(CM$, " ")
+4015 AR$ = ""
+4020 IF SP = 0 THEN GOTO 4035
+4025 AR$ = MID$(CM$, SP + 1)
+4030 CM$ = LEFT$(CM$, SP - 1)
+4035 IF CM$ = "CAT" THEN GOTO 4100
+4040 IF CM$ = "TYPE" THEN GOTO 4300
+4045 IF CM$ = "RUN" THEN GOTO 4500
+4050 IF CM$ = "BYE" THEN GOTO 4700
+4055 REM anything else
+4060 GOSUB 7800
+4065 PRINT "DISPLAY 1"
+4070 PRINT "?Illegal command"
+4075 GOSUB 7900
+4080 END
+4100 REM ---- CAT: the disk, as far as this account may see it ----
+4105 NL = 0
+4110 FOR J = 1 TO NC
+4115 IF CV(J) <= MV THEN NL = NL + 1
+4120 NEXT J
+4125 GOSUB 7800
+4130 PRINT "DISPLAY " + MID$(STR$(NL + 2), 2)
+4135 PRINT " NAME         PPN     SIZE"
+4140 FOR J = 1 TO NC
+4145 IF CV(J) > MV THEN GOTO 4165
+4150 L8$ = CN$(J) + SPACE$(13 - LEN(CN$(J)))
+4155 L8$ = L8$ + CO$(J) + SPACE$(8 - LEN(CO$(J)))
+4157 B8$ = MID$(STR$(CB(J)), 2)
+4160 PRINT L8$ + SPACE$(4 - LEN(B8$)) + B8$
+4165 NEXT J
+4170 PRINT "TOTAL " + MID$(STR$(NL), 2) + " FILES"
+4175 GOSUB 7900
+4180 END
+4300 REM ---- TYPE <file> ----
+4305 GOSUB 8800
+4310 IF CF = 0 THEN GOTO 4600
+4315 IF CV(CF) > MV THEN GOTO 4640
+4317 IF CD$(CF) = "-" THEN GOTO 4600
+4320 REM two passes: bwBASIC cannot rewind, so count, close, reopen, print
+4325 NL = 0
+4330 OPEN CD$(CF) FOR INPUT AS #2
+4335 IF EOF(2) THEN GOTO 4350
+4340 LINE INPUT #2, L9$
+4345 NL = NL + 1
+4347 GOTO 4335
+4350 CLOSE #2
+4355 GOSUB 7800
+4360 PRINT "DISPLAY " + MID$(STR$(NL), 2)
+4365 OPEN CD$(CF) FOR INPUT AS #2
+4370 IF EOF(2) THEN GOTO 4385
+4375 LINE INPUT #2, L9$
+4380 PRINT L9$
+4382 GOTO 4370
+4385 CLOSE #2
+4390 GOSUB 7900
+4395 END
+4500 REM ---- RUN <file> ----
+4505 GOSUB 8800
+4510 IF CF = 0 THEN GOTO 4600
+4515 IF CV(CF) > MV THEN GOTO 4640
+4520 IF CS$(CF) = "-" OR CS$(CF) = "" THEN GOTO 4670
+4525 PH$ = "EXEC"
+4530 GOSUB 7800
+4535 PRINT "DISPLAY 0"
+4540 PRINT "EXEC " + CS$(CF)
+4545 PRINT "LINE UP"
+4550 PRINT "END"
+4555 END
+4600 REM ---- can't find file or account ----
+4605 GOSUB 7800
+4610 PRINT "DISPLAY 1"
+4615 PRINT "?Can't find file or account"
+4620 GOSUB 7900
+4625 END
+4640 REM ---- protection violation ----
+4645 GOSUB 7800
+4650 PRINT "DISPLAY 1"
+4655 PRINT "?Protection violation"
+4660 GOSUB 7900
+4665 END
+4670 REM ---- on the disk, but not a program ----
+4675 GOSUB 7800
+4680 PRINT "DISPLAY 1"
+4685 PRINT "?Not a runnable file"
+4690 GOSUB 7900
+4695 END
+4700 REM ---- BYE: the monitor really is ending the call, not returning ----
+4705 GOSUB 7800
+4710 PRINT "DISPLAY 1"
+4715 PRINT "GOODBYE."
+4720 PRINT "LINE DROP"
+4725 PRINT "END"
+4730 END
+7800 REM ---- response header + STATE ----
+7810 PRINT "SYSTEM/1 school-mon OK"
+7820 GOSUB 7500
+7830 RETURN
+7900 REM ---- ordinary Ready tail ----
+7910 PRINT "PROMPT Ready"
+7920 PRINT "LINE UP"
+7930 PRINT "END"
+7940 RETURN
+8600 REM ---- load CATLOG.DAT ----
+8605 NC = 0
+8610 OPEN "data/catlog.dat" FOR INPUT AS #1
+8615 IF EOF(1) THEN GOTO 8670
+8620 LINE INPUT #1, L9$
+8625 NC = NC + 1
+8627 T9$ = LEFT$(L9$, 12)
+8629 GOSUB 9000
+8631 CN$(NC) = T9$
+8633 T9$ = MID$(L9$, 14, 7)
+8635 GOSUB 9000
+8637 CO$(NC) = T9$
+8639 CB(NC) = VAL(MID$(L9$, 22, 3))
+8641 CV(NC) = VAL(MID$(L9$, 26, 1))
+8643 CD$(NC) = "-"
+8644 T9$ = MID$(L9$, 28, 8)
+8645 GOSUB 9000
+8646 CS$(NC) = T9$
+8660 IF CN$(NC) = "RUNBOOK.DOC" THEN CD$(NC) = "data/runbook.doc"
+8662 IF CN$(NC) = "ADANOT.DOC" THEN CD$(NC) = "data/adanot.doc"
+8664 IF CN$(NC) = "NOTES.TXT" THEN CD$(NC) = "data/notes.txt"
+8666 IF CN$(NC) = "CATLOG.DAT" THEN CD$(NC) = "data/catlog.dat"
+8668 IF CN$(NC) = "ACCT.DAT" THEN CD$(NC) = "data/acct.dat"
+8669 GOTO 8615
+8670 CLOSE #1
+8675 RETURN
+8680 REM ---- resolve captive program ids through the catalog, so there is
+8681 REM one mapping (CATLOG.DAT's system-id column) rather than two. A
+8682 REM captive account whose program will not resolve to a usable
+8683 REM system id is left with AG$ = "-", the same sentinel the catalog
+8684 REM itself uses for "no system here" — never a raw or blank id an
+8685 REM EXEC could be built from. 3344 depends on that to refuse
+8686 REM gracefully rather than hand the host an empty EXEC target.
+8687 FOR I = 1 TO NA
+8688 IF AC(I) = 0 THEN GOTO 8696
+8689 P8$ = AG$(I)
+8690 AG$(I) = "-"
+8691 FOR J = 1 TO NC
+8692 IF CN$(J) <> P8$ + ".BAS" THEN GOTO 8694
+8693 IF CS$(J) <> "-" AND CS$(J) <> "" THEN AG$(I) = CS$(J)
+8694 NEXT J
+8696 NEXT I
+8698 RETURN
+8800 REM ---- find AR$ in the catalog; CF = index or 0 ----
+8810 CF = 0
+8820 FOR J = 1 TO NC
+8830 IF CN$(J) = AR$ THEN CF = J
+8840 NEXT J
+8850 RETURN
+8900 REM ---- MV = privilege of account AK$, 0 if unknown ----
+8905 MV = 0
+8910 FOR J = 1 TO NA
+8915 IF AP$(J) = AK$ THEN MV = AV(J)
+8920 NEXT J
+8925 RETURN
+8950 REM ---- CP = captive flag of account AK$, 0 if unknown ----
+8960 CP = 0
+8970 FOR J = 1 TO NA
+8980 IF AP$(J) = AK$ THEN CP = AC(J)
+8990 NEXT J
+8995 RETURN
+6000 REM ---- parse one STATE line ----
+6010 IF LEFT$(L$, 6) = "PHASE " THEN PH$ = MID$(L$, 7)
+6020 IF LEFT$(L$, 5) = "ACCT " THEN AK$ = MID$(L$, 6)
+6030 IF LEFT$(L$, 6) = "TRIES " THEN TR = VAL(MID$(L$, 7))
+6040 RETURN
+7000 REM ---- malformed request ----
+7010 PRINT "SYSTEM/1 school-mon OK"
+7020 PRINT "STATE 0"
+7030 PRINT "DISPLAY 1"
+7040 PRINT "PROTOCOL ERROR"
+7050 PRINT "LINE DROP"
+7060 PRINT "END"
+7070 END
+7500 REM ---- emit the STATE block ----
+7510 PRINT "STATE 3"
+7520 PRINT "PHASE " + PH$
+7530 PRINT "ACCT " + AK$
+7540 PRINT "TRIES " + MID$(STR$(TR), 2)
+7550 RETURN
+8500 REM ---- load ACCT.DAT ----
+8505 NA = 0
+8510 OPEN "data/acct.dat" FOR INPUT AS #1
+8515 IF EOF(1) THEN GOTO 8560
+8520 LINE INPUT #1, L9$
+8525 NA = NA + 1
+8527 T9$ = LEFT$(L9$, 7)
+8529 GOSUB 9000
+8531 AP$(NA) = T9$
+8533 T9$ = MID$(L9$, 9, 12)
+8535 GOSUB 9000
+8537 AW$(NA) = T9$
+8539 AV(NA) = VAL(MID$(L9$, 22, 1))
+8541 AC(NA) = VAL(MID$(L9$, 24, 1))
+8543 T9$ = MID$(L9$, 26, 8)
+8545 GOSUB 9000
+8547 AG$(NA) = T9$
+8549 GOTO 8515
+8560 CLOSE #1
+8565 RETURN
+8700 REM ---- find the account whose password is IN$; AF = index or 0 ----
+8710 AF = 0
+8720 FOR J = 1 TO NA
+8730 IF AW$(J) = IN$ THEN AF = J
+8740 NEXT J
+8750 RETURN
+9000 REM trim trailing spaces from T9$
+9010 IF LEN(T9$) = 0 THEN RETURN
+9020 IF RIGHT$(T9$, 1) <> " " THEN RETURN
+9030 T9$ = LEFT$(T9$, LEN(T9$) - 1)
+9040 GOTO 9010

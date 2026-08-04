@@ -1,14 +1,19 @@
 import asyncio
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.execstack import Frame
+from app.execstack import decode as decode_stack
 from app.main import create_app
 from app.store import MemoryStore
-from app.systems import load_systems
+from app.systems import load_programs, load_systems
 from app.systemrunner import SystemRunner, SystemRunnerConfig
 from app.systemwire import SystemResponse
 
@@ -17,6 +22,7 @@ SYS_DIR = REPO / "systems"
 REF_BIN = SYS_DIR / "reference" / "harness" / "bin" / "reference"
 AIRLINE_BIN = SYS_DIR / "airline" / "harness" / "bin" / "airline"
 SCHOOL_BIN = SYS_DIR / "school" / "harness" / "bin" / "school"
+SCHOOL_MON_BIN = SYS_DIR / "school-mon" / "harness" / "bin" / "school-mon"
 PROTOVISION_BIN = SYS_DIR / "protovision" / "harness" / "bin" / "protovision"
 PACTEL_BIN = SYS_DIR / "pactel" / "harness" / "bin" / "pactel"
 
@@ -28,6 +34,10 @@ needs_airline = pytest.mark.skipif(
 )
 needs_school = pytest.mark.skipif(
     not SCHOOL_BIN.exists(), reason="school not built (run tools/import-programs.sh)"
+)
+needs_school_mon = pytest.mark.skipif(
+    not (SCHOOL_BIN.exists() and SCHOOL_MON_BIN.exists()),
+    reason="school-mon not built (run tools/import-programs.sh)"
 )
 needs_protovision = pytest.mark.skipif(
     not PROTOVISION_BIN.exists(), reason="protovision not built (run tools/import-programs.sh)"
@@ -170,23 +180,25 @@ def test_ws_system_session_dials_airline_and_books_paris(system_client):
         assert m is not None, end
 
 
-@needs_school
+@needs_school_mon
 def test_ws_system_session_dials_school_and_changes_grade(system_client):
     # The home terminal's "SEATTLE SCHOOL" dial (Rung 4) — same WS path as the
-    # airline, bound to system: "school". Drives the S2 grade change F->A
-    # through the real bwBASIC program built in Task 1.
-    r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "school"})
+    # airline, but now the caller lands on the monitor (school-mon), not the
+    # records program directly (Task 7/8 split). Dialing in, typing PENCIL and
+    # landing on the menu crosses an EXEC hand-off (school-mon -> school) that
+    # the caller must never see: one INPUT turn spans two program invocations,
+    # collapsed into the single output/prompt pair below (session_turn.py).
+    r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "school-mon"})
     assert r.status_code == 201
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        # school.bas now speaks its asking-lines as a PROMPT frame, separate
-        # from the DISPLAY frame that precedes it (Task 5) — a non-empty
-        # DISPLAY yields an "output" frame, and any PROMPT yields its own
-        # "prompt" frame (app/main.py). DISPLAY 0 turns emit only the prompt.
-        ws.receive_text()                                     # display: SEATTLE banner
+        # A non-empty DISPLAY yields an "output" frame, and any PROMPT yields
+        # its own "prompt" frame (app/main.py). DISPLAY 0 turns emit only the
+        # prompt.
+        ws.receive_text()                                     # display: monitor banner
         assert "PASSWORD:" in ws.receive_text()                # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
-        ws.receive_text()                                     # display: welcome + menu
+        ws.receive_text()                                     # display: welcome + menu (EXEC'd into school)
         assert "SELECT:" in ws.receive_text()                  # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"2","eom":true}')
         assert "STUDENT NAME:" in ws.receive_text()            # DISPLAY 0: prompt only
@@ -298,7 +310,11 @@ def test_empty_display_sends_no_blank_frame(monkeypatch):
         # The very next frame is HELLO's echo — no blank frame in between.
         assert "ECHO HELLO" in ws.receive_text()
 
-    assert asyncio.run(store.get_system_state(sid)) == "2"  # NOP's STATE persisted
+    # The store now holds the encoded session stack (Task 6), not the bare
+    # STATE string — a single-program session is just a one-frame stack, so
+    # decode it back to check NOP's STATE persisted.
+    stack = decode_stack(asyncio.run(store.get_system_state(sid)), "reference")
+    assert stack == [Frame("reference", "2")]
 
 
 @needs_pactel
@@ -327,19 +343,36 @@ def test_ws_system_session_dials_pactel_and_verifies_line(system_client):
         assert "206 555 1234" in shown and "IDLE" in shown  # selected line persisted via STATE
 
 
-def test_a_store_with_no_number_is_not_in_the_dial_in_registry():
-    """school-db lives on the local bus; nothing should be able to dial it."""
+def test_a_store_and_a_records_program_are_not_in_the_dial_in_registry():
+    """school-db lives on the local bus; nothing should be able to dial it.
+
+    school joins it as of Task 7: its phone line moved to school-mon, so it
+    too is reached only by EXEC now, never a direct RING. load_systems is the
+    *dial-in* phone book and must drop both — but load_programs, which the
+    session stack actually consults to resolve an EXEC target, must keep
+    both. This is the invariant Task 5 (load_systems/load_programs split)
+    exists to protect, now pinned against the real pack manifests rather than
+    only the synthetic ones in test_systems.py.
+    """
     systems = load_systems(SYS_DIR)
+    programs = load_programs(SYS_DIR)
     assert "school-db" in {p.parent.name for p in SYS_DIR.glob("*/harness")}
     assert "school-db" not in systems
-    assert "school" in systems
+    assert "school" not in systems
+    assert "school-db" in programs
+    assert "school" in programs
 
 
+@needs_school_mon
 def test_two_sessions_do_not_share_a_store(system_client):
     """The monolith serves strangers on one box. If it shared a store, the
     first visitor to change David's biology grade would change it for everyone
     who dialled in afterwards — and the film's moment only works if each
-    visitor finds the F themselves."""
+    visitor finds the F themselves.
+
+    Now dials school-mon (Task 7/8 split): each visitor must independently
+    type PENCIL and get EXEC'd into their own school session — two session
+    stacks, not two record stores directly."""
     def grade_for(session_json):
         # See test_ws_system_session_dials_school_and_changes_grade: a
         # non-empty DISPLAY and any PROMPT are now separate frames, so a
@@ -358,7 +391,7 @@ def test_two_sessions_do_not_share_a_store(system_client):
             return ws.receive_text()                              # display: STUDENT: ... record
 
     first = system_client.post("/api/session",
-                               json={"surface": "home-terminal", "system": "school"}).json()
+                               json={"surface": "home-terminal", "system": "school-mon"}).json()
     sid, token = first["session_id"], first["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         ws.receive_text()                                        # display: banner
@@ -377,5 +410,158 @@ def test_two_sessions_do_not_share_a_store(system_client):
 
     # A different visitor entirely.
     second = system_client.post("/api/session",
-                                json={"surface": "home-terminal", "system": "school"}).json()
+                                json={"surface": "home-terminal", "system": "school-mon"}).json()
     assert re.search(r"BIOLOGY 2\s+F", grade_for(second)), "the store leaked between sessions"
+
+
+# -- the session stack (EXEC/RETURN), end to end through the websocket ------
+
+def _write_stub_system(systems_dir, sid, number, responses, manifest_extra=None):
+    """A minimal SYSTEM/1 system as a shell one-liner-per-command, so a stack
+    test does not depend on bwbasic/GnuCOBOL/etc. being built.
+
+    `number` is passed in, never derived from the id: Python's str hash is
+    salted per process (PYTHONHASHSEED), so a computed number would differ run
+    to run and this suite would stop being reproducible.
+    """
+    h = systems_dir / sid / "harness"
+    (h / "bin").mkdir(parents=True)
+    manifest = {"id": sid, "title": sid.upper(), "language": "sh",
+                "binary": sid, "number": number, "timeout_s": 2}
+    manifest.update(manifest_extra or {})
+    (h / "manifest.json").write_text(json.dumps(manifest))
+    cases = "\n".join(
+        f'    {cmd}) printf "SYSTEM/1 {sid} OK\\n{body}\\nEND\\n" ;;'
+        for cmd, body in responses.items())
+    script = f'''#!/usr/bin/env bash
+read -r header
+cmd=$(printf '%s' "$header" | cut -d' ' -f3)
+cat >/dev/null
+case "$cmd" in
+{cases}
+    *) printf "SYSTEM/1 {sid} OK\\nSTATE 0\\nDISPLAY 1\\nPROTOCOL ERROR\\nLINE DROP\\nEND\\n"; exit 1 ;;
+esac
+'''
+    binary = h / "bin" / sid
+    binary.write_text(script)
+    binary.chmod(0o755)
+
+
+def test_captive_exec_paints_the_child_and_drops_on_return(tmp_path):
+    """A monitor that EXECs a child: the caller sees the child's screen, not
+    the monitor's own DISPLAY 0 turn — proving app/main.py now runs a session
+    on execstack.decode/encode + session_turn.run_session_turn rather than a
+    single program's opaque STATE.
+
+    EXEC pushes rather than replaces (test_session_turn.py), so when the
+    child hits LINE RETURN the monitor is not simply gone: it is resumed with
+    exactly the STATE it held at EXEC time, via a RETURN turn. Here the
+    monitor's own RETURN handler is what ends the call (LINE DROP) — the
+    stack (mon alone) round-trips through store.set_system_state/
+    get_system_state between all three websocket turns, which is the part
+    this task actually wires up.
+    """
+    systems_dir = tmp_path / "systems"
+    _write_stub_system(systems_dir, "mon", "(206) 555-0001", responses={
+        "CONNECT": "STATE 0\nDISPLAY 1\nBANNER\nPROMPT PASSWORD:\nLINE UP",
+        "INPUT": "STATE 1\nPHASE EXEC\nDISPLAY 0\nEXEC kid\nLINE UP",
+        "RETURN": "STATE 1\nPHASE DONE\nDISPLAY 1\nGOODBYE.\nLINE DROP",
+    }, manifest_extra={"node": {"execs": ["kid"]}})
+    _write_stub_system(systems_dir, "kid", "(206) 555-0002", responses={
+        "CONNECT": "STATE 0\nDISPLAY 1\nCHILD SCREEN\nPROMPT SELECT:\nLINE UP",
+        "INPUT": "STATE 0\nDISPLAY 0\nLINE RETURN",
+    })
+
+    client = TestClient(create_app(settings=Settings(systems_dir=systems_dir), store=MemoryStore()))
+    r = client.post("/api/session", json={"surface": "home-terminal", "system": "mon"})
+    assert r.status_code == 201
+    sid, token = r.json()["session_id"], r.json()["token"]
+    with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        assert "BANNER" in ws.receive_text()
+        assert "PASSWORD:" in ws.receive_text()                    # prompt
+
+        ws.send_text('{"v":1,"kind":"input","payload":"PENCIL","eom":true}')
+        assert "CHILD SCREEN" in ws.receive_text()   # the child painted, not the monitor
+        assert "SELECT:" in ws.receive_text()                      # prompt
+
+        ws.send_text('{"v":1,"kind":"input","payload":"4","eom":true}')
+        # RETURN resumes the monitor rather than dropping outright — its
+        # own RETURN handler is what ends the call, so GOODBYE. (the
+        # monitor's display, not the child's) precedes NO CARRIER and no
+        # prompt frame is sent in between.
+        assert "GOODBYE." in ws.receive_text()
+        assert "NO CARRIER" in ws.receive_text()
+
+
+# -- captive-account resolution failure (Task 10 review finding 2) ----------
+
+_PENCIL_LOGIN_FRAME = (
+    "SYSTEM/1 school-mon INPUT\n"
+    "STATE 3\n"
+    "PHASE LOGIN\n"
+    "ACCT -\n"
+    "TRIES 0\n"
+    "INPUT PENCIL\n"
+    "END\n"
+)
+
+
+def _school_mon_with_mutated_catlog(tmp_path, mutate):
+    """A private copy of the real school-mon system with only `catlog.dat`
+    changed, so the golden fixtures' rule (every catalog entry resolves to a
+    real file) never has to be broken in the committed data to reach a path
+    that only exists because a real installation's catalog could go stale.
+
+    `shutil.copytree` rather than `_write_stub_system`'s from-scratch
+    manifest+script: this needs the real `login.bas` and its real `RUN`/EXEC
+    resolution logic under test, not a canned echo standing in for it.
+    """
+    dest = tmp_path / "school-mon"
+    shutil.copytree(SYS_DIR / "school-mon", dest)
+    catlog = dest / "data" / "catlog.dat"
+    lines = catlog.read_text().splitlines()
+    catlog.write_text("\n".join(mutate(lines)) + "\n")
+    return dest / "harness" / "bin" / "school-mon"
+
+
+def _run_pencil_login(binary) -> str:
+    out = subprocess.run([str(binary)], input=_PENCIL_LOGIN_FRAME.encode("ascii"),
+                         capture_output=True, timeout=5)
+    return out.stdout.decode("ascii", errors="replace")
+
+
+@needs_school_mon
+def test_a_captive_account_whose_program_is_marked_unrunnable_refuses_instead_of_execing(tmp_path):
+    """PENCIL's captive program is RECORDS, resolved through catlog.dat's
+    RECORDS.BAS row. Force that row's system-id column to the "-" sentinel
+    (unrunnable, same as RUNBOOK.DOC's) and the login must refuse out loud —
+    not silently print an EXEC line with nothing usable after it, which is
+    what login.bas:8680-8698 used to do before this fix.
+    """
+    def mutate(lines):
+        return [l[:27] + "-" if l.startswith("RECORDS.BAS") else l for l in lines]
+
+    binary = _school_mon_with_mutated_catlog(tmp_path, mutate)
+    text = _run_pencil_login(binary)
+    assert "PROGRAM UNAVAILABLE - CALL PLANT SERVICE" in text, text
+    assert "LINE DROP" in text, text
+    # The actual defect: an EXEC line with a bad target crashing the turn
+    # downstream. A test that only checked the message above would still
+    # pass if a stray EXEC frame slipped out alongside it — assert its
+    # absence explicitly.
+    assert not any(line.startswith("EXEC ") for line in text.splitlines()), text
+
+
+@needs_school_mon
+def test_a_captive_account_whose_program_has_no_catalog_row_refuses_instead_of_execing(tmp_path):
+    """Same refusal when RECORDS.BAS is missing from the catalog entirely,
+    not just marked unrunnable — the other of the two holes Finding 2
+    covered (no match at all vs. a match that resolves to nothing usable)."""
+    def mutate(lines):
+        return [l for l in lines if not l.startswith("RECORDS.BAS")]
+
+    binary = _school_mon_with_mutated_catlog(tmp_path, mutate)
+    text = _run_pencil_login(binary)
+    assert "PROGRAM UNAVAILABLE - CALL PLANT SERVICE" in text, text
+    assert "LINE DROP" in text, text
+    assert not any(line.startswith("EXEC ") for line in text.splitlines()), text
