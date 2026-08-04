@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir ".[prod]"
 
 # The built program pack: games/systems/joshua sources, manifests, and binaries
 # in the pack layout (<cat>/<id>/harness/bin/<binary>). The system wrappers
-# (school, protovision) resolve their source relative to the binary, so the
+# (school-mon, school, protovision) resolve their source relative to the binary, so the
 # whole pack tree is copied, not just the binaries.
 COPY --from=programs /src /opt/wopr/pack
 
@@ -38,8 +38,10 @@ COPY --from=programs /src /opt/wopr/pack
 # language runtime + wrapper are present) — fails the build if not.
 RUN printf 'SYSTEM/1 airline CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/airline/harness/bin/airline | grep -q PANAMAC
+RUN printf 'SYSTEM/1 school-mon CONNECT\nSTATE 0\nEND\n' \
+      | /opt/wopr/pack/systems/school-mon/harness/bin/school-mon | grep -q 'SEATTLE PUBLIC SCHOOL DISTRICT'
 RUN printf 'SYSTEM/1 school CONNECT\nSTATE 0\nEND\n' \
-      | /opt/wopr/pack/systems/school/harness/bin/school | grep -q 'SEATTLE PUBLIC SCHOOL DISTRICT'
+      | /opt/wopr/pack/systems/school/harness/bin/school | grep -q 'DISTRICT DATANET'
 RUN printf 'SYSTEM/1 protovision CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/protovision/harness/bin/protovision | grep -q PROTOVISION
 RUN printf 'SYSTEM/1 pactel CONNECT\nSTATE 0\nEND\n' \
