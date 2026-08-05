@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GAMES, boardAt, bestMove, gamesCompleted, openSquares, selfPlayGame, winner } from "./selfplay.ts";
+import { GAMES, NOWIN_VERDICT, boardAt, bestMove, gamesCompleted, openSquares, selfPlayGame, winner } from "./selfplay.ts";
 
 test("winner: reads all eight lines, and nothing from an empty row", () => {
   assert.equal(winner(["X", "X", "X", " ", " ", " ", " ", " ", " "]), "X");
@@ -72,4 +72,16 @@ test("gamesCompleted: starts at zero and only ever climbs", () => {
     previous = n;
   }
   assert.ok(previous > 0, "tally never advanced");
+});
+
+// The router renders this verdict in the film's three-line break for the
+// teletype (NOWIN_VERDICT in emulator/node/app/router.py). The panel does not,
+// and that is deliberate: the break exists to satisfy the teletype contract —
+// everything Joshua says is at most 4 lines of at most 60 characters — which
+// is a property of the teletype, not of the words. The panel is a wide wall
+// display bound by no such limit, so it carries the line whole. Pinned here so
+// a later fidelity sweep changes it by decision rather than by reflex.
+test("the wall panel carries the NO-WIN verdict on one line", () => {
+  assert.equal(NOWIN_VERDICT, "A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.");
+  assert.ok(!NOWIN_VERDICT.includes("\n"), "the panel is not bound by the teletype's line budget");
 });

@@ -11,6 +11,18 @@
 export type Cell = "X" | "O" | " ";
 export type Board = Cell[];
 
+/** What the bank prints once the machine has taught itself the lesson.
+ *
+ *  The teletype gets this in the film's three-line break (the router's own
+ *  NOWIN_VERDICT). The wall panel does not, deliberately: that break exists to
+ *  satisfy the teletype contract — at most 4 lines of at most 60 characters —
+ *  which is a property of the teletype, not of the words. A wide wall display
+ *  is bound by no such limit and carries the line whole (#44).
+ *
+ *  Duplicated rather than imported: `emulator/web` and `emulator/node` are
+ *  separate modules of the federation and share specs, not code. */
+export const NOWIN_VERDICT = "A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.";
+
 export const EMPTY: Board = [" ", " ", " ", " ", " ", " ", " ", " ", " "];
 
 const LINES: readonly (readonly [number, number, number])[] = [

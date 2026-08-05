@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CRTScreen, StatusPanel, WoprLink, endpointFromQuery, type LinkEvent } from "@real-wopr/crt-kit";
 import { FeedAssembler, type GtwFeed } from "./feed";
-import { boardAt, gamesCompleted, GAMES, type Board } from "./selfplay";
+import { boardAt, gamesCompleted, GAMES, NOWIN_VERDICT, type Board } from "./selfplay";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
@@ -203,7 +203,7 @@ function SelfPlayBank({ tick }: { tick: number }) {
         ))}
       </div>
       <div style={{ marginTop: "0.7em", letterSpacing: "0.15em", opacity: 0.85 }}>
-        A STRANGE GAME. THE ONLY WINNING MOVE IS NOT TO PLAY.
+        {NOWIN_VERDICT}
       </div>
     </div>
   );
