@@ -23,12 +23,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cp "$SRC/login.bas" "$tmp/"
 mkdir -p "$tmp/data"
-cp "$SRC"/data/*.dat "$SRC"/data/*.doc "$SRC"/data/*.txt "$tmp/data/" 2>/dev/null
+cp "$SRC"/data/*.dat "$SRC"/data/*.doc "$SRC"/data/*.txt "$SRC"/data/*.cmd "$tmp/data/" 2>/dev/null
 
 # A row shaped exactly like a real one, flagged readable, whose file is
 # deliberately never created — the shape a Task-2-style row addition could
-# ship by mistake.
-printf 'GHOST.DOC    [1,2]   001 0 -        Y\n' >> "$tmp/data/catlog.dat"
+# ship by mistake. Width matches Task 4's widened EXEC-TARGET field (39
+# chars total; see login.bas's 8642 comment and verify-catalog.py).
+printf 'GHOST.DOC    [1,2]   001 0 -          Y\n' >> "$tmp/data/catlog.dat"
 
 raw="$(cd "$tmp" && bwbasic "login.bas" 2>/dev/null <<'EOF'
 SYSTEM/1 school-mon INPUT

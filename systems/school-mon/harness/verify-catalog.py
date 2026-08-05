@@ -5,8 +5,9 @@ under data/.
 This is the loader's own honesty rule (docs: every disk catalogue entry
 resolves to a real file), checked from outside the running program instead
 of only being trusted at runtime. It mirrors the exact byte offsets
-login.bas's 8600 loader uses: NAME 1-12, EXEC-TARGET 28-35, READ-FLAG at
-37. A row that fails this check is exactly the shape TYPE's 4300 handler
+login.bas's 8600 loader uses: NAME 1-12, EXEC-TARGET 28-37, READ-FLAG at
+39 (widened from 28-35 / 37 in Task 4, to fit the "school-ada" peer id).
+A row that fails this check is exactly the shape TYPE's 4300 handler
 must now refuse in-character rather than crash on (see login.bas
 4320-4330 and verify-missing-file-refusal.sh beside this script).
 
@@ -30,7 +31,7 @@ def main() -> int:
         for lineno, raw in enumerate(f, 1):
             line = raw.rstrip("\n")
             name = line[0:12].rstrip()
-            flag = line[36:37] if len(line) > 36 else ""
+            flag = line[38:39] if len(line) > 38 else ""
             if flag != "Y":
                 continue
             path = os.path.join(ROOT, "data", name.lower())
