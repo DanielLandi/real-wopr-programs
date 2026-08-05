@@ -423,11 +423,37 @@ def test_logon_banner_rides_above_the_prompt():
     sid, token = body["session_id"], body["token"]
     with c.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
         greet = json.loads(ws.receive_text())["payload"]
-    assert "GREETINGS FROM SAO PAULO" in greet
-    assert "LOGON:" in greet
+    # Exact, not substring: the banner rides *above* an otherwise untouched
+    # prompt, each on its own line. A substring check passes just as happily
+    # when the banner lands beside LOGON: or swallows its newline (#164).
+    assert greet == "\nGREETINGS FROM SAO PAULO\n\nLOGON:\n"
     # default: no banner, bare prompt
     c2 = TestClient(create_app(settings=Settings(), store=MemoryStore()))
     b2 = c2.post("/api/session", json={"surface": "home-terminal"}).json()
     with c2.websocket_connect(f"/ws/session/{b2['session_id']}?token={b2['token']}") as ws:
         greet2 = json.loads(ws.receive_text())["payload"]
     assert "GREETINGS FROM" not in greet2 and "LOGON:" in greet2
+
+
+def test_the_system_speaks_first_with_the_bare_logon_prompt(client):
+    """S4-01, the film's opening beat: the caller types nothing and the machine
+    speaks — WOPR answers a fresh line with LOGON: before any input.
+
+    Pinned to the byte, not to a substring (real-wopr#164). The beat is not
+    "the word LOGON appears somewhere": it is one output frame carrying exactly
+    "\\nLOGON:\\n" — the leading newline that lifts it off the dial noise, the
+    colon, and nothing else above it on the main exchange, where no
+    BRIDGE_LOGON_BANNER is set. Every earlier assertion of this greeting was
+    `"LOGON:" in payload`, which a banner, a prefix or a lost newline would all
+    have satisfied.
+
+    This lives here and not in real-wopr's film evals by necessity: the
+    greeting is emitted by the WS layer, and run_evals.py drives the Router
+    in-process and never opens a socket. Ledger row S4-01 records the split.
+    """
+    body = make_session(client)
+    sid, token = body["session_id"], body["token"]
+    with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        greet = json.loads(ws.receive_text())
+    assert greet["kind"] == "output"
+    assert greet["payload"] == "\nLOGON:\n"

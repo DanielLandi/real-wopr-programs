@@ -239,7 +239,12 @@ export default function HomeTerminal() {
     frames.current?.resetCall();
     voice.current?.cancel();
     appendText(`\nDIALING ${target ? target.name : "UNKNOWN"}\n`);
-    if (link.current && active.current?.id === target?.id) {
+    // Only a line that is still up can be retried on. Testing that a WoprLink
+    // merely exists stranded every redial of the system you had just hung up
+    // from: the object outlived its socket, so the control frame went into a
+    // closed WebSocket and was discarded, and the terminal sat at DIALING
+    // (#27). A dead link falls through to the normal mint-and-connect path.
+    if (link.current?.isOpen() && active.current?.id === target?.id) {
       link.current.sendControl("DIAL"); // retry on the same line
       return;
     }

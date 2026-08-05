@@ -72,8 +72,24 @@ export class WoprLink {
     };
   }
 
+  /** The socket if it is carrying, else null — the one place that decides
+   *  what "still a line" means, so isOpen() and sendEnvelope() cannot drift. */
+  private openSocket(): WebSocket | null {
+    return this.ws && this.ws.readyState === WebSocket.OPEN ? this.ws : null;
+  }
+
+  /** Whether this is still a live line: the far end accepted it and the
+   *  carrier has not gone away. A caller that keeps a link across calls must
+   *  ask before treating one as a line it can act on — a dial retried down a
+   *  closed socket is discarded here without an error, which is exactly how a
+   *  redial used to stall at DIALING forever (#27). */
+  isOpen(): boolean {
+    return this.openSocket() !== null;
+  }
+
   private sendEnvelope(kind: FrameKind, payload: string): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const ws = this.openSocket();
+    if (!ws) return;
     const env: Envelope = {
       v: 1,
       session: this.opts.session,
@@ -83,7 +99,7 @@ export class WoprLink {
       payload,
       eom: true,
     };
-    this.ws.send(JSON.stringify(env));
+    ws.send(JSON.stringify(env));
   }
 
   /** Send one line of user input (a command, a move, or conversation). */

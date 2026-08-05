@@ -164,3 +164,36 @@ test("an unexpected close with no control frame announces NO CARRIER itself", ()
   assert.equal(idle.state.text, "");
   assert.equal(idle.state.phase, "idle");
 });
+
+// The prompt is only ever changed by an arriving prompt frame, so before #26
+// nothing reset it when the carrier went away: PANAMAC's "READY:" outlived the
+// line it belonged to, and the local console interpreter answered under the
+// dead system's prompt. Both carrier-loss paths own the NO CARRIER
+// announcement, so both must return the input line to the local console.
+test("a control NO CARRIER returns the input line to the local console", () => {
+  const { state, handler } = harness();
+  for (const e of shaped("prompt", "READY:")) handler.onEvent(e);
+  assert.equal(state.prompt, "READY:", "the dialled system owns the prompt while the line is up");
+  handler.onEvent({
+    type: "frame",
+    frame: { v: 1, session: "s1", seq: 9, kind: "control", link: "dialup-300", payload: "NO CARRIER", eom: true },
+  } as FrameEvent);
+  assert.equal(state.prompt, ">");
+});
+
+test("an unexpected close returns the input line to the local console", () => {
+  const { state, handler } = harness();
+  for (const e of shaped("prompt", "READY:")) handler.onEvent(e);
+  assert.equal(state.prompt, "READY:");
+  handler.onEvent({ type: "close" });
+  assert.equal(state.prompt, ">");
+});
+
+// An idle close is not a carrier loss — it prints nothing and changes no
+// phase, so it must not touch the prompt either.
+test("an idle close leaves the prompt alone", () => {
+  const { state, handler } = harness("idle");
+  for (const e of shaped("prompt", "LOCAL>")) handler.onEvent(e);
+  handler.onEvent({ type: "close" });
+  assert.equal(state.prompt, "LOCAL>");
+});
