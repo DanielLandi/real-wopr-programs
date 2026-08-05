@@ -278,11 +278,14 @@
 4738 PRINT "LINE UP"
 4740 PRINT "END"
 4742 END
-5000 REM option 3: attendance is a stub (out of scope this semester)
+5000 REM option 3: attendance is not entered here - it is a batch job the
+5001 REM operator runs at the console, so this program can only explain
+5002 REM that and refuse interactive entry.
 5010 PRINT "SYSTEM/1 school OK"
 5020 GOSUB 7500
-5030 PRINT "DISPLAY 7"
-5040 PRINT "ATTENDANCE REPORTING IS CLOSED FOR THE SEMESTER."
+5030 PRINT "DISPLAY 8"
+5040 PRINT "ATTENDANCE IS POSTED BY THE MONTHLY ADA RUN."
+5042 PRINT "ADARUN IS SUBMITTED FROM THE SYSTEM CONSOLE."
 5050 GOSUB 7700
 5060 PRINT "LINE UP"
 5070 PRINT "END"

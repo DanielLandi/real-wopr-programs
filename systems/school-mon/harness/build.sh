@@ -32,3 +32,12 @@ exit 0
 WRAP
 chmod +x bin/school-mon
 echo "built systems/school-mon -> harness/bin/school-mon"
+
+# Catalog honesty gate: every catlog.dat row flagged readable ("Y") must
+# name a real file, and a row that somehow isn't must be refused
+# in-character (not crash bwBASIC) — see verify-catalog.sh and
+# verify-missing-file-refusal.sh beside this script for why these aren't
+# golden fixtures. Both are shell, not Python: this script runs inside
+# emulator/node/Dockerfile's "programs" stage, which has no python3.
+./verify-catalog.sh
+./verify-missing-file-refusal.sh

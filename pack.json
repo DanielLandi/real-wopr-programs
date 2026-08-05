@@ -175,6 +175,15 @@
       "binary": "school"
     },
     {
+      "id": "school-ada",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "basic",
+      "title": "ADAR11 - STATE ADA CLAIM",
+      "path": "systems/school-ada",
+      "binary": "school-ada"
+    },
+    {
       "id": "school-db",
       "kind": "system",
       "protocol": "SYSTEM/1",
