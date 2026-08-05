@@ -60,3 +60,4 @@ echo "built systems/school-mon -> harness/bin/school-mon"
 ./verify-catalog.sh
 ./verify-missing-file-refusal.sh
 ./verify-crash-guard.sh
+./verify-submit-resolver.sh
