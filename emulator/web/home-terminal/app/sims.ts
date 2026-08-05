@@ -26,10 +26,11 @@ import { DIALABLE_SYSTEMS } from "./dial-systems.generated.ts";
 /** Editorial choices about the phone book — the only place a human writes a
  *  system id, and every one is checked against the generated list below.
  *
- *  `name` is the directory label, deliberately shorter than the manifest
- *  title ("SEATTLE SCHOOL DISTRICT", not "SEATTLE PUBLIC SCHOOL DISTRICT
- *  DATANET"). `label` is the wardial sweep's domain word. Order here is the
- *  order the directory prints. */
+ *  `name` is the directory label. It need not match the manifest `title`
+ *  verbatim — school-mon's title is already the short "SEATTLE SCHOOL
+ *  DISTRICT"; the longer "SEATTLE PUBLIC SCHOOL DISTRICT DATANET" is the
+ *  runtime connect banner (login.bas), not the title. `label` is the wardial
+ *  sweep's domain word. Order here is the order the directory prints. */
 const LISTED: ReadonlyArray<{ systemId: string; name: string; label: string }> = [
   { systemId: "airline", name: "PAN AM / PANAMAC", label: "AIRLINE" },
   // The monitor, not the records program: school-mon owns the number and the
@@ -45,11 +46,6 @@ const UNLISTED: Readonly<Record<string, string>> = {
   reference: "the SYSTEM/1 reference implementation — not a system in the film",
 };
 
-/** Exposed only so a test can prove `UNLISTED` still says something — it has
- *  no other consumer, so an accidentally emptied table would otherwise be
- *  invisible to every test in this file. */
-export const UNLISTED_SYSTEM_IDS: readonly string[] = Object.keys(UNLISTED);
-
 const BY_ID = new Map(DIALABLE_SYSTEMS.map((s) => [s.systemId, s]));
 
 for (const { systemId } of LISTED) {
@@ -64,6 +60,24 @@ for (const { systemId } of LISTED) {
 for (const systemId of Object.keys(UNLISTED)) {
   if (!BY_ID.has(systemId)) {
     throw new Error(`sims.ts excludes "${systemId}", which is not a dialable system.`);
+  }
+}
+// The direction the two loops above don't check: every dialable system must
+// be accounted for here, one way or the other. Without this, a newly added
+// system with a manifest "number" regenerates cleanly, passes --check, and
+// appears in neither the phone book nor the wardial sweep with no signal
+// anywhere — the same silent-rot failure this whole design exists to
+// eliminate, just running in the opposite direction.
+const LISTED_IDS = new Set(LISTED.map((entry) => entry.systemId));
+const UNLISTED_IDS = new Set(Object.keys(UNLISTED));
+for (const { systemId } of DIALABLE_SYSTEMS) {
+  if (!LISTED_IDS.has(systemId) && !UNLISTED_IDS.has(systemId)) {
+    throw new Error(
+      `sims.ts does not mention "${systemId}", which is dialable ` +
+        `(systems/${systemId}/harness/manifest.json declares a "number"). ` +
+        `List it in LISTED to put it in the phone book, or exclude it in ` +
+        `UNLISTED with a reason if it belongs off the film's list on purpose.`,
+    );
   }
 }
 

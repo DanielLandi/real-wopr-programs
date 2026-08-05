@@ -174,8 +174,21 @@ The pack index at the repository root:
 }
 ```
 
-`kind` is `game` | `system` | `joshua`. `path` is the program directory. Regenerate the index
-after adding a program, or edit it by hand.
+`kind` is `game` | `system` | `joshua`. `path` is the program directory. `programs[]` here, and
+`emulator/web/home-terminal/app/dial-systems.generated.ts`, are both **generated** from every
+`harness/manifest.json` by `tools/gen-dial-directory.py` — the manifest is the one authority for
+a program's id, and a hand edit to either generated file is a lint failure waiting to happen:
+
+```
+tools/gen-dial-directory.py            # regenerate both from the manifests
+tools/gen-dial-directory.py --check    # exit 1 if either is stale (what CI runs)
+```
+
+A `systems/` manifest that declares a `number` becomes **dialable**, and
+`emulator/web/home-terminal/app/sims.ts` must account for it — listed in the phone book or
+explicitly excluded in `UNLISTED` with a reason. That file throws at import if a dialable system
+is mentioned nowhere in it, so a new dial-in system that regenerates cleanly but is never
+mentioned in `sims.ts` fails loudly instead of silently missing the directory.
 
 ## Packaging
 

@@ -47,7 +47,13 @@ games/hearts/harness/bin/hearts < games/hearts/harness/tests/01-new.in
    (reads the source from `..`, writes `bin/<binary>`), and `harness/tests/` golden pairs.
 3. Speak one of the wire protocols in [PACK.md](./PACK.md): one request frame in, one response
    frame out, deterministic, and stateless between calls.
-4. Add your program to `pack.json` (or regenerate the index).
+4. Regenerate the index: `tools/gen-dial-directory.py`. It derives `pack.json`'s `programs[]`
+   (and, for `systems/`, the dial directory) from every `harness/manifest.json` — manifests are
+   the authority, and CI runs `tools/gen-dial-directory.py --check`, so a hand-edited or stale
+   `pack.json` fails the build. If your new program is a `systems/` entry with a `number` (it
+   answers a phone line), it is now **dialable**, and `emulator/web/home-terminal/app/sims.ts`
+   must say what to do with it: list it to put it in the phone book, or exclude it in `UNLISTED`
+   with a reason. Import throws at build/test time otherwise, naming the id.
 5. `make build && make test`.
 
 ## Reinterpret an existing game
