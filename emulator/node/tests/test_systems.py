@@ -1,8 +1,11 @@
 import json
+from pathlib import Path
 
 import pytest
 
 from app.systems import Program, load_programs, load_systems, validate_execs
+
+PACK = Path(__file__).resolve().parents[3]
 
 
 def _write_pack(tmp_path, *manifests):
@@ -78,3 +81,34 @@ def test_load_programs_rejects_a_falsy_non_list_execs(tmp_path, bad):
                                   "node": {"execs": bad}})
     with pytest.raises(ValueError, match="school-mon.*execs.*not a list"):
         load_programs(pack)
+
+
+def test_a_manifest_without_a_number_is_not_dialable(tmp_path):
+    """The distinction the whole id-authority design rests on.
+
+    `school` is built, golden-tested and reachable on the bus, but it has no
+    `number` and so must not be dialable. A guard that tested directory
+    existence instead would pass on exactly the bug that shipped: sims.ts
+    naming `school` after the number moved to `school-mon`.
+    """
+    (tmp_path / "onbus" / "harness").mkdir(parents=True)
+    (tmp_path / "onbus" / "harness" / "manifest.json").write_text(json.dumps({
+        "id": "onbus", "title": "BUS ONLY", "language": "basic", "binary": "onbus",
+    }))
+    (tmp_path / "dialin" / "harness").mkdir(parents=True)
+    (tmp_path / "dialin" / "harness" / "manifest.json").write_text(json.dumps({
+        "id": "dialin", "title": "DIAL IN", "language": "basic", "binary": "dialin",
+        "number": "(206) 555-0001",
+    }))
+
+    registry = load_systems(tmp_path)
+
+    assert "dialin" in registry
+    assert "onbus" not in registry, "a system with no number is not in the phone book"
+
+
+def test_the_real_pack_matches_the_documented_dialable_set():
+    """Guards the plan's own premise. If this list changes, the phone book
+    changes with it — deliberately, via Task 3's generator."""
+    registry = load_systems(PACK / "systems")
+    assert set(registry) == {"airline", "pactel", "protovision", "reference", "school-mon"}
