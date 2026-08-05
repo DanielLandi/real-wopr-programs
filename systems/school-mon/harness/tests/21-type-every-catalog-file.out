@@ -1,0 +1,13 @@
+SYSTEM/1 school-mon OK
+STATE 3
+PHASE READY
+ACCT [1,1]
+TRIES 0
+DISPLAY 4
+[1,1]   MERIDIAN     1 0 -
+[1,2]   SYSLIB       1 0 -
+[20,10] PENCIL       0 1 RECORDS
+[20,20] COMPASS      0 0 -
+PROMPT Ready
+LINE UP
+END

@@ -1,3 +1,9 @@
+SYSTEM/1 school-mon OK
+STATE 3
+PHASE READY
+ACCT [1,1]
+TRIES 0
+DISPLAY 10
 LOGIN.BAS    [1,2]   018 1 -        N
 RECORDS.BAS  [20,10] 022 0 school   N
 ACCT.DAT     [1,1]   001 1 -        Y
@@ -8,3 +14,6 @@ SCHED.DAT    [20,10] 078 0 -        N
 RUNBOOK.DOC  [1,2]   004 0 -        Y
 ADANOT.DOC   [1,2]   003 0 -        Y
 NOTES.TXT    [1,1]   002 1 -        Y
+PROMPT Ready
+LINE UP
+END

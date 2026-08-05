@@ -17,7 +17,7 @@
 123 DIM CB(40)
 124 DIM CV(40)
 125 GOSUB 8500
-126 DIM CD$(40), CS$(40)
+126 DIM CD$(40), CS$(40), CR$(40)
 127 GOSUB 8600
 128 GOSUB 8680
 130 REM ---- parse the SYSTEM/1 request from stdin ----
@@ -266,11 +266,20 @@
 8644 T9$ = MID$(L9$, 28, 8)
 8645 GOSUB 9000
 8646 CS$(NC) = T9$
-8660 IF CN$(NC) = "RUNBOOK.DOC" THEN CD$(NC) = "data/runbook.doc"
-8662 IF CN$(NC) = "ADANOT.DOC" THEN CD$(NC) = "data/adanot.doc"
-8664 IF CN$(NC) = "NOTES.TXT" THEN CD$(NC) = "data/notes.txt"
-8666 IF CN$(NC) = "CATLOG.DAT" THEN CD$(NC) = "data/catlog.dat"
-8668 IF CN$(NC) = "ACCT.DAT" THEN CD$(NC) = "data/acct.dat"
+8647 T9$ = MID$(L9$, 37, 1)
+8648 GOSUB 9000
+8649 CR$(NC) = T9$
+8650 REM ---- derive the TYPE path from the catalog itself, not a
+8651 REM parallel filename table: a row is typeable iff its EXEC-target
+8652 REM is "-" (not another program's dispatch target) and CATLOG.DAT's
+8653 REM readable-flag column (37) says "Y". STUDNT.DAT, COURSE.DAT and
+8654 REM SCHED.DAT live on systems/school's disk, not this one, so their
+8655 REM flag is "N" and CD$ stays "-".
+8656 IF CS$(NC) <> "-" THEN GOTO 8669
+8657 IF CR$(NC) <> "Y" THEN GOTO 8669
+8658 T9$ = CN$(NC)
+8659 GOSUB 9100
+8663 CD$(NC) = "data/" + T9$
 8669 GOTO 8615
 8670 CLOSE #1
 8675 RETURN
@@ -359,3 +368,12 @@
 9020 IF RIGHT$(T9$, 1) <> " " THEN RETURN
 9030 T9$ = LEFT$(T9$, LEN(T9$) - 1)
 9040 GOTO 9010
+9100 REM lowercase T9$ in place (period-plausible: CHR$/ASC arithmetic)
+9110 L7$ = ""
+9120 FOR I7 = 1 TO LEN(T9$)
+9130 C7$ = MID$(T9$, I7, 1)
+9140 IF C7$ >= "A" AND C7$ <= "Z" THEN C7$ = CHR$(ASC(C7$) + 32)
+9150 L7$ = L7$ + C7$
+9160 NEXT I7
+9170 T9$ = L7$
+9180 RETURN
