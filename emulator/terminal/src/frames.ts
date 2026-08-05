@@ -74,6 +74,10 @@ export class HomeFrameHandler {
   // Set when a control NO CARRIER frame has already been printed for this
   // drop, so the WS close that follows it does not print a second NO CARRIER.
   private sawNoCarrierFrame = false;
+  // What the input line reads when no carrier owns it: the local console
+  // interpreter's own prompt. A dialled system replaces it for the life of
+  // the call and carrier loss restores it (#26).
+  private readonly restingPrompt = ">";
 
   constructor(sinks: HomeFrameSinks) {
     this.sinks = sinks;
@@ -104,6 +108,11 @@ export class HomeFrameHandler {
       if (unexpected && !this.sawNoCarrierFrame) {
         this.sinks.appendRaw("\n\nNO CARRIER\n");
       }
+      // The line is gone, so the dialled system's prompt must go with it —
+      // otherwise the local console answers under PANAMAC's "READY:" (#26).
+      // Gated on `unexpected` for the same reason the announcement is: an
+      // idle close is not a carrier loss and owns nothing on the input line.
+      if (unexpected) this.sinks.setPrompt(this.restingPrompt);
       this.sawNoCarrierFrame = false;
       this.sinks.setPhase((p) => (p === "connected" || p === "dialing" ? "no-carrier" : p));
       return;
@@ -136,7 +145,7 @@ export class HomeFrameHandler {
       if (!f.eom) return;
       const p = this.promptBuf;
       this.promptBuf = "";
-      this.sinks.setPrompt(p || ">");
+      this.sinks.setPrompt(p || this.restingPrompt);
       return;
     }
     if (f.kind === "output") {
@@ -153,6 +162,7 @@ export class HomeFrameHandler {
       // frame does not print a duplicate NO CARRIER (#88).
       this.sawNoCarrierFrame = true;
       this.sinks.appendRaw("\n\nNO CARRIER\n");
+      this.sinks.setPrompt(this.restingPrompt);
       this.sinks.setPhase("no-carrier");
     }
   }
