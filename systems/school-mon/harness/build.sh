@@ -20,10 +20,28 @@ out="$(bwbasic "login.bas" 2>/dev/null | sed -n '/^SYSTEM\/1 /,/^END$/p')"
 # matching the SYSTEM/1 range and exits 0 on its own — silently turning a
 # crash into an empty, well-formed-looking frame. Treat empty output as a
 # failure too, not just an explicit PROTOCOL ERROR.
+#
+# That guard alone is not enough (review Finding 1): every abort inside
+# the range the sed above captures happens *after* some PRINT has already
+# run, so `out` is non-empty even when bwBASIC died mid-response — the sed
+# range has an open start (`/^SYSTEM\/1 /`) but no matching `/^END$/` ever
+# arrives, so it just prints everything through EOF: a truncated,
+# headerless-body frame that used to slip past `[ -z "$out" ]` with exit
+# 0. A well-formed response always ends in "END" (see 7000/7900's own
+# tails); require that too.
 if [ -z "$out" ]; then
   echo "school-mon: bwbasic produced no SYSTEM/1 response (a runtime abort?)" >&2
   exit 1
 fi
+case "$out" in
+  *$'\n'END) ;;
+  END) ;;
+  *)
+    echo "school-mon: bwbasic response did not end in END (a runtime abort mid-response?)" >&2
+    printf '%s\n' "$out" >&2
+    exit 1
+    ;;
+esac
 printf '%s\n' "$out"
 case "$out" in
   *"PROTOCOL ERROR"*) exit 1 ;;
@@ -41,3 +59,5 @@ echo "built systems/school-mon -> harness/bin/school-mon"
 # emulator/node/Dockerfile's "programs" stage, which has no python3.
 ./verify-catalog.sh
 ./verify-missing-file-refusal.sh
+./verify-crash-guard.sh
+./verify-submit-resolver.sh

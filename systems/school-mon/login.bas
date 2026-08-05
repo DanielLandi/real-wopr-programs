@@ -71,10 +71,11 @@
 371 RS$ = LEFT$(R9$, SP9 - 1)
 372 NR = VAL(MID$(R9$, SP9 + 1))
 373 IF NR <= 0 THEN GOTO 380
-374 FOR K9 = 1 TO NR
-375 LINE INPUT RX$
-376 RL$(K9) = RX$
-377 NEXT K9
+374 IF NR > 12 THEN GOTO 7000
+375 FOR K9 = 1 TO NR
+376 LINE INPUT RX$
+377 RL$(K9) = RX$
+378 NEXT K9
 380 LINE INPUT E$
 381 IF E$ <> "END" THEN GOTO 7000
 400 REM ---- dispatch ----
@@ -177,37 +178,47 @@
 3702 REM (systems.md 2.3: a subsystem being down is an ordinary Tuesday,
 3703 REM not a hang) leaves the job RUNNING rather than losing it - the
 3704 REM next turn's 4900 simply tries the CALL again.
-3705 IF RS$ <> "OK" THEN GOTO 3750
-3706 IF NR <= 0 THEN GOTO 3750
-3707 REM JR$ rides STATE as a "|"-separated string (task 3). A reply line
-3708 REM that itself contained "|" would desync PRINT's split (task 5)
-3709 REM silently, so refuse loudly instead of corrupting it - no field
-3710 REM school-ada emits can produce one today (main.bas's field notes).
-3711 FOR K9 = 1 TO NR
-3712 IF INSTR(RL$(K9), "|") > 0 THEN GOTO 7000
-3713 NEXT K9
-3714 JR$ = RL$(1)
-3715 IF NR = 1 THEN GOTO 3730
-3716 FOR K9 = 2 TO NR
-3717 JR$ = JR$ + "|" + RL$(K9)
-3718 NEXT K9
-3730 JS = 2
-3732 PRINT "SYSTEM/1 school-mon OK"
-3734 GOSUB 7500
-3736 PRINT "DISPLAY 1"
-3738 PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " DONE"
-3740 GOSUB 7900
-3742 END
-3750 REM the peer did not answer, or answered with no lines (school-ada
-3751 REM never does - see main.bas - but an empty reply is otherwise
-3752 REM indistinguishable from "not run yet", so treat it the same way
-3753 REM rather than guess). JS stays RUNNING; 4900 retries next turn.
-3754 PRINT "SYSTEM/1 school-mon OK"
-3756 GOSUB 7500
-3758 PRINT "DISPLAY 1"
-3760 PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " FAILED - RETRY"
-3762 GOSUB 7900
-3764 END
+3705 REM ---- forged-state guard (review Finding 5): every other dispatch
+3706 REM target checks the session actually is what it claims before
+3707 REM acting on it - INPUT checks HI (3305), RETURN checks the
+3708 REM account's captive flag (3808). RESUME checked only RS$/NR: a
+3709 REM forged JOB 0 or PHASE LOGIN reached the DONE branch below and
+3710 REM could hand a Ready prompt to a session that was never
+3711 REM authenticated. Refuse anything that is not genuinely a RUNNING
+3712 REM job in an authenticated Ready session.
+3713 IF PH$ <> "READY" THEN GOTO 7000
+3714 IF JQ = 0 OR JS <> 1 THEN GOTO 7000
+3715 IF RS$ <> "OK" THEN GOTO 3760
+3716 IF NR <= 0 THEN GOTO 3760
+3717 REM JR$ rides STATE as a "|"-separated string (task 3). A reply line
+3718 REM that itself contained "|" would desync PRINT's split (task 5)
+3719 REM silently, so refuse loudly instead of corrupting it - no field
+3720 REM school-ada emits can produce one today (main.bas's field notes).
+3721 FOR K9 = 1 TO NR
+3722 IF INSTR(RL$(K9), "|") > 0 THEN GOTO 7000
+3723 NEXT K9
+3724 JR$ = RL$(1)
+3725 IF NR = 1 THEN GOTO 3740
+3726 FOR K9 = 2 TO NR
+3727 JR$ = JR$ + "|" + RL$(K9)
+3728 NEXT K9
+3740 JS = 2
+3742 PRINT "SYSTEM/1 school-mon OK"
+3744 GOSUB 7500
+3746 PRINT "DISPLAY 1"
+3748 PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " DONE"
+3750 GOSUB 7900
+3752 END
+3760 REM the peer did not answer, or answered with no lines (school-ada
+3761 REM never does - see main.bas - but an empty reply is otherwise
+3762 REM indistinguishable from "not run yet", so treat it the same way
+3763 REM rather than guess). JS stays RUNNING; 4900 retries next turn.
+3764 PRINT "SYSTEM/1 school-mon OK"
+3766 GOSUB 7500
+3768 PRINT "DISPLAY 1"
+3770 PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " FAILED - RETRY"
+3772 GOSUB 7900
+3774 END
 4000 REM ---- Ready: the monitor's own command surface ----
 4001 REM MV = privilege of the account this session logged in as. The
 4002 REM PPN does come out of STATE (6020); the privilege never does -
@@ -253,18 +264,13 @@
 4903 REM it to the peer that answers it through the same catalog column
 4904 REM 8680 already uses for a captive account's program - one
 4905 REM mapping, not a second table.
-4906 P8$ = JP$ + ".BAS"
-4907 CJ = 0
-4910 FOR J = 1 TO NC
-4915 IF CN$(J) = P8$ THEN CJ = J
-4920 NEXT J
+4906 GOSUB 8100
 4925 IF CJ = 0 THEN GOTO 7000
-4930 IF CS$(CJ) = "-" OR CS$(CJ) = "" THEN GOTO 7000
-4932 REM symmetry with 4526's guard: a batch job must resolve to a
-4933 REM CALL-only row (KIND "C"), never one that is really an EXEC
-4934 REM target (KIND "E") - a catalog mistake here is a protocol fault,
-4935 REM not a hang.
-4936 IF CK$(CJ) <> "C" THEN GOTO 7000
+4932 REM CJ's resolution - name match, CALL-only KIND "C", non-blank
+4933 REM peer, the same symmetry 4526's guard needs on the EXEC side -
+4934 REM all happens once now, in 8100 (review Finding 4). SUBMIT (5000)
+4935 REM shares this subroutine, so a job file naming an unresolvable
+4936 REM program is refused when submitted, not here two turns later.
 4938 PRINT "SYSTEM/1 school-mon OK"
 4940 GOSUB 7500
 4945 PRINT "DISPLAY 1"
@@ -305,6 +311,10 @@
 5060 CLOSE #2
 5065 IF LEFT$(L9$, 4) <> "RUN " THEN GOTO 7000
 5070 JP$ = MID$(L9$, 5)
+5071 REM ---- resolve JP$ now via the shared 8100 resolver (review
+5072 REM Finding 4): refuse a job file naming an unresolvable program
+5073 GOSUB 8100
+5074 IF CJ = 0 THEN GOTO 4600
 5075 JQ = JN
 5080 JS = 0
 5085 JN = JN + 1
@@ -329,6 +339,7 @@
 5206 REM design doc 5.3's "QUEUED -> RUNNING -> DONE" is the job's whole
 5207 REM life, not a set of readings this command can take.
 5208 IF JQ = 0 THEN GOTO 5250
+5209 IF JS <> 1 AND JS <> 2 THEN GOTO 7000
 5210 GOSUB 7800
 5215 PRINT "DISPLAY 1"
 5220 IF JS = 1 THEN PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " RUNNING"
@@ -344,8 +355,13 @@
 5400 REM ---- PRINT <job>: emit a completed job's report. Only one job can
 5401 REM ever be queued (design doc 5.3), so "the job named AR$" either is
 5402 REM the one in JQ or it isn't - no lookup table needed.
-5405 IF JQ = 0 THEN GOTO 5410
-5406 IF VAL(AR$) = JQ THEN GOTO 5420
+5403 REM AR$ must also be a plain digit string (review Finding 7):
+5404 REM VAL("412ZZZ") silently reads as 412, so unvalidated trailing
+5405 REM garbage could pass the JQ comparison and release the spool.
+5406 IF JQ = 0 THEN GOTO 5410
+5407 GOSUB 9600
+5408 IF NM = 0 THEN GOTO 5410
+5409 IF VAL(AR$) = JQ THEN GOTO 5420
 5410 REM ---- no such job: an empty spool, or a number that isn't the one
 5411 REM queued ----
 5412 GOSUB 7800
@@ -374,6 +390,7 @@
 5456 JR$ = ""
 5458 GOSUB 7800
 5460 PRINT "DISPLAY " + MID$(STR$(PC), 2)
+5461 IF PC = 0 THEN GOTO 5468
 5462 FOR K8 = 1 TO PC
 5464 PRINT JL$(K8)
 5466 NEXT K8
@@ -467,6 +484,21 @@
 4720 PRINT "LINE DROP"
 4725 PRINT "END"
 4730 END
+8100 REM ---- resolve JP$ (the job's program name, e.g. "ADAR11") to CJ,
+8101 REM the catalog row naming it as a CALL-only bus peer (KIND "C"), or
+8102 REM CJ = 0 if it will not resolve. Shared by 4900 (the batch CALL)
+8103 REM and 5000 (SUBMIT), so a job file naming an unresolvable program
+8104 REM is refused when submitted, not two turns later when 4900 finally
+8105 REM tries the CALL (review Finding 4) - one resolver, not two.
+8110 P8$ = JP$ + ".BAS"
+8120 CJ = 0
+8130 FOR J = 1 TO NC
+8140 IF CN$(J) <> P8$ THEN GOTO 8160
+8150 IF CS$(J) = "-" OR CS$(J) = "" THEN GOTO 8160
+8155 IF CK$(J) <> "C" THEN GOTO 8160
+8156 CJ = J
+8160 NEXT J
+8170 RETURN
 7800 REM ---- response header + STATE ----
 7810 PRINT "SYSTEM/1 school-mon OK"
 7820 GOSUB 7500
@@ -584,6 +616,7 @@
 6900 REM ---- REPORT <n> header: n more physical STATE lines follow, each
 6901 REM one report body line ----
 6910 RC = VAL(MID$(L$, 8))
+6911 IF RC > 12 THEN GOTO 7000
 6920 JR$ = ""
 6930 RETURN
 7000 REM ---- malformed request ----
@@ -660,10 +693,12 @@
 9250 IF P9 = 0 THEN GOTO 9280
 9260 JC = JC + 1
 9262 JL$(JC) = LEFT$(W9$, P9 - 1)
+9263 IF LEN(JL$(JC)) >= 80 THEN GOTO 7000
 9264 W9$ = MID$(W9$, P9 + 1)
 9270 GOTO 9240
 9280 JC = JC + 1
 9282 JL$(JC) = W9$
+9283 IF LEN(JL$(JC)) >= 80 THEN GOTO 7000
 9290 RETURN
 9100 REM lowercase T9$ in place (period-plausible: CHR$/ASC arithmetic)
 9110 L7$ = ""
@@ -674,3 +709,14 @@
 9160 NEXT I7
 9170 T9$ = L7$
 9180 RETURN
+9600 REM ---- validate AR$ is a plain non-negative integer: every char a
+9601 REM digit, at least one char. NM = 1 if so, 0 otherwise (review
+9602 REM Finding 7 - VAL() alone accepts "412ZZZ" as 412).
+9610 NM = 0
+9620 IF LEN(AR$) = 0 THEN RETURN
+9630 FOR I9 = 1 TO LEN(AR$)
+9640 C9$ = MID$(AR$, I9, 1)
+9650 IF C9$ < "0" OR C9$ > "9" THEN RETURN
+9660 NEXT I9
+9670 NM = 1
+9680 RETURN
