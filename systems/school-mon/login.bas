@@ -133,7 +133,7 @@
 3415 GOSUB 7500
 3420 PRINT "DISPLAY 2"
 3425 PRINT "RSTS V7.0-07  JOB 12  " + AK$ + "  KB34"
-3430 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, BYE"
+3430 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, QUEUE, PRINT <JOB>, BYE"
 3435 PRINT "PROMPT Ready"
 3440 PRINT "LINE UP"
 3445 PRINT "END"
@@ -239,6 +239,8 @@
 4044 IF CM$ = "RUN" THEN GOTO 4500
 4046 IF CM$ = "BYE" THEN GOTO 4700
 4048 IF CM$ = "SUBMIT" THEN GOTO 5000
+4053 IF CM$ = "QUEUE" THEN GOTO 5200
+4054 IF CM$ = "PRINT" THEN GOTO 5400
 4055 REM anything else
 4060 GOSUB 7800
 4065 PRINT "DISPLAY 1"
@@ -318,6 +320,65 @@
 5115 PRINT "?Batch queue full"
 5120 GOSUB 7900
 5125 END
+5200 REM ---- QUEUE: report the spool's one job. The advance at 4014-4019
+5201 REM already ran this turn (it runs on every INPUT before dispatch),
+5202 REM and it always turns a QUEUED job (JS=0) into RUNNING (JS=1) before
+5203 REM this line is ever reached - QUEUED existed only between SUBMIT
+5204 REM setting it and the very next turn's silent bump. So QUEUE can
+5205 REM only ever observe RUNNING or DONE for a real job, never QUEUED;
+5206 REM design doc 5.3's "QUEUED -> RUNNING -> DONE" is the job's whole
+5207 REM life, not a set of readings this command can take.
+5208 IF JQ = 0 THEN GOTO 5250
+5210 GOSUB 7800
+5215 PRINT "DISPLAY 1"
+5220 IF JS = 1 THEN PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " RUNNING"
+5225 IF JS = 2 THEN PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " DONE"
+5230 GOSUB 7900
+5235 END
+5250 REM ---- empty spool ----
+5255 GOSUB 7800
+5260 PRINT "DISPLAY 1"
+5265 PRINT "NO JOB QUEUED"
+5270 GOSUB 7900
+5275 END
+5400 REM ---- PRINT <job>: emit a completed job's report. Only one job can
+5401 REM ever be queued (design doc 5.3), so "the job named AR$" either is
+5402 REM the one in JQ or it isn't - no lookup table needed.
+5405 IF JQ = 0 THEN GOTO 5410
+5406 IF VAL(AR$) = JQ THEN GOTO 5420
+5410 REM ---- no such job: an empty spool, or a number that isn't the one
+5411 REM queued ----
+5412 GOSUB 7800
+5414 PRINT "DISPLAY 1"
+5416 PRINT "?No such job"
+5418 GOSUB 7900
+5419 END
+5420 IF JS = 2 THEN GOTO 5440
+5422 GOSUB 7800
+5424 PRINT "DISPLAY 1"
+5426 PRINT "?Job " + MID$(STR$(JQ), 2) + " not complete"
+5428 GOSUB 7900
+5429 END
+5440 REM ---- the report: split JR$'s "|"-joined lines the same way 7500
+5441 REM does for STATE (9200), and release the spool - the caller has now
+5442 REM taken the output, so PRINT is what frees JQ for the next SUBMIT
+5443 REM (Task 4 left JQ set forever past JS=2; nothing else in this
+5444 REM program ever reads a completed job again). Save the split count
+5445 REM in PC before releasing: 7800/7500 calls 9200 again against the
+5446 REM now-empty JR$ for the STATE block, which would zero JC first.
+5447 GOSUB 9200
+5448 PC = JC
+5450 JQ = 0
+5452 JS = 0
+5454 JP$ = ""
+5456 JR$ = ""
+5458 GOSUB 7800
+5460 PRINT "DISPLAY " + MID$(STR$(PC), 2)
+5462 FOR K8 = 1 TO PC
+5464 PRINT JL$(K8)
+5466 NEXT K8
+5468 GOSUB 7900
+5470 END
 4100 REM ---- CAT: the disk, as far as this account may see it ----
 4105 NL = 0
 4110 FOR J = 1 TO NC
@@ -588,8 +649,10 @@
 9030 T9$ = LEFT$(T9$, LEN(T9$) - 1)
 9040 GOTO 9010
 9200 REM ---- split JR$ (the in-memory "|"-joined report) into JL$(),
-9201 REM count JC. Used only by the STATE emitter (7500) - a wire-safety
-9202 REM step so no single PRINT exceeds bwBASIC's 79-column line wrap.
+9201 REM count JC. Used by the STATE emitter (7500), the same wire-safety
+9202 REM step so no single PRINT exceeds bwBASIC's 79-column line wrap, and
+9203 REM by PRINT (5440), which needs the same lines split for its DISPLAY
+9204 REM body - one split routine, not two.
 9210 JC = 0
 9220 W9$ = JR$
 9230 IF LEN(W9$) = 0 THEN RETURN
