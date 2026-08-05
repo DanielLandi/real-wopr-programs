@@ -3,7 +3,8 @@
 30 REM against ACCT.DAT, then either EXECs the account's captive program
 40 REM or gives the caller `Ready` (docs/systems.md 2.6).
 50 REM Stateless per invocation: PHASE, ACCT and TRIES ride the STATE
-60 REM block. No wall clock, no rng.
+60 REM block, and so does the turn-counted batch spool (NEXTJOB, JOB,
+65 REM STEP, PROG, REPORT) - no wall clock, no rng.
 70 REM ACCT.DAT keys on the password, not the PPN: the film's terminal
 80 REM asks for a password alone, and the film is authority. See
 90 REM docs/fidelity-notes.md section 7.
@@ -29,7 +30,12 @@
 160 SN = VAL(MID$(S$, 7))
 200 PH$ = "LOGIN"
 205 AK$ = "-"
+206 JN = 412
+207 JQ = 0
+208 JS = 0
+209 JP$ = ""
 210 TR = 0
+211 JR$ = ""
 215 IF SN <= 0 THEN GOTO 300
 220 FOR I = 1 TO SN
 225 LINE INPUT L$
@@ -327,6 +333,11 @@
 6010 IF LEFT$(L$, 6) = "PHASE " THEN PH$ = MID$(L$, 7)
 6020 IF LEFT$(L$, 5) = "ACCT " THEN AK$ = MID$(L$, 6)
 6030 IF LEFT$(L$, 6) = "TRIES " THEN TR = VAL(MID$(L$, 7))
+6032 IF LEFT$(L$, 8) = "NEXTJOB " THEN JN = VAL(MID$(L$, 9))
+6034 IF LEFT$(L$, 4) = "JOB " THEN JQ = VAL(MID$(L$, 5))
+6036 IF LEFT$(L$, 5) = "STEP " THEN JS = VAL(MID$(L$, 6))
+6038 IF LEFT$(L$, 5) = "PROG " THEN JP$ = MID$(L$, 6)
+6039 IF LEFT$(L$, 7) = "REPORT " THEN JR$ = MID$(L$, 8)
 6040 RETURN
 7000 REM ---- malformed request ----
 7010 PRINT "SYSTEM/1 school-mon OK"
@@ -337,10 +348,15 @@
 7060 PRINT "END"
 7070 END
 7500 REM ---- emit the STATE block ----
-7510 PRINT "STATE 3"
+7510 PRINT "STATE 8"
 7520 PRINT "PHASE " + PH$
 7530 PRINT "ACCT " + AK$
 7540 PRINT "TRIES " + MID$(STR$(TR), 2)
+7542 PRINT "NEXTJOB " + MID$(STR$(JN), 2)
+7544 PRINT "JOB " + MID$(STR$(JQ), 2)
+7546 PRINT "STEP " + MID$(STR$(JS), 2)
+7548 PRINT "PROG " + JP$
+7549 PRINT "REPORT " + JR$
 7550 RETURN
 8500 REM ---- load ACCT.DAT ----
 8505 NA = 0
