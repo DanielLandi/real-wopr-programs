@@ -1,122 +1,177 @@
 10 REM SEATTLE PUBLIC SCHOOL DISTRICT - SYSTEM/1 school-ada (ADAR11)
 20 REM The state average-daily-attendance claim - the reason the machine
 30 REM exists (docs/superpowers/specs/2026-08-03-period-installations-design.md
-40 REM section 4). A bus-only batch peer: no `number` in its manifest, so
-50 REM it is not dialable; the district's job queue reaches it with a
+40 REM section 4). A bus-only peer: no `number` in its manifest, so it is
+50 REM not dialable; the district's job queue reaches it with an ordinary
 60 REM bus CALL (Task 4). Nothing calls it yet - this program only has to
 70 REM answer the wire below correctly on its own.
 80 REM
-90 REM This is ADAR11's OWN wire, a one-shot batch job - not the general
-100 REM CALL/REPLY continuation extension of docs/systems.md 2.3 (which is a
-110 REM RESPONSE-side block a system emits mid-turn to ask a peer something
-120 REM and be resumed). ADAR11 never continues: it is invoked once, answers
-130 REM once, and exits. No STATE rides between turns, and there is no
-140 REM DISPLAY/LINE block - the report is consumed by the job queue that
-150 REM called it, not painted on a terminal (Task 5 formats a printed
-160 REM report from it for the caller).
-170 REM
-180 REM Request:
-190 REM   SYSTEM/1 school-ada CALL
-200 REM   STATE 0
-210 REM   RUN ADAR11
-220 REM   END
-230 REM
-240 REM Response (n = number of buildings read off CALEND.DAT):
-250 REM   REPLY school-ada OK <n>
-260 REM   <n lines: BUILDING ENROLLED ADM ADA, one per building>
-270 REM   DISTRICT <ADM> <ADA>
+90 REM Corrected wire (docs/systems.md 2.1, 2.3; PACK.md's "Wire protocols"):
+100 REM a CALL's callee is invoked exactly like any other system - command
+110 REM INPUT, its own STATE, one INPUT <payload> line - and answers like
+120 REM one too: SYSTEM/1 <id> OK, STATE, DISPLAY, LINE, END. There is no
+130 REM separate "CALL"/"REPLY" verb pair on this side of the wire; that
+140 REM pair belongs to the RESPONSE a *caller* emits mid-turn (2.3) and to
+150 REM the RESUME/REPLY the host re-invokes the *caller* with afterward -
+160 REM never to the callee, which `emulator/node/app/localcall.py:29`
+170 REM confirms: `runner.run(call.peer, "INPUT", store.load(), call.payload)`.
+180 REM systems/school-db/ is the pattern this file now matches exactly.
+190 REM
+200 REM Request:
+210 REM   SYSTEM/1 school-ada CONNECT      (greeting; also matches school-db)
+220 REM   STATE 0
+230 REM   END
+240 REM or
+250 REM   SYSTEM/1 school-ada INPUT
+260 REM   STATE 0
+270 REM   INPUT RUN ADAR11
 280 REM   END
 290 REM
-300 REM Field widths - fixed here; Task 5's PRINT job formats from these
-310 REM exactly, so they must not move without updating that caller too:
-320 REM   BUILDING   7 chars, left-justified, space-padded
-330 REM   ENROLLED   5 chars, right-justified integer
-340 REM   ADM        7 chars, right-justified, 2 decimals (e.g. " 320.00")
-350 REM   ADA        7 chars, right-justified, 2 decimals
-360 REM Fields are separated by one space. A building line is therefore
-370 REM exactly 7+1+5+1+7+1+7 = 29 characters. The DISTRICT line is the
-380 REM literal "DISTRICT" (8 chars) + space + ADM(7) + space + ADA(7) = 24.
-390 REM
-400 REM ADA = aggregate days attended / instructional days (ADANOT.DOC,
-410 REM systems/school-mon/data/adanot.doc). Documented approximation: this
-420 REM pilot has no per-student attendance record anywhere on the disk -
-430 REM absence tracking is out of scope through phase 3 (design doc
-440 REM section 10) - so every enrolled pupil is modeled as present every
-450 REM instructional day. ADM (average daily membership) is then
-460 REM algebraically equal to ENROLLED too: a static, single-snapshot
-470 REM roster has no day-to-day membership change either. CALEND.DAT's
-480 REM instructional-day counts are still read and used as the formula's
-490 REM actual divisor - they do not change the result under this
-500 REM assumption, but the computation is not hardcoded around them, and
-510 REM the divisor would matter the moment absence data exists.
-520 REM
-530 REM The roster (systems/school/data/students.dat) carries no building
-540 REM column (see that program's 8500 loader), so its whole headcount is
-550 REM attributed to the one building named on CALEND.DAT (today, HIGH).
-560 REM A second building would need a roster building column to split the
-570 REM headcount correctly - out of scope here, so 950 below refuses
-580 REM rather than silently misreport if CALEND.DAT ever names more than
-590 REM one.
-600 DIM BN$(10)
-610 DIM BD(10)
-700 REM ---- parse the SYSTEM/1 request from stdin ----
-710 LINE INPUT H$
-720 IF LEFT$(H$, 20) <> "SYSTEM/1 school-ada " THEN GOTO 7000
-730 C$ = MID$(H$, 21)
-740 IF C$ <> "CALL" THEN GOTO 7000
-750 LINE INPUT S$
-760 IF LEFT$(S$, 6) <> "STATE " THEN GOTO 7000
-770 SN = VAL(MID$(S$, 7))
-780 REM this program carries no state between turns
-790 IF SN <> 0 THEN GOTO 7000
-800 LINE INPUT P$
-810 IF P$ <> "RUN ADAR11" THEN GOTO 7000
-820 LINE INPUT E$
-830 IF E$ <> "END" THEN GOTO 7000
-900 REM ---- RUN ADAR11: compute the claim ----
-910 GOSUB 8500
-920 GOSUB 8600
-930 REM defensive: 1040 attributes the whole roster to one building; see
-940 REM the header note above.
-950 IF NB <> 1 THEN GOTO 7000
-1000 TM = 0
-1010 TT = 0
-1020 PRINT "REPLY school-ada OK " + MID$(STR$(NB), 2)
-1030 FOR I = 1 TO NB
-1040 ER = NS
-1050 MD = ER * BD(I)
-1060 TM = TM + MD
-1070 TT = TT + BD(I)
-1080 N2 = MD / BD(I)
-1090 W2 = 7
-1100 GOSUB 9200
-1110 A1$ = F2$
-1120 N2 = MD / BD(I)
-1130 GOSUB 9200
-1140 A2$ = F2$
-1150 T4$ = BN$(I)
-1160 W4 = 7
-1170 GOSUB 9500
-1180 N3 = ER
-1190 W3 = 5
-1200 GOSUB 9400
-1210 PRINT T4$ + " " + I3$ + " " + A1$ + " " + A2$
-1220 NEXT I
-1230 N2 = TM / TT
-1240 W2 = 7
-1250 GOSUB 9200
-1260 D1$ = F2$
-1270 GOSUB 9200
-1280 D2$ = F2$
-1290 PRINT "DISTRICT " + D1$ + " " + D2$
-1300 PRINT "END"
-1310 END
+300 REM Response:
+310 REM   SYSTEM/1 school-ada OK
+320 REM   STATE 0
+330 REM   DISPLAY <k>
+340 REM   <k lines - the report, see below>
+350 REM   LINE UP
+360 REM   END
+370 REM This program carries no state of its own between turns (it reads
+380 REM its data files fresh every invocation), so STATE is always 0 both
+390 REM ways.
+400 REM
+410 REM The INPUT report (k = NB + 2, NB = buildings read off CALEND.DAT):
+420 REM   <NB lines: BUILDING ENROLLED ADM ADA, one per building>
+430 REM   DISTRICT <ADM> <ADA>
+440 REM   ABSENCE POSTINGS NOT ON FILE - CLAIM PROVISIONAL
+450 REM
+460 REM Field widths - fixed here; Task 5's PRINT job formats from these
+470 REM exactly, so they must not move without updating that caller too:
+480 REM   BUILDING   7 chars, left-justified, space-padded
+490 REM   ENROLLED   5 chars, right-justified integer
+500 REM   ADM        7 chars, right-justified, 2 decimals (e.g. " 320.00")
+510 REM   ADA        7 chars, right-justified, 2 decimals
+520 REM Fields are separated by one space. A building line is therefore
+530 REM exactly 7+1+5+1+7+1+7 = 29 characters. The DISTRICT line is the
+540 REM literal "DISTRICT" (8 chars) + space + ADM(7) + space + ADA(7) = 24.
+550 REM These two lines are unchanged from this program's first cut; only
+560 REM the request/response envelope around them was wrong before.
+570 REM
+580 REM IMPORTANT - read before treating ADA as a bug: ADM and ADA both
+590 REM equal raw ENROLLED, exactly, in every row this program can ever
+600 REM produce today. That is not an arithmetic error - it is the honest
+610 REM consequence of the only two data sources this program has: the
+620 REM roster (a headcount) and CALEND.DAT (an instructional-day divisor).
+630 REM There is no per-student attendance or absence record anywhere on
+640 REM the disk yet; posting one is phase 3's job (design doc section 8,
+650 REM "the data" - ENROLL.BAS/REGIST.DAT), not this program's. Owner
+660 REM ruling (2026-08-05): phase 2 ships the machinery, not a real claim,
+670 REM so this program says so out loud - the trailing "CLAIM PROVISIONAL"
+680 REM line above - rather than printing a computed-looking figure that
+690 REM is actually just enrollment wearing a decimal point. Once phase 3
+700 REM posts real absence data, aggregate days attended will stop being
+710 REM identical to aggregate membership days, ADA will diverge from ADM,
+720 REM and that trailing line comes out.
+730 REM
+740 REM The roster (systems/school/data/students.dat) carries no building
+750 REM column (see that program's 8500 loader), so its whole headcount is
+760 REM attributed to the one building named on CALEND.DAT (today, HIGH).
+770 REM A second building would need a roster building column to split the
+780 REM headcount correctly - out of scope here, so 4040 below refuses
+790 REM rather than silently misreport if CALEND.DAT ever names more than
+800 REM one.
+900 DIM BN$(10)
+910 DIM BD(10)
+920 DIM LN$(10)
+930 GOSUB 8500
+940 GOSUB 8600
+1000 REM ---- parse the SYSTEM/1 request from stdin ----
+1010 LINE INPUT H$
+1020 IF LEFT$(H$, 20) <> "SYSTEM/1 school-ada " THEN GOTO 7000
+1030 CMD$ = MID$(H$, 21)
+1040 LINE INPUT S$
+1050 IF LEFT$(S$, 6) <> "STATE " THEN GOTO 7000
+1060 SN = VAL(MID$(S$, 7))
+1070 IF SN <> 0 THEN GOTO 7000
+1080 REM trailing line: INPUT <request> (INPUT cmd) or END (CONNECT)
+1090 LINE INPUT T$
+1100 HI = 0
+1110 IF LEFT$(T$, 6) <> "INPUT " THEN GOTO 1160
+1120 IN$ = MID$(T$, 7)
+1130 HI = 1
+1140 LINE INPUT E$
+1150 IF E$ <> "END" THEN GOTO 7000
+1155 GOTO 1200
+1160 IF T$ <> "END" THEN GOTO 7000
+1200 REM ---- dispatch on command ----
+1210 IF CMD$ = "CONNECT" THEN GOTO 3000
+1220 IF CMD$ = "INPUT" THEN GOTO 3300
+1230 GOTO 7000
+3000 REM CONNECT: announce the program and stay up. No password: the bus
+3010 REM is not a dialable line, so reaching it is already authorization
+3020 REM (matches school-db's own CONNECT).
+3030 PRINT "SYSTEM/1 school-ada OK"
+3040 PRINT "STATE 0"
+3050 PRINT "DISPLAY 1"
+3060 PRINT "ADAR11 - STATE ADA CLAIM"
+3070 PRINT "LINE UP"
+3080 PRINT "END"
+3090 END
+3300 REM ---- INPUT: the one payload verb this program answers ----
+3310 IF HI = 0 THEN GOTO 7000
+3320 IF IN$ <> "RUN ADAR11" THEN GOTO 7000
+3330 GOTO 4000
+4000 REM ---- RUN ADAR11: compute the claim ----
+4010 REM defensive: this loop attributes the whole roster to one building;
+4020 REM a second one on CALEND.DAT would need a roster building column to
+4030 REM split the headcount correctly - see the header note.
+4040 IF NB <> 1 THEN GOTO 7000
+4050 TM = 0
+4060 TT = 0
+4070 FOR I = 1 TO NB
+4080 ER = NS
+4090 MD = ER * BD(I)
+4100 TM = TM + MD
+4110 TT = TT + BD(I)
+4120 N2 = MD / BD(I)
+4130 W2 = 7
+4140 GOSUB 9200
+4150 A1$ = F2$
+4160 N2 = MD / BD(I)
+4170 GOSUB 9200
+4180 A2$ = F2$
+4190 T4$ = BN$(I)
+4200 W4 = 7
+4210 GOSUB 9500
+4220 N3 = ER
+4230 W3 = 5
+4240 GOSUB 9400
+4250 LN$(I) = T4$ + " " + I3$ + " " + A1$ + " " + A2$
+4260 NEXT I
+4270 N2 = TM / TT
+4280 W2 = 7
+4290 GOSUB 9200
+4300 D1$ = F2$
+4310 GOSUB 9200
+4320 D2$ = F2$
+4330 PRINT "SYSTEM/1 school-ada OK"
+4340 PRINT "STATE 0"
+4350 PRINT "DISPLAY " + MID$(STR$(NB + 2), 2)
+4360 FOR I = 1 TO NB
+4370 PRINT LN$(I)
+4380 NEXT I
+4390 PRINT "DISTRICT " + D1$ + " " + D2$
+4400 PRINT "ABSENCE POSTINGS NOT ON FILE - CLAIM PROVISIONAL"
+4410 PRINT "LINE UP"
+4420 PRINT "END"
+4430 END
 7000 REM ---- malformed request, or a data shape this program cannot yet
 7010 REM attribute correctly: refuse loudly rather than misreport ----
-7020 PRINT "REPLY school-ada FAIL 0"
-7030 PRINT "PROTOCOL ERROR"
-7040 PRINT "END"
-7050 END
+7020 PRINT "SYSTEM/1 school-ada OK"
+7030 PRINT "STATE 0"
+7040 PRINT "DISPLAY 1"
+7050 PRINT "PROTOCOL ERROR"
+7060 PRINT "LINE DROP"
+7070 PRINT "END"
+7080 END
 8500 REM ---- load the roster; NS = enrolled headcount. This program only
 8510 REM needs the count, not per-student fields - ADAR11 never touches
 8520 REM grades or schedule.

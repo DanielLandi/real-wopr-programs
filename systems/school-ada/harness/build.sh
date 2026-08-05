@@ -15,7 +15,7 @@ set -uo pipefail
 # and ../school/data/students.dat resolves no matter where the host spawned
 # us from.
 cd "$(cd "$(dirname "$0")/../.." && pwd)"
-out="$(bwbasic "main.bas" 2>/dev/null | sed -n '/^REPLY /,/^END$/p')"
+out="$(bwbasic "main.bas" 2>/dev/null | sed -n '/^SYSTEM\/1 /,/^END$/p')"
 printf '%s\n' "$out"
 case "$out" in
   *"PROTOCOL ERROR"*) exit 1 ;;
