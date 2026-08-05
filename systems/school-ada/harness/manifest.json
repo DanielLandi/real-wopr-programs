@@ -1,0 +1,16 @@
+{
+  "id": "school-ada",
+  "title": "ADAR11 - STATE ADA CLAIM",
+  "kind": "batch",
+  "language": "basic",
+  "binary": "school-ada",
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "bus": {
+        "address": "SCHOOL-ADA",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
+}
