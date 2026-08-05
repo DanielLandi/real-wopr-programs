@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { DIAL_SYSTEMS, WARDIAL_LABELS, UNLISTED_SYSTEM_IDS } from "./sims.ts";
+import { DIAL_SYSTEMS, WARDIAL_LABELS } from "./sims.ts";
 import { DIALABLE_SYSTEMS } from "./dial-systems.generated.ts";
 
 const dialable = new Set(DIALABLE_SYSTEMS.map((s) => s.systemId));
@@ -48,7 +48,7 @@ test("reference is dialable but deliberately not in the film's phone book", () =
 // The five tests above are a tautology over the join: DIAL_SYSTEMS and
 // WARDIAL_LABELS are *derived from* LISTED, so they can never disagree with
 // it, and none of them read UNLISTED at all. All of the guard's discriminating
-// power lives in the two `throw` loops in sims.ts, which run once at module
+// power lives in the three `throw` loops in sims.ts, which run once at module
 // scope during import — by the time a test file gets to make assertions,
 // sims.ts has either already thrown (crashing the whole test file) or already
 // proven every id, so there is nothing left in-process to poison and no way
@@ -99,10 +99,38 @@ test("the import-time guard rejects an UNLISTED id that is not dialable", async 
   );
 });
 
-test("UNLISTED still names something — an emptied table has no other tell", () => {
-  // UNLISTED has no consumer besides its own validation loop, so gutting the
-  // table entirely (as opposed to poisoning one of its keys) trips neither
-  // throw above. This is the only test that would catch it.
-  assert.ok(UNLISTED_SYSTEM_IDS.length > 0, "UNLISTED_SYSTEM_IDS is empty");
-  assert.ok(UNLISTED_SYSTEM_IDS.includes("reference"));
+test("the import-time guard rejects a dialable system that is neither listed nor excluded", async () => {
+  // The inversion this whole design exists to prevent: add a new dialable
+  // system (a manifest with a "number") and forget to mention it in
+  // sims.ts. It must fail loudly at import, not silently miss the phone
+  // book and the wardial sweep with every suite staying green.
+  await assert.rejects(
+    () =>
+      importMutatedSims(
+        (src) => src.replace('  { systemId: "airline", name: "PAN AM / PANAMAC", label: "AIRLINE" },\n', ""),
+        "sims.poison-orphan.tmp.ts",
+      ),
+    /sims\.ts does not mention "airline".*dialable/s,
+  );
+});
+
+test("the import-time guard also catches an emptied UNLISTED table (no other tell would)", async () => {
+  // UNLISTED has no consumer besides these validation loops, so gutting the
+  // table entirely (as opposed to poisoning its one key) used to be
+  // invisible to every test in this file. Now the third loop above catches
+  // it the same way it catches any other orphaned dialable id: "reference"
+  // is dialable, not in LISTED, and — once UNLISTED is empty — not in
+  // UNLISTED either.
+  await assert.rejects(
+    () =>
+      importMutatedSims(
+        (src) =>
+          src.replace(
+            '  reference: "the SYSTEM/1 reference implementation — not a system in the film",\n',
+            "",
+          ),
+        "sims.poison-emptied-unlisted.tmp.ts",
+      ),
+    /sims\.ts does not mention "reference".*dialable/s,
+  );
 });
