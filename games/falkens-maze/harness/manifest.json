@@ -1,6 +1,7 @@
 {
   "id": "falkens-maze",
   "title": "FALKEN'S MAZE",
+  "language": "fortran",
   "status": "implemented",
   "binary": "falkens-maze",
   "abbrev": "MAZE",

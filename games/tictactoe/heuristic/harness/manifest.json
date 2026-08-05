@@ -1,6 +1,7 @@
 {
   "id": "tictactoe",
   "title": "Tic-Tac-Toe",
+  "language": "fortran",
   "status": "implemented",
   "binary": "tictactoe",
   "abbrev": "TTT",

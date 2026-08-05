@@ -1,6 +1,7 @@
 {
   "id": "checkers",
   "title": "CHECKERS",
+  "language": "fortran",
   "status": "implemented",
   "binary": "checkers",
   "abbrev": "CHK",

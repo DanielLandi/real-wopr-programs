@@ -1,6 +1,7 @@
 {
   "id": "poker",
   "title": "POKER",
+  "language": "fortran",
   "status": "implemented",
   "binary": "poker",
   "abbrev": "PKR",

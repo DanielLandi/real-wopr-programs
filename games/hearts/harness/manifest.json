@@ -1,6 +1,7 @@
 {
   "id": "hearts",
   "title": "HEARTS",
+  "language": "fortran",
   "status": "implemented",
   "binary": "hearts",
   "abbrev": "HRTS",

@@ -1,6 +1,7 @@
 {
   "id": "gin-rummy",
   "title": "GIN RUMMY",
+  "language": "fortran",
   "status": "implemented",
   "binary": "gin-rummy",
   "abbrev": "GIN",
