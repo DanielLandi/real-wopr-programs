@@ -1,6 +1,7 @@
 {
   "id": "blackjack",
   "title": "Black Jack",
+  "language": "fortran",
   "status": "implemented",
   "binary": "blackjack",
   "abbrev": "BJ",

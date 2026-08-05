@@ -1,6 +1,7 @@
 {
   "id": "gtw",
   "title": "Global Thermonuclear War",
+  "language": "fortran",
   "status": "implemented",
   "binary": "gtw",
   "abbrev": "GTW",

@@ -121,6 +121,15 @@
       "binary": "tictactoe"
     },
     {
+      "id": "joshua",
+      "kind": "joshua",
+      "protocol": "JOSHUA/1",
+      "language": "lisp",
+      "title": "JOSHUA (Falken Dialogue Processor)",
+      "path": "joshua",
+      "binary": "joshua"
+    },
+    {
       "id": "airline",
       "kind": "system",
       "protocol": "SYSTEM/1",
@@ -157,15 +166,6 @@
       "binary": "reference"
     },
     {
-      "id": "school-mon",
-      "kind": "system",
-      "protocol": "SYSTEM/1",
-      "language": "basic",
-      "title": "SEATTLE SCHOOL DISTRICT",
-      "path": "systems/school-mon",
-      "binary": "school-mon"
-    },
-    {
       "id": "school",
       "kind": "system",
       "protocol": "SYSTEM/1",
@@ -184,13 +184,13 @@
       "binary": "school-db"
     },
     {
-      "id": "joshua",
-      "kind": "joshua",
-      "protocol": "JOSHUA/1",
-      "language": "lisp",
-      "title": "JOSHUA (Falken Dialogue Processor)",
-      "path": "joshua",
-      "binary": "joshua"
+      "id": "school-mon",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "basic",
+      "title": "SEATTLE SCHOOL DISTRICT",
+      "path": "systems/school-mon",
+      "binary": "school-mon"
     }
   ]
 }

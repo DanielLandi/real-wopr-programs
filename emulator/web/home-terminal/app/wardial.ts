@@ -1,4 +1,4 @@
-import type { DialSystem } from "./sims";
+import { WARDIAL_LABELS, type DialSystem } from "./sims.ts";
 
 export type SweepStatus = "CARRIER" | "NO CARRIER" | "BUSY";
 
@@ -12,17 +12,6 @@ export interface SweepEntry {
   status: SweepStatus;
   hit?: SweepHit;                // present iff status === "CARRIER"
 }
-
-/** systemId -> domain label for the hit list. Keys are `sims.ts`'s `systemId`
- *  values, so a stale one is not an error — it just costs that carrier its
- *  domain label and prints a bare `CARRIER`. */
-const LABELS: Record<string, string> = {
-  airline: "AIRLINE",
-  // The monitor answers the school's line since the split (systems.md §2.6).
-  "school-mon": "SCHOOL DIST",
-  protovision: "GAME CO",
-  pactel: "TELCO",
-};
 
 /** Fixed cosmetic misses (fabricated, no real trademarks), interleaved for
  *  texture. Order is stable. */
@@ -52,7 +41,7 @@ export function buildSweep(systems: DialSystem[]): SweepEntry[] {
   const hits: SweepEntry[] = systems.map((s) => ({
     number: s.number,
     status: "CARRIER" as const,
-    hit: { label: LABELS[s.systemId] ?? "CARRIER", target: s },
+    hit: { label: WARDIAL_LABELS[s.systemId] ?? "CARRIER", target: s },
   }));
   // Interleave misses and hits deterministically: miss, hit, miss, hit, ...
   // leftover misses appended; the unknown WOPR discovery comes last.

@@ -21,39 +21,61 @@ export function isSystem(t: unknown): t is DialSystem {
   return !!t && (t as DialSystem).kind === "system";
 }
 
-export const DIAL_SYSTEMS: DialSystem[] = [
-  {
-    kind: "system",
-    id: "sys-airline",
-    name: "PAN AM / PANAMAC",
-    number: "(212) 555-0177",
-    systemId: "airline",
-  },
-  {
-    kind: "system",
-    id: "sys-school",
-    name: "SEATTLE SCHOOL DISTRICT",
-    number: "(206) 555-0142",
-    // The monitor, not the records program. The school was split in two
-    // (docs/systems.md §2.6): `school-mon` owns the phone number and the
-    // password prompt, and hands the terminal to `school` once you are in.
-    // `school` has no `number` in its manifest any more, so it is not in the
-    // dial-in phone book at all — naming it here would earn a 400 and print
-    // SYSTEM UNREACHABLE on the film's own school dial.
-    systemId: "school-mon",
-  },
-  {
-    kind: "system",
-    id: "sys-protovision",
-    name: "PROTOVISION",
-    number: "(408) 555-0163",
-    systemId: "protovision",
-  },
-  {
-    kind: "system",
-    id: "sys-pactel",
-    name: "PACIFIC TELEPHONE",
-    number: "(311) 555-0100",
-    systemId: "pactel",
-  },
+import { DIALABLE_SYSTEMS } from "./dial-systems.generated.ts";
+
+/** Editorial choices about the phone book — the only place a human writes a
+ *  system id, and every one is checked against the generated list below.
+ *
+ *  `name` is the directory label, deliberately shorter than the manifest
+ *  title ("SEATTLE SCHOOL DISTRICT", not "SEATTLE PUBLIC SCHOOL DISTRICT
+ *  DATANET"). `label` is the wardial sweep's domain word. Order here is the
+ *  order the directory prints. */
+const LISTED: ReadonlyArray<{ systemId: string; name: string; label: string }> = [
+  { systemId: "airline", name: "PAN AM / PANAMAC", label: "AIRLINE" },
+  // The monitor, not the records program: school-mon owns the number and the
+  // password prompt and hands the terminal to `school` (systems.md §2.6).
+  { systemId: "school-mon", name: "SEATTLE SCHOOL DISTRICT", label: "SCHOOL DIST" },
+  { systemId: "protovision", name: "PROTOVISION", label: "GAME CO" },
+  { systemId: "pactel", name: "PACIFIC TELEPHONE", label: "TELCO" },
 ];
+
+/** Dialable, but deliberately absent from the film's list of numbers. Stated
+ *  so it reads as a decision rather than an omission. */
+const UNLISTED: Readonly<Record<string, string>> = {
+  reference: "the SYSTEM/1 reference implementation — not a system in the film",
+};
+
+/** Exposed only so a test can prove `UNLISTED` still says something — it has
+ *  no other consumer, so an accidentally emptied table would otherwise be
+ *  invisible to every test in this file. */
+export const UNLISTED_SYSTEM_IDS: readonly string[] = Object.keys(UNLISTED);
+
+const BY_ID = new Map(DIALABLE_SYSTEMS.map((s) => [s.systemId, s]));
+
+for (const { systemId } of LISTED) {
+  if (!BY_ID.has(systemId)) {
+    throw new Error(
+      `sims.ts lists "${systemId}", which is not a dialable system. ` +
+        `Dialable ids come from systems/<id>/harness/manifest.json (a manifest ` +
+        `with a "number"). Did a system get renamed or lose its number?`,
+    );
+  }
+}
+for (const systemId of Object.keys(UNLISTED)) {
+  if (!BY_ID.has(systemId)) {
+    throw new Error(`sims.ts excludes "${systemId}", which is not a dialable system.`);
+  }
+}
+
+export const DIAL_SYSTEMS: DialSystem[] = LISTED.map(({ systemId, name }) => ({
+  kind: "system",
+  id: `sys-${systemId}`,
+  name,
+  number: BY_ID.get(systemId)!.number,
+  systemId,
+}));
+
+/** systemId -> domain label for the wardial hit list (wardial.ts). */
+export const WARDIAL_LABELS: Record<string, string> = Object.fromEntries(
+  LISTED.map(({ systemId, label }) => [systemId, label]),
+);

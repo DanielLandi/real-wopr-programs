@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSweep, hitListText, RESULTS_HEADER } from "./wardial.ts";
 import { DEFAULT_WOPR_NUMBER } from "./console.ts";
+import { DIAL_SYSTEMS, WARDIAL_LABELS } from "./sims.ts";
 
 const SYSTEMS = [
   { kind: "system", id: "sys-airline", name: "PAN AM", number: "(212) 555-0177", systemId: "airline" },
@@ -61,5 +62,17 @@ test("has NO CARRIER and BUSY misses; CARRIER<->hit invariant", () => {
   for (const x of sweep) {
     if (x.status === "CARRIER") assert.ok(x.hit, "CARRIER entry must have a hit");
     else assert.ok(!x.hit, "non-CARRIER entry must have no hit");
+  }
+});
+
+test("the sweep labels every real carrier, so the CARRIER fallback is unreachable", () => {
+  // buildSweep does `LABELS[s.systemId] ?? "CARRIER"`. That fallback is why a
+  // stale key never surfaced: the sweep just printed a bare CARRIER and
+  // carried on. Driving it with the real directory proves every listed system
+  // has a label, which makes the fallback dead code for real hits.
+  for (const entry of buildSweep(DIAL_SYSTEMS)) {
+    if (entry.status !== "CARRIER" || !entry.hit?.target) continue;
+    assert.notEqual(entry.hit.label, "CARRIER", `${entry.hit.target.systemId} fell back to a bare CARRIER`);
+    assert.equal(entry.hit.label, WARDIAL_LABELS[entry.hit.target.systemId]);
   }
 });
