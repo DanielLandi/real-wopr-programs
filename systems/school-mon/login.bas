@@ -185,7 +185,12 @@
 4315 IF CV(CF) > MV THEN GOTO 4640
 4317 IF CD$(CF) = "-" THEN GOTO 4600
 4320 REM two passes: bwBASIC cannot rewind, so count, close, reopen, print
+4321 REM the catalog can name a "Y" (readable) row whose file never made
+4322 REM it to disk. bwBASIC has no file-exists test and its ON ERROR has
+4323 REM no working RESUME, so the first OPEN below is trapped exactly
+4324 REM once, refusing in-character (4600) rather than aborting bwBASIC.
 4325 NL = 0
+4327 ON ERROR GOSUB 4600
 4330 OPEN CD$(CF) FOR INPUT AS #2
 4335 IF EOF(2) THEN GOTO 4350
 4340 LINE INPUT #2, L9$
