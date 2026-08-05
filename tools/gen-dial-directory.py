@@ -118,7 +118,14 @@ TS_PATH = "emulator/web/home-terminal/app/dial-systems.generated.ts"
 
 
 def main(argv: list[str]) -> int:
-    check = "--check" in argv
+    if argv not in ([], ["--check"]):
+        print(
+            f"gen-dial-directory.py: unrecognised argument(s): {' '.join(argv)!r}\n"
+            "usage: gen-dial-directory.py [--check]",
+            file=sys.stderr,
+        )
+        return 2
+    check = argv == ["--check"]
     pack_json = PACK_ROOT / "pack.json"
     ts_file = PACK_ROOT / TS_PATH
 

@@ -44,3 +44,21 @@ def test_collect_programs_emits_tictactoe_once_from_its_slot():
 def test_generated_output_matches_what_is_committed():
     """The regenerate-and-diff guarantee, asserted directly."""
     assert gdd.main(["--check"]) == 0, "committed artifacts are stale — run tools/gen-dial-directory.py"
+
+
+def test_main_rejects_an_unrecognised_argument(capsys):
+    """A mistyped flag (`--chek`, `--dry-run`, `-check`) must not fall through
+    to write mode. Before this test, `check = "--check" in argv` treated any
+    argv it did not recognise as "not --check" and quietly rewrote the
+    committed files — in CI that would go green while guarding nothing."""
+    pack_json = PACK / "pack.json"
+    ts_file = PACK / gdd.TS_PATH
+    pack_before = pack_json.read_text()
+    ts_before = ts_file.read_text()
+
+    rc = gdd.main(["--chek"])
+
+    assert rc != 0
+    assert "--chek" in capsys.readouterr().err
+    assert pack_json.read_text() == pack_before, "must not write pack.json on a bad argument"
+    assert ts_file.read_text() == ts_before, "must not write the generated ts file on a bad argument"

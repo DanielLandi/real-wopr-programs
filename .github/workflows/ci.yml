@@ -55,6 +55,8 @@ jobs:
         run: make build
       - name: Install the node host
         run: pip install -e "emulator/node[dev]"
+      - name: Generated artifacts are current
+        run: python3 tools/gen-dial-directory.py --check
       - name: pytest
         run: cd emulator/node && python -m pytest -q
 
@@ -165,6 +167,8 @@ jobs:
           node-version: "24"
       - name: Install workspace
         run: cd emulator/web && npm ci
+      - name: Generated artifacts are current
+        run: python3 tools/gen-dial-directory.py --check
       - name: Tests
         run: cd emulator/web && npm test
       - name: Build static exports
