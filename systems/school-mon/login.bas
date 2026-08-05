@@ -18,10 +18,10 @@
 123 DIM CB(40)
 124 DIM CV(40)
 125 GOSUB 8500
-126 DIM CD$(40), CS$(40), CR$(40)
+126 DIM CD$(40), CS$(40), CR$(40), CK$(40)
 127 GOSUB 8600
 128 GOSUB 8680
-129 DIM RL$(10), JL$(10)
+129 DIM RL$(12), JL$(12)
 130 REM ---- parse the SYSTEM/1 request from stdin ----
 135 LINE INPUT H$
 140 IF LEFT$(H$, 20) <> "SYSTEM/1 school-mon " THEN GOTO 7000
@@ -258,7 +258,12 @@
 4920 NEXT J
 4925 IF CJ = 0 THEN GOTO 7000
 4930 IF CS$(CJ) = "-" OR CS$(CJ) = "" THEN GOTO 7000
-4935 PRINT "SYSTEM/1 school-mon OK"
+4932 REM symmetry with 4526's guard: a batch job must resolve to a
+4933 REM CALL-only row (KIND "C"), never one that is really an EXEC
+4934 REM target (KIND "E") - a catalog mistake here is a protocol fault,
+4935 REM not a hang.
+4936 IF CK$(CJ) <> "C" THEN GOTO 7000
+4938 PRINT "SYSTEM/1 school-mon OK"
 4940 GOSUB 7500
 4945 PRINT "DISPLAY 1"
 4950 PRINT "JOB " + MID$(STR$(JQ), 2) + " " + JP$ + " RUNNING..."
@@ -267,6 +272,16 @@
 4965 PRINT "LINE UP"
 4970 PRINT "END"
 4975 END
+4980 REM ---- RUN named a catalog row whose EXEC-target is a CALL-only bus
+4981 REM peer (KIND "C"), not something RUN can EXEC to - review Finding
+4982 REM 1: this used to reach 4540's "EXEC school-ada", which the host
+4983 REM rejects as an undeclared exec target (an ordinary keystroke
+4984 REM crashing the host, not an in-character refusal).
+4985 GOSUB 7800
+4990 PRINT "DISPLAY 1"
+4993 PRINT "?Batch program - SUBMIT the job instead"
+4996 GOSUB 7900
+4999 END
 5000 REM ---- SUBMIT <job>: enqueue the job file's program. Spool holds
 5001 REM exactly one job at a time (design doc 5.3) - a full spool
 5002 REM refuses rather than silently replacing what is already running.
@@ -354,7 +369,12 @@
 4510 IF CF = 0 THEN GOTO 4600
 4515 IF CV(CF) > MV THEN GOTO 4640
 4520 IF CS$(CF) = "-" OR CS$(CF) = "" THEN GOTO 4670
-4525 PH$ = "EXEC"
+4522 REM a batch-only row (KIND "C", e.g. ADAR11.BAS) names a bus peer,
+4523 REM not an EXEC target - the host rejects an EXEC naming a peer that
+4524 REM was never declared as an exec (review Finding 1); refuse here,
+4525 REM in character, rather than let that reach the host as a crash.
+4526 IF CK$(CF) <> "E" THEN GOTO 4980
+4527 PH$ = "EXEC"
 4530 GOSUB 7800
 4535 PRINT "DISPLAY 0"
 4540 PRINT "EXEC " + CS$(CF)
@@ -396,41 +416,47 @@
 7930 PRINT "END"
 7940 RETURN
 8600 REM ---- load CATLOG.DAT ----
-8605 NC = 0
-8610 OPEN "data/catlog.dat" FOR INPUT AS #1
-8615 IF EOF(1) THEN GOTO 8670
-8620 LINE INPUT #1, L9$
-8625 NC = NC + 1
-8627 T9$ = LEFT$(L9$, 12)
-8629 GOSUB 9000
-8631 CN$(NC) = T9$
-8633 T9$ = MID$(L9$, 14, 7)
-8635 GOSUB 9000
-8637 CO$(NC) = T9$
-8639 CB(NC) = VAL(MID$(L9$, 22, 3))
-8641 CV(NC) = VAL(MID$(L9$, 26, 1))
-8642 REM EXEC-target widened 8->10 (Task 4): "school-ada" is 10 chars, so
-8643 CD$(NC) = "-"
-8644 T9$ = MID$(L9$, 28, 10)
-8645 GOSUB 9000
-8646 CS$(NC) = T9$
-8647 T9$ = MID$(L9$, 39, 1)
-8648 GOSUB 9000
-8649 CR$(NC) = T9$
-8650 REM ---- derive the TYPE path from the catalog itself, not a
-8651 REM parallel filename table: a row is typeable iff its EXEC-target
-8652 REM is "-" (not another program's dispatch target) and CATLOG.DAT's
-8653 REM readable-flag column (39) says "Y". STUDNT.DAT, COURSE.DAT and
-8654 REM SCHED.DAT live on systems/school's disk, not this one, so their
-8655 REM flag is "N" and CD$ stays "-".
-8656 IF CS$(NC) <> "-" THEN GOTO 8669
-8657 IF CR$(NC) <> "Y" THEN GOTO 8669
-8658 T9$ = CN$(NC)
-8659 GOSUB 9100
-8663 CD$(NC) = "data/" + T9$
-8669 GOTO 8615
-8670 CLOSE #1
-8675 RETURN
+8602 NC = 0
+8604 OPEN "data/catlog.dat" FOR INPUT AS #1
+8606 IF EOF(1) THEN GOTO 8660
+8608 LINE INPUT #1, L9$
+8610 NC = NC + 1
+8612 T9$ = LEFT$(L9$, 12)
+8613 GOSUB 9000
+8614 CN$(NC) = T9$
+8615 T9$ = MID$(L9$, 14, 7)
+8616 GOSUB 9000
+8617 CO$(NC) = T9$
+8618 CB(NC) = VAL(MID$(L9$, 22, 3))
+8619 CV(NC) = VAL(MID$(L9$, 26, 1))
+8620 REM EXEC-target (10 chars, widened from 8 in Task 4) sits at 28-37.
+8621 REM KIND at 39 distinguishes an EXEC-able target ("E", used by RUN's
+8622 REM 4520 and 8680's captive resolution) from a CALL-only bus peer
+8623 REM ("C", used by 4900's batch CALL) - review Finding 1: the column
+8624 REM used to do both jobs before, with no way to tell them apart, so
+8625 REM RUN ADAR11.BAS emitted an EXEC the host rejected. Flag: 37 -> 41.
+8626 CD$(NC) = "-"
+8627 T9$ = MID$(L9$, 28, 10)
+8628 GOSUB 9000
+8629 CS$(NC) = T9$
+8630 CK$(NC) = MID$(L9$, 39, 1)
+8631 T9$ = MID$(L9$, 41, 1)
+8632 GOSUB 9000
+8633 CR$(NC) = T9$
+8634 REM ---- derive the TYPE path from the catalog itself, not a
+8635 REM parallel filename table: a row is typeable iff its EXEC-target
+8636 REM is "-" (not another program's dispatch target) and CATLOG.DAT's
+8637 REM readable-flag column (41) says "Y". STUDNT.DAT, COURSE.DAT and
+8638 REM SCHED.DAT live on systems/school's disk, not this one, so their
+8639 REM flag is "N" and CD$ stays "-".
+8640 IF CS$(NC) <> "-" THEN GOTO 8650
+8641 IF CR$(NC) <> "Y" THEN GOTO 8650
+8642 T9$ = CN$(NC)
+8643 GOSUB 9100
+8644 CD$(NC) = "data/" + T9$
+8650 GOTO 8606
+8660 CLOSE #1
+8665 RETURN
 8680 REM ---- resolve captive program ids through the catalog, so there is
 8681 REM one mapping (CATLOG.DAT's system-id column) rather than two. A
 8682 REM captive account whose program will not resolve to a usable
@@ -444,7 +470,7 @@
 8690 AG$(I) = "-"
 8691 FOR J = 1 TO NC
 8692 IF CN$(J) <> P8$ + ".BAS" THEN GOTO 8694
-8693 IF CS$(J) <> "-" AND CS$(J) <> "" THEN AG$(I) = CS$(J)
+8693 IF CS$(J) <> "-" AND CS$(J) <> "" THEN IF CK$(J) = "E" THEN AG$(I) = CS$(J)
 8694 NEXT J
 8696 NEXT I
 8698 RETURN
