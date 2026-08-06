@@ -134,7 +134,15 @@
 3415 GOSUB 7500
 3420 PRINT "DISPLAY 2"
 3425 PRINT "RSTS V7.0-07  JOB 12  " + AK$ + "  KB34"
-3430 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, QUEUE, PRINT <JOB>, BYE"
+3426 REM ---- 3434 is 67 columns wide, and stays that way by decision (#58):
+3427 REM the <=60 teletype contract binds what JOSHUA says, is enforced on
+3428 REM that one path (emulator/node/app/joshua.py MAX_COLS) and is scoped
+3429 REM to it in AGENTS.md. An RSTS/E system printing to a terminal that
+3430 REM wrapped at 72-80 is not bound by it. Every other line in every
+3431 REM system does sit under 60, so this one reads like an overrun; it is
+3432 REM not. Split it only if that contract is deliberately widened to
+3433 REM cover the systems tier - not on sight.
+3434 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, QUEUE, PRINT <JOB>, BYE"
 3435 PRINT "PROMPT Ready"
 3440 PRINT "LINE UP"
 3445 PRINT "END"
