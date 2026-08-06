@@ -365,6 +365,39 @@ def gen_catalog(rng: random.Random, roster):
     return catalog
 
 
+MONTHS = ["SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN"]
+
+# Absence rises through the winter and falls off in June, the way a real
+# register does. These are relative weights on the mean days missed per month;
+# the exact shape is not load-bearing, but determinism and a total that makes
+# ADA visibly differ from ADM both are.
+MONTH_WEIGHT = {
+    "SEP": 0.6, "OCT": 0.9, "NOV": 1.2, "DEC": 1.6, "JAN": 1.8,
+    "FEB": 1.5, "MAR": 1.1, "APR": 0.9, "MAY": 0.7, "JUN": 0.5,
+}
+
+
+def gen_absences(rng: random.Random, ids):
+    """One row per student per month: the monthly attendance register the
+    office keyed from teachers' daily registers.
+
+    Returns [(student_id, month, days_absent)], ordered by id then by
+    calendar month. ADAR11 sums the third field and never looks at a single
+    pupil's row — but the keyed source is what a 1983 office actually held,
+    and spec section 6 says the generated artifact is the source, not a
+    summary the batch tier should be computing itself.
+    """
+    rows = []
+    for sid in ids:
+        # A pupil's own tendency to be absent, steady across the year.
+        habit = rng.choice([0.3, 0.5, 0.8, 1.0, 1.4, 2.2])
+        for month in MONTHS:
+            mean = habit * MONTH_WEIGHT[month]
+            days = min(int(rng.expovariate(1.0 / mean)), 15)
+            rows.append((sid, month, days))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -419,6 +452,20 @@ def main():
     print("courses (catalog) %4d" % len(catalog))
     print("schedule rows     %4d" % sum(len(r[3]) for r in roster))
     print("grade rows        %4d" % sum(len(r[3]) for r in roster))
+
+    # Called last: every file above is drawn from the one shared seeded PRNG
+    # in sequence, so a draw inserted anywhere but the end would shift every
+    # subsequent draw and rewrite unrelated committed data (see module
+    # docstring and real-wopr#174).
+    absences = gen_absences(rng, [sid for sid, _, _, _ in roster])
+
+    schoolada = ROOT / "systems" / "school-ada" / "data"
+    schoolada.mkdir(parents=True, exist_ok=True)
+    with open(schoolada / "absenc.dat", "w") as f:
+        for sid, month, days in absences:
+            f.write("%04d %s %2d\n" % (sid, month, days))
+
+    print("absence rows      %4d" % len(absences))
 
 
 if __name__ == "__main__":
