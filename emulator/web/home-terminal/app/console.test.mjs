@@ -346,7 +346,7 @@ test("directoryText does not print an exchange's region", () => {
 // emulator README) and must equal sims.ts's `systemId` exactly — that equality
 // is the whole of the absorption below. When a system's id changes, both ends
 // have to move together or the machine prints as two lines.
-const SEED ={ region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
+const SEED = { region: "SUNNYVALE CA", api: "https://x", link: "wss://x", joshua: "period", world: 1 };
 const WORLD1 = [
   { ...SEED, id: "w1-wopr", name: "CHEYENNE MOUNTAIN", slot: "WOPR" },
   { ...SEED, id: "w1-school", name: "SEATTLE SCHOOL DIST", slot: "SCHOOL", system: "school-mon" },

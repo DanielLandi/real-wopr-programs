@@ -158,8 +158,12 @@ export class HomeFrameHandler {
       return;
     }
     if (f.kind === "control" && f.payload === "NO CARRIER") {
-      // Mark it so the WS close that the comms layer sends right after this
-      // frame does not print a duplicate NO CARRIER (#88).
+      // One hang-up, one announcement. The flag suppresses the WS close that
+      // the comms layer sends right after this frame (#88) — and a repeat of
+      // the signal itself, because a drop announced twice is the same defect
+      // whether the second one arrives as a close or as another frame (#49).
+      // resetCall()/close clear it, so a later call announces again.
+      if (this.sawNoCarrierFrame) return;
       this.sawNoCarrierFrame = true;
       this.sinks.appendRaw("\n\nNO CARRIER\n");
       this.sinks.setPrompt(this.restingPrompt);

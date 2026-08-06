@@ -134,7 +134,15 @@
 3415 GOSUB 7500
 3420 PRINT "DISPLAY 2"
 3425 PRINT "RSTS V7.0-07  JOB 12  " + AK$ + "  KB34"
-3430 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, QUEUE, PRINT <JOB>, BYE"
+3426 REM ---- 3434 is 67 columns wide, and stays that way by decision (#58):
+3427 REM the <=60 teletype contract binds what JOSHUA says, is enforced on
+3428 REM that one path (emulator/node/app/joshua.py MAX_COLS) and is scoped
+3429 REM to it in AGENTS.md. An RSTS/E system printing to a terminal that
+3430 REM wrapped at 72-80 is not bound by it. Every other line in every
+3431 REM system does sit under 60, so this one reads like an overrun; it is
+3432 REM not. Split it only if that contract is deliberately widened to
+3433 REM cover the systems tier - not on sight.
+3434 PRINT "CAT, TYPE <FILE>, RUN <FILE>, SUBMIT <JOB>, QUEUE, PRINT <JOB>, BYE"
 3435 PRINT "PROMPT Ready"
 3440 PRINT "LINE UP"
 3445 PRINT "END"
@@ -594,7 +602,7 @@
 6006 REM columns, which would silently split a "REPORT " + JR$ one-liner
 6007 REM into two physical lines on the wire and desync everything after
 6008 REM it - see 7500's matching comment on the emit side.
-6009 IF RC > 0 THEN GOTO 6045
+6009 IF RC > 0 THEN GOTO 6041
 6010 IF LEFT$(L$, 6) = "PHASE " THEN PH$ = MID$(L$, 7)
 6020 IF LEFT$(L$, 5) = "ACCT " THEN AK$ = MID$(L$, 6)
 6030 IF LEFT$(L$, 6) = "TRIES " THEN TR = VAL(MID$(L$, 7))
@@ -604,15 +612,26 @@
 6038 IF LEFT$(L$, 5) = "PROG " THEN JP$ = MID$(L$, 6)
 6039 IF LEFT$(L$, 7) = "REPORT " THEN GOSUB 6900
 6040 RETURN
-6045 REM ---- consuming one report body line into JR$'s in-memory
-6046 REM "|"-joined form (task 3's shape - unchanged in memory, only the
-6047 REM wire encoding around it changed) ----
-6048 IF JR$ = "" THEN GOTO 6051
-6049 JR$ = JR$ + "|" + L$
-6050 GOTO 6052
-6051 JR$ = L$
-6052 RC = RC - 1
-6055 RETURN
+6041 REM ---- consuming one report body line into JR$'s in-memory
+6042 REM "|"-joined form (task 3's shape - unchanged in memory, only the
+6043 REM wire encoding around it changed) ----
+6044 REM Both guards below refuse a body line the in-memory form cannot
+6045 REM carry, and they refuse it HERE, while the STATE block is still
+6046 REM being read and nothing has printed - so the caller gets 7000's
+6047 REM whole frame rather than a second header glued onto a half-built
+6048 REM one (docs/systems.md 2.2 wants STATE <m> on line 2). 9263/9283
+6049 REM check the same two things on the way back out, but by then the
+6050 REM response header has gone. A "|" would desync 9200's split and
+6051 REM overflow JL$; 80 columns is where bwBASIC 2.20 hard-wraps a
+6052 REM PRINT. RESUME guards its own reply lines the same way at 3722.
+6053 IF INSTR(L$, "|") > 0 THEN GOTO 7000
+6054 IF LEN(L$) >= 80 THEN GOTO 7000
+6056 IF JR$ = "" THEN GOTO 6059
+6057 JR$ = JR$ + "|" + L$
+6058 GOTO 6060
+6059 JR$ = L$
+6060 RC = RC - 1
+6062 RETURN
 6900 REM ---- REPORT <n> header: n more physical STATE lines follow, each
 6901 REM one report body line ----
 6910 RC = VAL(MID$(L$, 8))

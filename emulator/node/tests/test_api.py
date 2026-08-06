@@ -457,3 +457,66 @@ def test_the_system_speaks_first_with_the_bare_logon_prompt(client):
         greet = json.loads(ws.receive_text())
     assert greet["kind"] == "output"
     assert greet["payload"] == "\nLOGON:\n"
+
+
+def test_a_system_sign_off_does_not_announce_the_drop_itself(client, monkeypatch):
+    """One NO CARRIER per hang-up (real-wopr-programs#49).
+
+    Dialling a period system and signing off printed NO CARRIER twice, with a
+    stray blank line between. The two came from different layers: this one,
+    which announced the drop as ordinary output text, and the comms layer,
+    which sends a control NO CARRIER out of band the moment this socket closes
+    (relay/src/server.ts, issue #88 — covered by relay/tests/server.test.ts).
+
+    Comms wins that argument. It is the only thing that connects to this
+    endpoint (D3, enforced above by the internal token), so its announcement
+    is on every path a visitor can take, and `sendImmediate` gets it past the
+    300-baud queue that teardown discards. A shaped frame from here has no
+    such guarantee — and on an uncapped link it would arrive as a *second*
+    signal, which the terminal renders as a second announcement.
+
+    Note the fix is emphatically not to have the terminal grep transcript text
+    for "NO CARRIER": a system that merely printed those words would trip it.
+
+    So the node closes and says nothing.
+
+    Both drop paths are driven here — the CONNECT that never comes up, and the
+    sign-off mid-session, which is the one a visitor actually reproduces by
+    dialling a system and typing SO.
+    """
+    from app import main as main_mod
+    from app.session_turn import TurnResult
+
+    def drive(sign_off_after_connect: bool):
+        async def turn(runner, frames, command, user_input=None, **kwargs):
+            if command == "CONNECT" and sign_off_after_connect:
+                return TurnResult(display="PANAMAC READY", prompt="READY:",
+                                  line="UP", frames=[])
+            return TurnResult(display="PANAMAC OFF", prompt=None, line="DROP", frames=[])
+
+        monkeypatch.setattr(main_mod, "run_session_turn", turn)
+        r = client.post("/api/session",
+                        json={"surface": "home-terminal", "system": "reference"})
+        sid, token = r.json()["session_id"], r.json()["token"]
+        seen = []
+        with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+            if sign_off_after_connect:
+                seen.append(json.loads(ws.receive_text()))   # PANAMAC READY
+                seen.append(json.loads(ws.receive_text()))   # prompt
+                ws.send_text(json.dumps({"v": 1, "session": sid, "seq": 0,
+                                         "kind": "input", "link": "dialup-300",
+                                         "payload": "SO", "eom": True}))
+            try:
+                while True:
+                    seen.append(json.loads(ws.receive_text()))
+            except Exception:
+                pass
+        return seen
+
+    for sign_off in (False, True):
+        frames = drive(sign_off)
+        assert not [f for f in frames if "NO CARRIER" in f["payload"]], \
+            "the node must leave carrier loss to comms (sign_off=%s): %r" % (sign_off, frames)
+        # The line still drops, and the system's own parting words still arrive.
+        assert any(f["kind"] == "output" and "PANAMAC OFF" in f["payload"] for f in frames), \
+            "sign_off=%s: %r" % (sign_off, frames)

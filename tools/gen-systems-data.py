@@ -7,6 +7,11 @@ startup. It is not part of any build or runtime path — the .dat files it
 writes are committed, and the programs only ever read those.
 
     tools/gen-systems-data.py          # rewrites every systems data file
+    tools/gen-systems-data.py --check  # exit 1 if the committed files are stale
+
+CI runs --check, so a hand-edited .dat, a changed SEED or weight, or a draw
+inserted anywhere but last in the sequence fails the build instead of
+sitting in the tree looking generated (#57).
 
 Determinism: everything is drawn from random.Random(SEED) with SEED = 1983.
 Re-running the script reproduces the committed files byte-for-byte. If you
@@ -40,6 +45,7 @@ Files written (fixed-width, one record per line, ASCII, LF):
 from __future__ import annotations
 
 import random
+import sys
 from pathlib import Path
 
 SEED = 1983
@@ -439,7 +445,13 @@ def gen_absences(rng: random.Random, ids):
 # ---------------------------------------------------------------------------
 
 
-def main():
+def render_all() -> dict[Path, str]:
+    """Every committed data file, as {path: exact text}, drawn once.
+
+    Rendering is separated from writing so --check can compare against what
+    is on disk without a second copy of the layouts. One shared PRNG, drawn
+    in this order — see the note on gen_absences below.
+    """
     rng = random.Random(SEED)
 
     flights = gen_flights(rng)
@@ -450,61 +462,80 @@ def main():
     airline = ROOT / "systems" / "airline" / "data"
     school = ROOT / "systems" / "school" / "data"
     schooldb = ROOT / "systems" / "school-db" / "data"
-    for d in (airline, school, schooldb):
-        d.mkdir(parents=True, exist_ok=True)
+    schoolada = ROOT / "systems" / "school-ada" / "data"
 
-    with open(airline / "flights.dat", "w") as f:
-        for pair, orig, dest, key, disp, dep, arr, arrlen, seats in flights:
-            f.write("%s %s %s %s %s %s %s %d %s\n" % (
-                pad(pair, 6), pad(orig, 3), pad(dest, 3), pad(key, 5),
-                pad(disp, 6), pad(dep, 4), pad(arr, 6), arrlen,
-                pad(seats, 8)))
+    files: dict[Path, str] = {}
 
-    with open(airline / "passengers.dat", "w") as f:
-        for name, key, cls, date in passengers:
-            f.write("%s %s %s %s\n" % (pad(name, 26), pad(key, 5), cls,
-                                       pad(date, 5)))
+    files[airline / "flights.dat"] = "".join(
+        "%s %s %s %s %s %s %s %d %s\n" % (
+            pad(pair, 6), pad(orig, 3), pad(dest, 3), pad(key, 5),
+            pad(disp, 6), pad(dep, 4), pad(arr, 6), arrlen, pad(seats, 8))
+        for pair, orig, dest, key, disp, dep, arr, arrlen, seats in flights)
 
-    with open(school / "students.dat", "w") as f:
-        for sid, name, grade, _ in roster:
-            f.write("%04d %s %s\n" % (sid, pad(name, 30), pad(grade, 2)))
+    files[airline / "passengers.dat"] = "".join(
+        "%s %s %s %s\n" % (pad(name, 26), pad(key, 5), cls, pad(date, 5))
+        for name, key, cls, date in passengers)
 
-    with open(school / "courses.dat", "w") as f:
-        for course, room, teacher in catalog:
-            f.write("%s %s %s\n" % (pad(course, 14), pad(room, 6),
-                                    pad(teacher, 12)))
+    files[school / "students.dat"] = "".join(
+        "%04d %s %s\n" % (sid, pad(name, 30), pad(grade, 2))
+        for sid, name, grade, _ in roster)
 
-    with open(school / "schedule.dat", "w") as f:
-        for sid, _, _, rows in roster:
-            for course, _ in rows:
-                f.write("%04d %s\n" % (sid, pad(course, 14)))
+    files[school / "courses.dat"] = "".join(
+        "%s %s %s\n" % (pad(course, 14), pad(room, 6), pad(teacher, 12))
+        for course, room, teacher in catalog)
 
-    with open(schooldb / "grades.dat", "w") as f:
-        for sid, _, _, rows in roster:
-            for course, letter in rows:
-                f.write("%04d %s %s\n" % (sid, pad(course, 14), letter))
+    files[school / "schedule.dat"] = "".join(
+        "%04d %s\n" % (sid, pad(course, 14))
+        for sid, _, _, rows in roster for course, _ in rows)
 
-    print("flights           %4d" % len(flights))
-    print("passengers        %4d" % len(passengers))
-    print("students          %4d" % len(roster))
-    print("courses (catalog) %4d" % len(catalog))
-    print("schedule rows     %4d" % sum(len(r[3]) for r in roster))
-    print("grade rows        %4d" % sum(len(r[3]) for r in roster))
+    files[schooldb / "grades.dat"] = "".join(
+        "%04d %s %s\n" % (sid, pad(course, 14), letter)
+        for sid, _, _, rows in roster for course, letter in rows)
 
-    # Called last: every file above is drawn from the one shared seeded PRNG
-    # in sequence, so a draw inserted anywhere but the end would shift every
+    # Drawn last: every file above comes from the one shared seeded PRNG in
+    # sequence, so a draw inserted anywhere but the end would shift every
     # subsequent draw and rewrite unrelated committed data (see module
     # docstring and real-wopr#174).
     absences = gen_absences(rng, [sid for sid, _, _, _ in roster])
+    files[schoolada / "absenc.dat"] = "".join(
+        "%04d %s %2d\n" % (sid, month, days) for sid, month, days in absences)
 
-    schoolada = ROOT / "systems" / "school-ada" / "data"
-    schoolada.mkdir(parents=True, exist_ok=True)
-    with open(schoolada / "absenc.dat", "w") as f:
-        for sid, month, days in absences:
-            f.write("%04d %s %2d\n" % (sid, month, days))
+    return files
 
-    print("absence rows      %4d" % len(absences))
+
+def stale_files(files: dict[Path, str]) -> list[Path]:
+    """Which of `files` differ from what is committed (missing counts as stale)."""
+    return [p for p, text in files.items()
+            if not p.exists() or p.read_text() != text]
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv not in ([], ["--check"]):
+        print(
+            f"gen-systems-data.py: unrecognised argument(s): {' '.join(argv)!r}\n"
+            "usage: gen-systems-data.py [--check]",
+            file=sys.stderr,
+        )
+        return 2
+
+    files = render_all()
+    stale = stale_files(files)
+
+    if argv == ["--check"]:
+        for p in stale:
+            print("stale: %s — run tools/gen-systems-data.py"
+                  % p.relative_to(ROOT), file=sys.stderr)
+        return 1 if stale else 0
+
+    for p, text in files.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    for p, text in sorted(files.items()):
+        print("%-22s %5d rows" % (p.relative_to(ROOT), text.count("\n")))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

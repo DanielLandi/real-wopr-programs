@@ -57,6 +57,8 @@ jobs:
         run: pip install -e "emulator/node[dev]"
       - name: Generated artifacts are current
         run: python3 tools/gen-dial-directory.py --check
+      - name: Generated data files are current
+        run: python3 tools/gen-systems-data.py --check
       - name: pytest
         run: cd emulator/node && python -m pytest -q
 

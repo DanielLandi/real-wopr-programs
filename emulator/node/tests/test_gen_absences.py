@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 spec = importlib.util.spec_from_file_location("gsd", ROOT / "tools" / "gen-systems-data.py")
 gsd = importlib.util.module_from_spec(spec)
@@ -18,21 +20,33 @@ def roster_ids():
     return [int(l[0:4]) for l in lines]
 
 
-def instructional_days():
+def instructional_days(text=None):
     """{month: days} read off CALEND.DAT, the calendar ADAR11 itself divides
     by — never hard-coded here, so this stays true if the calendar changes.
 
     Layout mirrors main.bas' 8600 loader: cols 1-3 month, 5-10 building,
-    12-13 instructional days. A pupil attends one building, so a month's
-    ceiling is the longest month any building keeps (today ADAR11 refuses
-    a second building outright, so there is exactly one row per month).
+    12-13 instructional days.
+
+    A pupil attends exactly one building, so "the month's instructional
+    days" is only a well-defined number while the calendar carries one row
+    per month. main.bas' 4040 refuses to run otherwise (NB <> 1 -> 7000)
+    for the same reason: the roster has no building column to split the
+    headcount by. This refuses too, rather than collapsing the rows to the
+    longest of them — a clamp built from the wrong building's month would
+    pass every caller here silently (real-wopr-programs#58).
     """
     days = {}
-    for line in CALEND.read_text().splitlines():
+    for line in (CALEND.read_text() if text is None else text).splitlines():
         if not line.strip():
             continue
         month, n = line[0:3], int(line[11:13])
-        days[month] = max(days.get(month, 0), n)
+        if month in days:
+            raise ValueError(
+                "CALEND.DAT gives %s more than one row, so a pupil's month is "
+                "ambiguous; this helper needs one row per month (and the "
+                "register's clamp needs to become per-building)" % month
+            )
+        days[month] = n
     return days
 
 
@@ -76,6 +90,21 @@ def test_committed_register_is_keyable():
         "committed absenc.dat rows exceed their month's instructional days: "
         + ", ".join("%04d %s %d > %d" % (s, m, d, cal[m]) for s, m, d in over[:5])
     )
+
+
+def test_instructional_days_refuses_a_multi_building_calendar():
+    """Taking max() across buildings answers for the wrong one. A pupil
+    attends exactly one building, so a per-month ceiling is only meaningful
+    while the calendar carries exactly one row per month — which is precisely
+    what main.bas' 4040 refuses to proceed without (NB <> 1 -> 7000), because
+    the roster has no building column to split the headcount by.
+
+    So the helper must not quietly clamp every pupil to the longest building's
+    month. The day a second building lands, this fails loudly and points at
+    the register's per-month clamp needing to become per-building too."""
+    two_buildings = "SEP HIGH   20\nSEP WEST   18\n"
+    with pytest.raises(ValueError, match="one row per month"):
+        instructional_days(two_buildings)
 
 
 def test_generation_is_deterministic():

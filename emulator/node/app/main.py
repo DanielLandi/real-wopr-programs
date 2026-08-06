@@ -368,7 +368,6 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             except (SystemFault, SystemTimeout, SystemBusy) as exc:
                 log.warning("system %s CONNECT failed, dropping line: %r",
                             session.system_id, exc)
-                await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                 await ws.close()
                 return
             await store.set_system_state(session_id, encode_stack(resp.frames))
@@ -382,7 +381,13 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             if resp.prompt:
                 await ws.send_text(envelope("prompt", resp.prompt))
             if resp.line == "DROP":
-                await ws.send_text(envelope("output", "\nNO CARRIER\n"))
+                # Close, and say nothing about it. Carrier loss is announced by
+                # the comms layer, which is the only thing that connects here
+                # (D3) and which already sends a control NO CARRIER the instant
+                # this socket closes — out of band, ahead of teardown
+                # (relay/src/server.ts, issue #88). Announcing here as well is
+                # what printed NO CARRIER twice on a period system's sign-off
+                # (#49): once as this frame's text, once as the comms signal.
                 await ws.close()
                 return
         elif (session.surface in ("home-terminal", "norad-terminal")
@@ -448,7 +453,6 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     except (SystemFault, SystemTimeout, SystemBusy) as exc:
                         log.warning("system %s INPUT failed, dropping line: %r",
                                     session.system_id, exc)
-                        await ws.send_text(envelope("output", "\nNO CARRIER\n"))
                         await ws.close()
                         return
                     await store.set_system_state(session_id, encode_stack(resp.frames))
@@ -461,8 +465,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     if resp.prompt:
                         await ws.send_text(envelope("prompt", resp.prompt))
                     if resp.line == "DROP":
-                        await ws.send_text(envelope("output", "\nNO CARRIER\n"))
-                        await ws.close()
+                        await ws.close()  # comms announces the drop, not us (#49)
                         return
                     continue
 
