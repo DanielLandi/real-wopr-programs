@@ -10,6 +10,17 @@ things if ignored: the program/harness line, period discipline per language, byt
 fixtures, determinism (no wall clock, no unseeded randomness), and how approximations get
 documented rather than hidden. They are not repeated here — that file is the source of truth.
 
+## Contribution flow
+
+This is a **Tier A repo** (public, deployed as the pack behind realwopr.ai): changes land via
+branch → PR → CI green → **squash merge** (`gh pr merge --squash`), one commit per PR. No
+direct pushes to `main`; protection applies to maintainers too, so there is no admin override
+to reach for. The nine required checks are the `pack` workflow's jobs: `programs`, `node`,
+`relay`, `web`, `devkit`, `images`, `terminal`, `federation`, `cli`.
+
+Human contributors: see `CONTRIBUTING.md`, which describes the same path without the internal
+tier vocabulary.
+
 ## Build & test
 
 ```bash

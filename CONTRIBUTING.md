@@ -4,6 +4,30 @@ These are the period-language programs behind [realwopr.ai](https://realwopr.ai)
 modern harness that runs them. The guiding rule is fidelity to the era: a program stays within
 constructs its language plausibly had in the early 1980s, and it says so when it approximates.
 
+## Submitting a change
+
+`main` is protected: everything lands through a pull request with CI green.
+
+1. Fork, then branch from `main`.
+2. Make the change. If you touched a program, `make test` must be green locally before you
+   push — the goldens are the spec.
+3. Open a PR. All nine `pack` jobs must pass (`programs`, `node`, `relay`, `web`, `devkit`,
+   `images`, `terminal`, `federation`, `cli`); they build every program with real period
+   toolchains (gfortran, sbcl, gnucobol, bwbasic, cc65, gcc) and diff every golden fixture
+   byte-for-byte.
+4. A maintainer merges with squash, so your PR lands as one commit.
+
+**If you changed behavior on purpose**, regenerate the affected fixtures and review the diff
+line by line before pushing. A regenerated `.out` that you did not read is not a test — it is
+a recording of whatever the code now does.
+
+First PR from a fork? GitHub will hold the workflow run until a maintainer approves it. That
+is GitHub's default for new contributors, not a problem with your PR.
+
+Participation is covered by the [Code of Conduct](./CODE_OF_CONDUCT.md). Found a security
+problem rather than a bug? Do not open an issue — [SECURITY.md](./SECURITY.md) has the private
+reporting path.
+
 ## Which half are you changing?
 
 **A program** (`games/`, `systems/`, `joshua/`) — stay in period. Fortran within F77/F90
