@@ -33,6 +33,8 @@ Files written (fixed-width, one record per line, ASCII, LF):
     1-4 id  6-19 course
   systems/school-db/data/grades.dat
     1-4 id  6-19 course  21 grade
+  systems/school-ada/data/absenc.dat
+    1-4 id  6-8 month  10-11 days absent
 """
 
 from __future__ import annotations
@@ -365,6 +367,75 @@ def gen_catalog(rng: random.Random, roster):
     return catalog
 
 
+MONTHS = ["SEP", "OCT", "NOV", "DEC", "JAN", "FEB", "MAR", "APR", "MAY", "JUN"]
+
+# Absence rises through the winter and falls off in June, the way a real
+# register does. These are relative weights on the mean days missed per month;
+# the exact shape is not load-bearing, but determinism and a total that makes
+# ADA visibly differ from ADM both are.
+MONTH_WEIGHT = {
+    "SEP": 0.6, "OCT": 0.9, "NOV": 1.2, "DEC": 1.6, "JAN": 1.8,
+    "FEB": 1.5, "MAR": 1.1, "APR": 0.9, "MAY": 0.7, "JUN": 0.5,
+}
+
+# A pupil misses at most three school weeks in a single month. This is a
+# plausibility ceiling on the exponential's tail, not a calendar fact, and
+# it is the SECOND of the two clamps below - see MONTH_DAYS.
+MAX_DAYS_ABSENT = 15
+
+# Instructional days per month, transcribed from
+# systems/school-ada/data/calend.dat (HIGH; 180 days in the year). The
+# other clamp, answering a different question: MAX_DAYS_ABSENT says how
+# much absence is believable, this says how much the month physically held.
+# Both belong. DEC keeps 14 days, so MAX_DAYS_ABSENT alone once let a row
+# claim 15 days absent in a 14-day month; MONTH_DAYS alone would raise the
+# ceiling to 22 in the eight months longer than three weeks, which is the
+# same implausibility from the other side.
+#
+# The duplication of calend.dat's figures is deliberate: modules here may
+# not share code libraries, so spec-level duplication is the sanctioned way
+# to know another module's data (CONTRIBUTING.md, "federation"). Keep the
+# two in step by hand.
+MONTH_DAYS = {
+    "SEP": 20, "OCT": 22, "NOV": 18, "DEC": 14, "JAN": 19,
+    "FEB": 18, "MAR": 21, "APR": 16, "MAY": 21, "JUN": 11,
+}
+
+
+def gen_absences(rng: random.Random, ids):
+    """One row per student per month: the monthly attendance register the
+    office keyed from teachers' daily registers.
+
+    Returns [(student_id, month, days_absent)], ordered by id then by
+    calendar month. ADAR11 sums the third field and never looks at a single
+    pupil's row — but the keyed source is what a 1983 office actually held,
+    and spec section 6 says the generated artifact is the source, not a
+    summary the batch tier should be computing itself.
+
+    Sorted to ascending numeric id here, deliberately not left in the
+    caller's roster order: students.dat's file order is alphabetical by
+    name (gen_students sorts on the name field), which is not the id
+    order the register is keyed in.
+
+    A row is clamped twice, by MAX_DAYS_ABSENT and by its own month's
+    instructional days (MONTH_DAYS). Two ceilings, two questions: no pupil
+    misses more than three school weeks in a month, and no pupil misses
+    more days than the month actually held. A clerk could not have keyed
+    either, and this file's whole justification is that it is the artifact
+    somebody actually keyed.
+    """
+    rows = []
+    for sid in sorted(ids):
+        # A pupil's own tendency to be absent, steady across the year.
+        habit = rng.choice([0.3, 0.5, 0.8, 1.0, 1.4, 2.2])
+        for month in MONTHS:
+            mean = habit * MONTH_WEIGHT[month]
+            days = min(int(rng.expovariate(1.0 / mean)),
+                       MAX_DAYS_ABSENT, MONTH_DAYS[month])
+            rows.append((sid, month, days))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -419,6 +490,20 @@ def main():
     print("courses (catalog) %4d" % len(catalog))
     print("schedule rows     %4d" % sum(len(r[3]) for r in roster))
     print("grade rows        %4d" % sum(len(r[3]) for r in roster))
+
+    # Called last: every file above is drawn from the one shared seeded PRNG
+    # in sequence, so a draw inserted anywhere but the end would shift every
+    # subsequent draw and rewrite unrelated committed data (see module
+    # docstring and real-wopr#174).
+    absences = gen_absences(rng, [sid for sid, _, _, _ in roster])
+
+    schoolada = ROOT / "systems" / "school-ada" / "data"
+    schoolada.mkdir(parents=True, exist_ok=True)
+    with open(schoolada / "absenc.dat", "w") as f:
+        for sid, month, days in absences:
+            f.write("%04d %s %2d\n" % (sid, month, days))
+
+    print("absence rows      %4d" % len(absences))
 
 
 if __name__ == "__main__":

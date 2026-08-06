@@ -26,6 +26,10 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/data" "$tmp/../school/data"
 cp "$SRC/main.bas" "$tmp/"
 cp "$SRC/data/calend.dat" "$tmp/data/"
+# The 8800 loader opens data/absenc.dat at startup (line 950), before any
+# request is parsed - without it the program aborts with no output at all,
+# which is not the mid-response abort this check exists to reproduce.
+cp "$SRC/data/absenc.dat" "$tmp/data/"
 # main.bas's 8500 loader reads ../school/data/students.dat (a sibling
 # system's disk) - mirror that one relative path too.
 cp "$SRC/../school/data/students.dat" "$tmp/../school/data/students.dat" 2>/dev/null || true
