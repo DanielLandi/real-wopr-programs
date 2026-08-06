@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
 from app.execstack import Frame
@@ -101,24 +102,33 @@ def test_ws_system_session_connects_and_echoes(system_client):
         assert "[1] YOU SAID: PING" in echo
         assert ">" in ws.receive_text()                       # prompt
         ws.send_text('{"v":1,"kind":"input","payload":"BYE","eom":true}')
-        # GOODBYE (the system's own display) followed by NO CARRIER, then
-        # close. BYE is a LINE DROP path, so it carries no PROMPT frame.
+        # GOODBYE (the system's own display), then the close. BYE is a LINE
+        # DROP path, so it carries no PROMPT frame — and no NO CARRIER
+        # either: carrier loss is the comms layer's to announce (#49), and
+        # this test is talking to the node socket directly, which in the
+        # real topology only comms ever does (D3).
         assert "GOODBYE" in ws.receive_text()
-        assert "NO CARRIER" in ws.receive_text()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
 
 
-def test_ws_system_connect_error_is_clean_no_carrier(system_client, tmp_path):
+def test_ws_system_connect_error_is_a_clean_close(system_client, tmp_path):
     # A connect-time system failure (here: a missing binary — the runner's
     # systems_dir is repointed at an empty dir so binary_for yields a
-    # non-existent path -> SystemFault) must degrade to NO CARRIER + a clean
-    # close, never an unhandled exception tearing down the socket. `reference`
-    # stays in the registry so the session still binds; only the binary is gone.
+    # non-existent path -> SystemFault) must degrade to a clean close, never
+    # an unhandled exception tearing down the socket. `reference` stays in the
+    # registry so the session still binds; only the binary is gone.
+    #
+    # The close is the whole signal. The node does not announce carrier loss
+    # (#49) — comms does, on seeing this socket go, and comms is the only
+    # thing that connects here in the real topology (D3).
     system_client.app.state.system_runner.cfg.systems_dir = tmp_path
     r = system_client.post("/api/session", json={"surface": "home-terminal", "system": "reference"})
     assert r.status_code == 201
     sid, token = r.json()["session_id"], r.json()["token"]
     with system_client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
-        assert "NO CARRIER" in ws.receive_text()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
     # Exiting the context manager without raising == the socket closed cleanly.
 
 
@@ -487,10 +497,12 @@ def test_captive_exec_paints_the_child_and_drops_on_return(tmp_path):
         ws.send_text('{"v":1,"kind":"input","payload":"4","eom":true}')
         # RETURN resumes the monitor rather than dropping outright — its
         # own RETURN handler is what ends the call, so GOODBYE. (the
-        # monitor's display, not the child's) precedes NO CARRIER and no
-        # prompt frame is sent in between.
+        # monitor's display, not the child's) is the last thing on the line,
+        # with no prompt frame after it and no NO CARRIER: the drop is
+        # announced by comms, not here (#49).
         assert "GOODBYE." in ws.receive_text()
-        assert "NO CARRIER" in ws.receive_text()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_text()
 
 
 # -- captive-account resolution failure (Task 10 review finding 2) ----------

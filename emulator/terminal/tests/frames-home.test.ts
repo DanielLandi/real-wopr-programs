@@ -153,6 +153,29 @@ test("a control NO CARRIER prints once; the WS close behind it stays silent", ()
   assert.equal(state.text.match(/NO CARRIER/g)!.length, 1);
 });
 
+test("two control NO CARRIERs for one drop still announce once", () => {
+  // One hang-up, one announcement — whichever layer signals it, and however
+  // many times (#49). The node host used to announce the drop itself on top
+  // of the comms layer's signal, which is how a period system's sign-off
+  // printed NO CARRIER twice. The node no longer does, but the guard belongs
+  // here too: this handler is what owns the rendering, and it must not be
+  // one duplicated signal away from showing the same defect again.
+  const { state, handler } = harness();
+  const carrierLoss = {
+    type: "frame",
+    frame: { v: 1, session: "s1", seq: 0, kind: "control", link: "dialup-300", payload: "NO CARRIER", eom: true },
+  } as FrameEvent;
+  handler.onEvent(carrierLoss);
+  handler.onEvent(carrierLoss);
+  handler.onEvent({ type: "close" });
+  assert.equal(state.text.match(/NO CARRIER/g)!.length, 1);
+  // A later, genuinely separate call announces again.
+  handler.resetCall();
+  state.phase = "connected";
+  handler.onEvent(carrierLoss);
+  assert.equal(state.text.match(/NO CARRIER/g)!.length, 2);
+});
+
 test("an unexpected close with no control frame announces NO CARRIER itself", () => {
   const { state, handler } = harness("connected");
   handler.onEvent({ type: "close" });
