@@ -376,6 +376,29 @@ MONTH_WEIGHT = {
     "FEB": 1.5, "MAR": 1.1, "APR": 0.9, "MAY": 0.7, "JUN": 0.5,
 }
 
+# A pupil misses at most three school weeks in a single month. This is a
+# plausibility ceiling on the exponential's tail, not a calendar fact, and
+# it is the SECOND of the two clamps below - see MONTH_DAYS.
+MAX_DAYS_ABSENT = 15
+
+# Instructional days per month, transcribed from
+# systems/school-ada/data/calend.dat (HIGH; 180 days in the year). The
+# other clamp, answering a different question: MAX_DAYS_ABSENT says how
+# much absence is believable, this says how much the month physically held.
+# Both belong. DEC keeps 14 days, so MAX_DAYS_ABSENT alone once let a row
+# claim 15 days absent in a 14-day month; MONTH_DAYS alone would raise the
+# ceiling to 22 in the eight months longer than three weeks, which is the
+# same implausibility from the other side.
+#
+# The duplication of calend.dat's figures is deliberate: modules here may
+# not share code libraries, so spec-level duplication is the sanctioned way
+# to know another module's data (CONTRIBUTING.md, "federation"). Keep the
+# two in step by hand.
+MONTH_DAYS = {
+    "SEP": 20, "OCT": 22, "NOV": 18, "DEC": 14, "JAN": 19,
+    "FEB": 18, "MAR": 21, "APR": 16, "MAY": 21, "JUN": 11,
+}
+
 
 def gen_absences(rng: random.Random, ids):
     """One row per student per month: the monthly attendance register the
@@ -391,6 +414,13 @@ def gen_absences(rng: random.Random, ids):
     caller's roster order: students.dat's file order is alphabetical by
     name (gen_students sorts on the name field), which is not the id
     order the register is keyed in.
+
+    A row is clamped twice, by MAX_DAYS_ABSENT and by its own month's
+    instructional days (MONTH_DAYS). Two ceilings, two questions: no pupil
+    misses more than three school weeks in a month, and no pupil misses
+    more days than the month actually held. A clerk could not have keyed
+    either, and this file's whole justification is that it is the artifact
+    somebody actually keyed.
     """
     rows = []
     for sid in sorted(ids):
@@ -398,7 +428,8 @@ def gen_absences(rng: random.Random, ids):
         habit = rng.choice([0.3, 0.5, 0.8, 1.0, 1.4, 2.2])
         for month in MONTHS:
             mean = habit * MONTH_WEIGHT[month]
-            days = min(int(rng.expovariate(1.0 / mean)), 15)
+            days = min(int(rng.expovariate(1.0 / mean)),
+                       MAX_DAYS_ABSENT, MONTH_DAYS[month])
             rows.append((sid, month, days))
     return rows
 
