@@ -386,9 +386,14 @@ def gen_absences(rng: random.Random, ids):
     pupil's row — but the keyed source is what a 1983 office actually held,
     and spec section 6 says the generated artifact is the source, not a
     summary the batch tier should be computing itself.
+
+    Sorted to ascending numeric id here, deliberately not left in the
+    caller's roster order: students.dat's file order is alphabetical by
+    name (gen_students sorts on the name field), which is not the id
+    order the register is keyed in.
     """
     rows = []
-    for sid in ids:
+    for sid in sorted(ids):
         # A pupil's own tendency to be absent, steady across the year.
         habit = rng.choice([0.3, 0.5, 0.8, 1.0, 1.4, 2.2])
         for month in MONTHS:
