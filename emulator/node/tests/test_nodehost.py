@@ -96,7 +96,17 @@ class FakeRelay:
         async def _wait():
             while len(self.frames) < n:
                 await asyncio.sleep(0.02)
-        await asyncio.wait_for(_wait(), timeout)
+        try:
+            await asyncio.wait_for(_wait(), timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            # Fail with the diff, not with a hang. A stub whose reply is
+            # malformed emits fewer frames than expected, and a bare
+            # TimeoutError 15s later reads as "the suite wedged" rather than
+            # "the node said the wrong thing" (#47).
+            raise AssertionError(
+                "expected %d frames, got %d after %.1fs: %r"
+                % (n, len(self.frames), timeout, self.frames)
+            ) from None
         return self.frames
 
     def display_text(self) -> str:
@@ -403,6 +413,22 @@ def test_a_program_that_asks_for_a_peer_is_resumed_with_the_answer(tmp_path):
             text = relay.display_text()
             assert "SEARCHING..." in text, text   # shown while the call is in flight
             assert "GRADE F" in text, text        # the peer's answer, verbatim, after it
+
+            # ...and it got there by being dialled, not by being answered in
+            # this process (#47). Without this, the federation can quietly
+            # collapse back into a monolith with the whole suite green: drop
+            # `run_program=` at nodehost.py's run_session_turn call and the
+            # node mounts every program, so _answer_locally finds the peer's
+            # binary and serves it itself. The display above would be
+            # identical — same answer, no phone call. Only the far end having
+            # actually received the request can tell the two apart.
+            assert store.received, (
+                "the peer answered without being dialled: a CALL must leave "
+                "this process, or the federation is a monolith wearing a "
+                "topology file"
+            )
+            assert any("LOOKUP GRADE 1 BIOLOGY 2" in r for r in store.received), \
+                store.received
             await host.stop()
 
     asyncio.run(flow())
@@ -484,4 +510,17 @@ def test_an_ephemeral_node_writes_no_store_file(tmp_path):
             assert not (tmp_path / "state").exists()
             await host.stop()
 
+    asyncio.run(flow())
+
+
+def test_wait_frames_fails_with_a_diff_rather_than_a_hang():
+    """Test-harness guard (#47). A starved wait used to surface as a bare
+    asyncio.TimeoutError 15 seconds later, so a real regression in what the
+    node emits read as "the suite hung" rather than "it said the wrong
+    thing" — and the frames it *did* send, the actual evidence, were never
+    printed. Now the shortfall is the failure message."""
+    async def flow():
+        async with FakeRelay() as relay:
+            with pytest.raises(AssertionError, match=r"expected 3 frames, got 0"):
+                await relay.wait_frames(3, timeout=0.1)
     asyncio.run(flow())
