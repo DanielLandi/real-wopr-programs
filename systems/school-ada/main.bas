@@ -38,10 +38,9 @@
 380 REM its data files fresh every invocation), so STATE is always 0 both
 390 REM ways.
 400 REM
-410 REM The INPUT report (k = NB + 2, NB = buildings read off CALEND.DAT):
+410 REM The INPUT report (k = NB + 1, NB = buildings read off CALEND.DAT):
 420 REM   <NB lines: BUILDING ENROLLED ADM ADA, one per building>
 430 REM   DISTRICT <ADM> <ADA>
-440 REM   ABSENCE POSTINGS NOT ON FILE - CLAIM PROVISIONAL
 450 REM
 460 REM Field widths - fixed here; Task 5's PRINT job formats from these
 470 REM exactly, so they must not move without updating that caller too:
@@ -55,21 +54,21 @@
 550 REM These two lines are unchanged from this program's first cut; only
 560 REM the request/response envelope around them was wrong before.
 570 REM
-580 REM IMPORTANT - read before treating ADA as a bug: ADM and ADA both
-590 REM equal raw ENROLLED, exactly, in every row this program can ever
-600 REM produce today. That is not an arithmetic error - it is the honest
-610 REM consequence of the only two data sources this program has: the
-620 REM roster (a headcount) and CALEND.DAT (an instructional-day divisor).
-630 REM There is no per-student attendance or absence record anywhere on
-640 REM the disk yet; posting one is phase 3's job (design doc section 8,
-650 REM "the data" - ENROLL.BAS/REGIST.DAT), not this program's. Owner
-660 REM ruling (2026-08-05): phase 2 ships the machinery, not a real claim,
-670 REM so this program says so out loud - the trailing "CLAIM PROVISIONAL"
-680 REM line above - rather than printing a computed-looking figure that
-690 REM is actually just enrollment wearing a decimal point. Once phase 3
-700 REM posts real absence data, aggregate days attended will stop being
-710 REM identical to aggregate membership days, ADA will diverge from ADM,
-720 REM and that trailing line comes out.
+580 REM IMPORTANT - ADA is computed; ADM is still a headcount. Read this
+590 REM before treating either figure as a bug. ADA is derived from
+600 REM ABSENC.DAT, the monthly attendance register the office keys off
+610 REM the teachers' daily registers: the 8800 loader sums its days-absent
+620 REM column into TA, and 4155 below takes aggregate days ATTENDED to be
+630 REM aggregate membership days minus that total. Divided by the
+640 REM instructional days on CALEND.DAT, that is the figure the state
+650 REM actually paid on, and it is why ADA now sits below ADM.
+660 REM ADM, by contrast, still equals raw ENROLLED exactly. That is not
+670 REM an arithmetic error either: the roster carries no enrolment or
+680 REM withdrawal dates, so every pupil is a member for all 180 days and
+690 REM average daily membership is precisely the headcount. A real
+700 REM district's ADM moved through the year. Enrolment transactions are
+710 REM the deferred REGIST.DAT retreat (design doc section 8, "the data");
+720 REM when they land, ADM stops being a constant and this note goes.
 730 REM
 740 REM The roster (systems/school/data/students.dat) carries no building
 750 REM column (see that program's 8500 loader), so its whole headcount is
@@ -83,6 +82,7 @@
 920 DIM LN$(10)
 930 GOSUB 8500
 940 GOSUB 8600
+950 GOSUB 8800
 1000 REM ---- parse the SYSTEM/1 request from stdin ----
 1010 LINE INPUT H$
 1020 IF LEFT$(H$, 20) <> "SYSTEM/1 school-ada " THEN GOTO 7000
@@ -135,7 +135,8 @@
 4130 W2 = 7
 4140 GOSUB 9200
 4150 A1$ = F2$
-4160 N2 = MD / BD(I)
+4155 AD = MD - TA
+4160 N2 = AD / BD(I)
 4170 GOSUB 9200
 4180 A2$ = F2$
 4190 T4$ = BN$(I)
@@ -150,16 +151,16 @@
 4280 W2 = 7
 4290 GOSUB 9200
 4300 D1$ = F2$
+4305 N2 = (TM - TA) / TT
 4310 GOSUB 9200
 4320 D2$ = F2$
 4330 PRINT "SYSTEM/1 school-ada OK"
 4340 PRINT "STATE 0"
-4350 PRINT "DISPLAY " + MID$(STR$(NB + 2), 2)
+4350 PRINT "DISPLAY " + MID$(STR$(NB + 1), 2)
 4360 FOR I = 1 TO NB
 4370 PRINT LN$(I)
 4380 NEXT I
 4390 PRINT "DISTRICT " + D1$ + " " + D2$
-4400 PRINT "ABSENCE POSTINGS NOT ON FILE - CLAIM PROVISIONAL"
 4410 PRINT "LINE UP"
 4420 PRINT "END"
 4430 END
@@ -205,6 +206,19 @@
 8724 GOTO 8650
 8730 CLOSE #1
 8740 RETURN
+8800 REM ---- load ABSENC.DAT: sum the days absent ----
+8805 REM Layout (fixed width, ASCII, LF): cols 1-4 student id, col 5 space,
+8810 REM cols 6-8 month, col 9 space, cols 10-11 days absent that month.
+8815 REM Accumulate only. ADAR11 needs the aggregate, never a pupil's row,
+8820 REM and 3,200 rows would overflow any period-plausible DIM.
+8825 TA = 0
+8830 OPEN "data/absenc.dat" FOR INPUT AS #1
+8835 IF EOF(1) THEN GOTO 8855
+8840 LINE INPUT #1, L9$
+8845 TA = TA + VAL(MID$(L9$, 10, 2))
+8850 GOTO 8835
+8855 CLOSE #1
+8860 RETURN
 9000 REM trim trailing spaces from T9$
 9010 IF LEN(T9$) = 0 THEN RETURN
 9020 IF RIGHT$(T9$, 1) <> " " THEN RETURN
