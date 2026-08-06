@@ -9,7 +9,7 @@ STEP 0
 PROG 
 REPORT 0
 DISPLAY 16
- NAME         PPN     SIZE
+NAME         PPN     SIZE
 LOGIN.BAS    [1,2]     18
 RECORDS.BAS  [20,10]   22
 ACCT.DAT     [1,1]      1
