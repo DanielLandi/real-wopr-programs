@@ -11,9 +11,9 @@ mkdir -p bin
 cat > bin/school-ada <<'WRAP'
 #!/usr/bin/env bash
 set -uo pipefail
-# chdir to the program's folder so the BASIC's relative OPEN of data/calend.dat
-# and ../school/data/students.dat resolves no matter where the host spawned
-# us from.
+# chdir to the program's folder so the BASIC's relative OPEN of
+# data/calend.dat, data/absenc.dat and ../school/data/students.dat resolves
+# no matter where the host spawned us from.
 cd "$(cd "$(dirname "$0")/../.." && pwd)"
 out="$(bwbasic "main.bas" 2>/dev/null | sed -n '/^SYSTEM\/1 /,/^END$/p')"
 # A bwBASIC runtime abort prints nothing matching the SYSTEM/1 range and

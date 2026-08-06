@@ -62,6 +62,10 @@
 630 REM aggregate membership days minus that total. Divided by the
 640 REM instructional days on CALEND.DAT, that is the figure the state
 650 REM actually paid on, and it is why ADA now sits below ADM.
+652 REM The DISTRICT line does the same subtraction over district totals
+654 REM at 4305, (TM - TA) / TT, and needs a statement of its own: 4310
+656 REM only re-formats N2, so without 4305 D2$ would come out a copy of
+658 REM D1$ however the buildings' own arithmetic went.
 660 REM ADM, by contrast, still equals raw ENROLLED exactly. That is not
 670 REM an arithmetic error either: the roster carries no enrolment or
 680 REM withdrawal dates, so every pupil is a member for all 180 days and
@@ -135,6 +139,8 @@
 4130 W2 = 7
 4140 GOSUB 9200
 4150 A1$ = F2$
+4152 REM TA is the district-wide absence total. Subtracting it inside the
+4154 REM FOR I loop is correct only because 4040 refuses NB <> 1.
 4155 AD = MD - TA
 4160 N2 = AD / BD(I)
 4170 GOSUB 9200

@@ -33,6 +33,8 @@ Files written (fixed-width, one record per line, ASCII, LF):
     1-4 id  6-19 course
   systems/school-db/data/grades.dat
     1-4 id  6-19 course  21 grade
+  systems/school-ada/data/absenc.dat
+    1-4 id  6-8 month  10-11 days absent
 """
 
 from __future__ import annotations
