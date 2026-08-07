@@ -46,7 +46,23 @@ def decode(raw: str | None, root_program: str) -> list[Frame]:
             return [Frame(root_program, None)]
         if blob.get("v") != FORMAT_VERSION:
             return [Frame(root_program, None)]
-        frames = [Frame(program=e["p"], state=e["s"]) for e in blob["stack"]]
+        stack = blob["stack"]
+        if not isinstance(stack, list):
+            return [Frame(root_program, None)]
+        frames = []
+        for e in stack:
+            # Shape is not enough: `{"p": 1}` has the right key and used to
+            # decode to Frame(program=1), and `program` is then looked up as
+            # a system id and handed to the runner. Check the types here,
+            # where the answer is still "start clean" (#47).
+            if not isinstance(e, dict):
+                return [Frame(root_program, None)]
+            program, state = e["p"], e["s"]
+            if not isinstance(program, str):
+                return [Frame(root_program, None)]
+            if state is not None and not isinstance(state, str):
+                return [Frame(root_program, None)]
+            frames.append(Frame(program=program, state=state))
     except (ValueError, TypeError, KeyError):
         return [Frame(root_program, None)]
     return frames or [Frame(root_program, None)]

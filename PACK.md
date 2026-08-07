@@ -70,10 +70,14 @@ answers the phone and runs the records program for whoever gets past it:
     "bus":  { "address": "SCHOOL-MON",     "protocol": "SYSTEM/1" }
   },
   "execs": ["school"],
-  "state": "ephemeral",
-  "callable_by": null
+  "peers": ["school-ada"]
 }
 ```
+
+That is the block as it ships, verbatim. Everything below `networks` is optional
+and defaults to the quiet answer, so a real manifest declares only what it
+actually claims — spelling the defaults out would teach a house style the pack
+does not use.
 
 | Field | Meaning |
 | --- | --- |

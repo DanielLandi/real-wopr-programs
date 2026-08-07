@@ -411,7 +411,9 @@
 4120 NEXT J
 4125 GOSUB 7800
 4130 PRINT "DISPLAY " + MID$(STR$(NL + 2), 2)
-4135 PRINT " NAME         PPN     SIZE"
+4133 REM the header sits one column right of its data (#47): the row below
+4134 REM starts NAME at 1, PPN at 14 and right-justifies SIZE to 25.
+4135 PRINT "NAME         PPN     SIZE"
 4140 FOR J = 1 TO NC
 4145 IF CV(J) > MV THEN GOTO 4165
 4150 L8$ = CN$(J) + SPACE$(13 - LEN(CN$(J)))
@@ -522,6 +524,7 @@
 8606 IF EOF(1) THEN GOTO 8660
 8608 LINE INPUT #1, L9$
 8610 NC = NC + 1
+8611 IF NC > 40 THEN GOTO 7000
 8612 T9$ = LEFT$(L9$, 12)
 8613 GOSUB 9000
 8614 CN$(NC) = T9$
@@ -669,12 +672,19 @@
 7554 PRINT JL$(K8)
 7556 NEXT K8
 7560 RETURN
+8490 REM ---- the two loaders below both refuse a file longer than their
+8491 REM DIM (40 rows; 4 accounts and 14 catalogue entries ship). Row 41
+8492 REM used to be a bare subscript error mid-load - loud since #45's
+8493 REM empty-output guard, but as a wrapper failure rather than as this
+8494 REM program saying no. Refusing at 7000 makes it a protocol error the
+8495 REM caller can read, the same shape 6911 uses for an over-long REPORT.
 8500 REM ---- load ACCT.DAT ----
 8505 NA = 0
 8510 OPEN "data/acct.dat" FOR INPUT AS #1
 8515 IF EOF(1) THEN GOTO 8560
 8520 LINE INPUT #1, L9$
 8525 NA = NA + 1
+8526 IF NA > 40 THEN GOTO 7000
 8527 T9$ = LEFT$(L9$, 7)
 8529 GOSUB 9000
 8531 AP$(NA) = T9$
