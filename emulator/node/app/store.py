@@ -247,30 +247,20 @@ class PostgresStore:
                         schema="pg_catalog")
 
                 self._pool = await asyncpg.create_pool(
-                    self._url, min_size=0, max_size=5, init=_init)
+                    self._url, min_size=0, max_size=5, init=_init,
+                    # Neon's pooled endpoint sits behind PgBouncer in
+                    # transaction mode, which does not preserve server-side
+                    # prepared statements across pooled connections; asyncpg's
+                    # per-connection statement cache then intermittently
+                    # collides (DuplicatePreparedStatementError). Disabling it
+                    # is the documented workaround.
+                    statement_cache_size=0)
         return self._pool
 
     async def close(self) -> None:
         if self._pool is not None:
-            pool, self._pool = self._pool, None
-            try:
-                await pool.close()
-            except RuntimeError as exc:
-                # asyncpg pools are bound to the event loop that created
-                # them. In production (main.py's lifespan) the pool is
-                # created and closed under the same loop and this never
-                # fires. The store-contract fixture, by its documented
-                # "async def flow(); asyncio.run(flow())" convention (see
-                # tests/test_gtw.py), creates the pool lazily inside a
-                # test's own asyncio.run() and tears it down in a separate
-                # asyncio.run() in fixture teardown — a different, already-
-                # closed loop by the time close() runs. asyncpg then can't
-                # gracefully terminate the old connection and raises this
-                # exact error; it's a test-harness artifact, not a real
-                # leak (the old loop already tore down its transports), so
-                # only this specific message is swallowed.
-                if "Event loop is closed" not in str(exc):
-                    raise
+            await self._pool.close()
+            self._pool = None
 
     @staticmethod
     def _session_from(row) -> Session:

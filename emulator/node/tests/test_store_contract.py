@@ -31,7 +31,8 @@ def store(request):
     pgharness.truncate_all(url)
     s = PostgresStore(url)
     yield s
-    asyncio.run(s.close())
+    # pool is loop-bound to the test's own asyncio.run(); nothing to close here
+    s._pool = None
 
 
 def test_session_roundtrip_and_defcon(store):
