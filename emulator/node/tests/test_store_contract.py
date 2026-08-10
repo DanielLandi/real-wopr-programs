@@ -133,3 +133,22 @@ def test_system_state_default_empty(store):
         assert await store.get_system_state(s.id) == "BLOCK"
 
     asyncio.run(flow())
+
+
+def test_exchange_register_and_list(store):
+    async def flow():
+        assert await store.list_exchanges() == []
+        ok = await store.register_exchange(
+            id="alpha", name="Alpha Exchange", region="US-East",
+            api="https://alpha.example", link="wss://alpha.example/link",
+            joshua="claude", operator="op1")
+        assert ok is True
+        # pending (approved=False) rows are invisible
+        assert await store.list_exchanges() == []
+        dup = await store.register_exchange(
+            id="alpha", name="Other", region="Elsewhere",
+            api="https://x.example", link="wss://x.example", joshua="period",
+            operator=None)
+        assert dup is False
+
+    asyncio.run(flow())

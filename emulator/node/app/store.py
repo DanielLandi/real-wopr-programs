@@ -93,6 +93,9 @@ class Store(Protocol):
     async def touch_room(self, code: str) -> None: ...
     async def get_system_state(self, session_id: str) -> str: ...
     async def set_system_state(self, session_id: str, state: str) -> None: ...
+    async def list_exchanges(self) -> list[dict[str, Any]]: ...
+    async def register_exchange(self, id: str, name: str, region: str, api: str,
+                                link: str, joshua: str, operator: str | None) -> bool: ...
 
 
 class MemoryStore:
@@ -105,6 +108,7 @@ class MemoryStore:
         self.clearances: dict[str, int] = {}
         self.rooms: dict[str, Room] = {}
         self.system_states: dict[str, str] = {}
+        self.exchanges: dict[str, dict[str, Any]] = {}
 
     async def create_session(self, surface: str, link_profile: str, user_id: str | None,
                              room_code: str | None = None, system_id: str | None = None) -> Session:
@@ -215,6 +219,21 @@ class MemoryStore:
 
     async def set_system_state(self, session_id: str, state: str) -> None:
         self.system_states[session_id] = state
+
+    async def list_exchanges(self) -> list[dict[str, Any]]:
+        return [
+            {k: e[k] for k in ("id", "name", "region", "api", "link", "joshua", "operator")}
+            for e in self.exchanges.values() if e["approved"]
+        ]
+
+    async def register_exchange(self, id: str, name: str, region: str, api: str,
+                                link: str, joshua: str, operator: str | None) -> bool:
+        if id in self.exchanges:
+            return False
+        self.exchanges[id] = {"id": id, "name": name, "region": region,
+                              "api": api, "link": link, "joshua": joshua,
+                              "operator": operator, "approved": False}
+        return True
 
 
 class PostgresStore:
@@ -435,6 +454,22 @@ class PostgresStore:
             "insert into session_system_state (session_id, state) values"
             " ($1::uuid,$2) on conflict (session_id) do update set"
             " state = excluded.state, updated_at = now()", session_id, state)
+
+    async def list_exchanges(self) -> list[dict[str, Any]]:
+        pool = await self._pool_or_connect()
+        rows = await pool.fetch(
+            "select id, name, region, api, link, joshua, operator from exchanges"
+            " where approved order by created_at")
+        return [dict(r) for r in rows]
+
+    async def register_exchange(self, id: str, name: str, region: str, api: str,
+                                link: str, joshua: str, operator: str | None) -> bool:
+        pool = await self._pool_or_connect()
+        inserted = await pool.fetchval(
+            "insert into exchanges (id, name, region, api, link, joshua, operator)"
+            " values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing returning id",
+            id, name, region, api, link, joshua, operator)
+        return inserted is not None
 
 
 class SupabaseStore:
