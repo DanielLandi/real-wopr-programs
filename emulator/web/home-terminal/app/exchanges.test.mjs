@@ -64,7 +64,7 @@ test("valid strips a non-string system rather than dropping the whole entry", ()
   assert.deepEqual(valid([{ ...GOOD, system: { evil: true } }]), [GOOD]);
 });
 
-// ---- loadExchanges: Supabase-mode load ------------------------------------
+// ---- loadExchanges: api-mode load ------------------------------------
 
 const TRUNK_GOOD = {
   id: "trunk-def567",
@@ -79,10 +79,9 @@ const TRUNK_GOOD = {
  *  numbered slots: `{ worlds: [{ n, slots: [entry...] }] }`. */
 const TRUNK_DIR = { worlds: [{ n: 1, slots: [TRUNK_GOOD] }] };
 
-const SUPABASE_CFG = {
-  source: "supabase",
-  url: "https://ref.supabase.co",
-  anon_key: "anon",
+const API_CFG = {
+  source: "api",
+  api_base: "https://bridge.example",
   trunk_directory: "https://hub.example/trunk/directory",
 };
 
@@ -123,12 +122,12 @@ async function until(cond, what) {
   }
 }
 
-test("supabase mode dispatches PostgREST and trunk fetches concurrently", async (t) => {
+test("api mode dispatches the bridge and trunk fetches concurrently", async (t) => {
   const rest = deferred();
   const trunk = deferred();
   const dispatched = mockFetch(t, [
-    ["phonebook.json", jsonResponse(SUPABASE_CFG)],
-    ["/rest/v1/exchanges", rest.promise],
+    ["phonebook.json", jsonResponse(API_CFG)],
+    ["/api/exchanges", rest.promise],
     ["/trunk/directory", trunk.promise],
   ]);
 
@@ -136,40 +135,40 @@ test("supabase mode dispatches PostgREST and trunk fetches concurrently", async 
   // Both requests must be in flight before either has resolved — a
   // sequential implementation would never dispatch the trunk fetch here.
   await until(
-    () => dispatched.includes("/rest/v1/exchanges") && dispatched.includes("/trunk/directory"),
+    () => dispatched.includes("/api/exchanges") && dispatched.includes("/trunk/directory"),
     "both fetches to dispatch",
   );
 
-  rest.resolve(jsonResponse([GOOD]));
+  rest.resolve(jsonResponse({ exchanges: [GOOD] }));
   trunk.resolve(jsonResponse(TRUNK_DIR));
   assert.deepEqual(await loading, [GOOD, TRUNK_GOOD]);
 });
 
-test("supabase mode degrades to book rows alone when the trunk directory fails", async (t) => {
+test("api mode degrades to book rows alone when the trunk directory fails", async (t) => {
   const trunkFail = Promise.reject(new Error("trunk down"));
   trunkFail.catch(() => {}); // pre-handled so the mock route itself never trips Node
   mockFetch(t, [
-    ["phonebook.json", jsonResponse(SUPABASE_CFG)],
-    ["/rest/v1/exchanges", jsonResponse([GOOD])],
+    ["phonebook.json", jsonResponse(API_CFG)],
+    ["/api/exchanges", jsonResponse({ exchanges: [GOOD] })],
     ["/trunk/directory", trunkFail],
   ]);
   assert.deepEqual(await loadExchanges(), [GOOD]);
 });
 
-test("supabase mode returns null when PostgREST fails, even if the trunk answers", async (t) => {
+test("api mode returns [] when the bridge fetch fails, even if the trunk answers", async (t) => {
   mockFetch(t, [
-    ["phonebook.json", jsonResponse(SUPABASE_CFG)],
-    ["/rest/v1/exchanges", jsonResponse(null, false)],
+    ["phonebook.json", jsonResponse(API_CFG)],
+    ["/api/exchanges", jsonResponse(null, false)],
     ["/trunk/directory", jsonResponse(TRUNK_DIR)],
   ]);
-  assert.equal(await loadExchanges(), null);
+  assert.deepEqual(await loadExchanges(), []);
 });
 
-test("supabase mode dedupes trunk entries behind the book's own rows by id", async (t) => {
+test("api mode dedupes trunk entries behind the book's own rows by id", async (t) => {
   const shadow = { ...TRUNK_GOOD, id: GOOD.id, name: "IMPOSTOR EXCH" };
   mockFetch(t, [
-    ["phonebook.json", jsonResponse(SUPABASE_CFG)],
-    ["/rest/v1/exchanges", jsonResponse([GOOD])],
+    ["phonebook.json", jsonResponse(API_CFG)],
+    ["/api/exchanges", jsonResponse({ exchanges: [GOOD] })],
     ["/trunk/directory", jsonResponse({ worlds: [{ n: 1, slots: [shadow, TRUNK_GOOD] }] })],
   ]);
   assert.deepEqual(await loadExchanges(), [GOOD, TRUNK_GOOD]);

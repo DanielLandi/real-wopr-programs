@@ -1,8 +1,8 @@
 // The panel's machine feed — the same `GTW-FEED <json>` line the bridge
 // relays to any observer of a running GTW simulation (surfaces.md;
-// deployment.md impact #3: bridge-relayed, never direct Supabase). This is a
-// deliberate duplicate of norad-bigboard's parser: surface apps stay
-// self-contained and share only the wire contract.
+// deployment.md impact #3: bridge-relayed, never a direct connection to the
+// store). This is a deliberate duplicate of norad-bigboard's parser: surface
+// apps stay self-contained and share only the wire contract.
 
 export interface Missile {
   from: [number, number]; // [lon, lat]

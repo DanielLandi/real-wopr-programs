@@ -41,8 +41,8 @@ class Settings:
     internal_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_INTERNAL_TOKEN", ""))
     session_secret: str = field(default_factory=lambda: os.environ.get("BRIDGE_SESSION_SECRET", "dev-secret"))
 
-    # NORAD operator roster (interim identity source — D4 amendment 2026-07-20;
-    # swaps to Supabase Auth with #35/#42). "CALLSIGN:CODE:LEVEL,..." triplets.
+    # NORAD operator roster (permanent identity source — Neon design 2026-08-09).
+    # "CALLSIGN:CODE:LEVEL,..." triplets.
     wopr_operators: str = field(default_factory=lambda: os.environ.get("WOPR_OPERATORS", ""))
 
     # Per-exchange greeting shown above LOGON: on a terminal line. A trunk host
@@ -50,11 +50,8 @@ class Settings:
     # main exchange) shows the bare LOGON: unchanged.
     logon_banner: str = field(default_factory=lambda: os.environ.get("BRIDGE_LOGON_BANNER", ""))
 
-    # Supabase (D4) — unset => in-memory store (dev/tests)
-    supabase_url: str = field(default_factory=lambda: os.environ.get("SUPABASE_URL", ""))
-    supabase_service_role_key: str = field(
-        default_factory=lambda: os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    )
+    # Postgres (Neon in production) — unset => in-memory store (dev/tests)
+    database_url: str = field(default_factory=lambda: os.environ.get("DATABASE_URL", ""))
 
     # Joshua (D5). Engine: claude | lisp | scripted. JOSHUA_ENABLED=true is
     # kept as a back-compat alias for claude.
@@ -83,6 +80,10 @@ class Settings:
     joshua_claude_daily_calls: int = field(
         default_factory=lambda: int(os.environ.get("JOSHUA_CLAUDE_DAILY_CALLS", "500"))
     )
+
+    # Self-serve phone-book registrations accepted per UTC day (0 disables).
+    exchange_register_daily: int = field(
+        default_factory=lambda: int(os.environ.get("EXCHANGE_REGISTER_DAILY", "20")))
 
     # CORS (D3): single public origin in prod, localhost dev ports.
     cors_origins: tuple[str, ...] = field(

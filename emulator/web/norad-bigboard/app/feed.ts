@@ -1,8 +1,9 @@
 // The Big Board's machine feed — the shape the bridge relays for a running
 // GTW simulation (surfaces.md §3; deployment.md impact #3: bridge-relayed,
-// never direct Supabase). Frames arrive as `output` envelopes whose payload
-// is `GTW-FEED <json>` — text terminals observing the same session simply
-// print the raw line, which is period-appropriate telemetry.
+// never a direct connection to the store). Frames arrive as `output`
+// envelopes whose payload is `GTW-FEED <json>` — text terminals observing
+// the same session simply print the raw line, which is period-appropriate
+// telemetry.
 
 export interface Missile {
   from: [number, number]; // [lon, lat]
