@@ -377,7 +377,7 @@ def test_repeated_hit_lines_dedupe_target_states():
 
 
 def test_latest_game_orders_by_updated_at_not_insertion():
-    """SupabaseStore orders get_latest_game by updated_at; MemoryStore must
+    """PostgresStore orders get_latest_game by updated_at; MemoryStore must
     agree even where dict insertion order disagrees, or dev and prod pick
     different games (#52)."""
     store = MemoryStore()
@@ -388,7 +388,7 @@ def test_latest_game_orders_by_updated_at_not_insertion():
         await store.upsert_game(GameState(s1.id, "gtw", "FIRST", "PLAYING", 1))
         await store.upsert_game(GameState(s2.id, "gtw", "SECOND", "PLAYING", 1))
         assert store.games[s1.id].updated_at != ""  # upsert stamps recency
-        # Simulate what Supabase's updated_at ordering would see: s1's row
+        # Simulate what Postgres's updated_at ordering would see: s1's row
         # carries the newer stamp even though s2 was (re)inserted later.
         store.games[s1.id].updated_at = "9999-01-01T00:00:00+00:00"
         assert (await store.get_latest_game("gtw")).state == "FIRST"

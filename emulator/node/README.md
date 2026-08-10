@@ -4,17 +4,17 @@
 ([`real-wopr`](https://github.com/DanielLandi/real-wopr); sibling checkout:
 `../real-wopr/docs/api-contract.md`)
 
-The execution wrapper and connection monitor. Per request it: loads `game_state` from Supabase,
-spawns the short-lived Fortran core (stdin→stdout), persists the new state, and **attaches**
+The execution wrapper and connection monitor. Per request it: loads `game_state` from the store
+(Postgres/Neon or in-memory), spawns the short-lived Fortran core (stdin→stdout), persists the new state, and **attaches**
 each session to exactly one program — a game, Joshua (Claude API), or NORAD ops — so every
-non-reserved line goes there until the attachment ends. Owns all Supabase and Anthropic access.
+non-reserved line goes there until the attachment ends. Owns all database and Anthropic access.
 Stateless: no in-memory game state.
 
 ## Layout
 
 ```
 emulator/node/
-├── app/     # routing, subprocess runner, supabase + claude clients, config
+├── app/     # routing, subprocess runner, postgres + claude clients, config
 └── tests/   # contract tests; deterministic routing tests that stub Joshua
 ```
 
@@ -27,9 +27,9 @@ logging, and both Joshua engines.
 
 Key wiring facts:
 
-- **Store:** `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` set => hosted Supabase via the
-  service-role key (D4; apply the engine repo's `db/migrations/` first). Unset => in-memory
-  store (dev/tests).
+- **Store:** `DATABASE_URL` set => PostgresStore (plain Postgres, Neon in production).
+  Unset => MemoryStore (dev/tests). Schema lives at `emulator/node/db/migrations/`,
+  applied in deployment by the engine repo's `db/apply.sh`.
 - **Joshua:** `JOSHUA_ENABLED=true` + `ANTHROPIC_API_KEY` => Claude with the canonical persona
   prompt, `start_game` tool, prompt caching, 300-token cap, 15 s timeout + one retry, and a
   per-session exchange cap. Otherwise the **scripted 1983 keyword engine** answers — the D5
@@ -46,7 +46,7 @@ Key wiring facts:
 ```bash
 cd emulator/node
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"          # + ".[prod]" for supabase/anthropic clients
+pip install -e ".[dev]"          # + ".[prod]" for postgres/anthropic clients
 pytest                            # program-spawning paths need `make build` at the pack root
 uvicorn app.main:app --port 8000
 ```

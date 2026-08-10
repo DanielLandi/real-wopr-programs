@@ -1,7 +1,6 @@
-"""NORAD operator roster — interim identity source for the norad-terminal
-operator tier (deployment.md D4 amendment, 2026-07-20). Parsed once at
-startup from WOPR_OPERATORS; the credential check swaps to Supabase Auth
-when #35 lands (#42)."""
+"""NORAD operator roster — the permanent identity source for the norad-terminal
+operator tier (Neon design 2026-08-09). Parsed once at startup from WOPR_OPERATORS;
+the credential check is fixed here."""
 
 from __future__ import annotations
 

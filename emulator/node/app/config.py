@@ -41,8 +41,8 @@ class Settings:
     internal_token: str = field(default_factory=lambda: os.environ.get("BRIDGE_INTERNAL_TOKEN", ""))
     session_secret: str = field(default_factory=lambda: os.environ.get("BRIDGE_SESSION_SECRET", "dev-secret"))
 
-    # NORAD operator roster (interim identity source — D4 amendment 2026-07-20;
-    # swaps to Supabase Auth with #35/#42). "CALLSIGN:CODE:LEVEL,..." triplets.
+    # NORAD operator roster (permanent identity source — Neon design 2026-08-09).
+    # "CALLSIGN:CODE:LEVEL,..." triplets.
     wopr_operators: str = field(default_factory=lambda: os.environ.get("WOPR_OPERATORS", ""))
 
     # Per-exchange greeting shown above LOGON: on a terminal line. A trunk host

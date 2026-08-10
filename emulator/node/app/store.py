@@ -3,8 +3,6 @@
 Implementations behind one protocol:
 - MemoryStore: dev/tests, no external services.
 - PostgresStore: plain Postgres (Neon in production) via asyncpg.
-- SupabaseStore: hosted Supabase via the service-role key (server-side only).
-  Superseded by PostgresStore; retained until Task 6 removes it.
 """
 
 from __future__ import annotations
@@ -70,7 +68,7 @@ class GameState:
     # after a host restart — must run this one. "core" covers flat slots.
     interpretation: str = "core"
     # Update recency stamp — the ordering key for get_latest_game in BOTH
-    # stores (SupabaseStore's `updated_at` column; MemoryStore stamps it in
+    # stores (PostgresStore's `updated_at` column; MemoryStore stamps it in
     # upsert_game). Dev and prod must pick the same "latest" game.
     updated_at: str = ""
 
@@ -99,7 +97,7 @@ class Store(Protocol):
 
 
 class MemoryStore:
-    """In-memory Store for dev and tests. Same contract as SupabaseStore."""
+    """In-memory Store for dev and tests. Same contract as PostgresStore."""
 
     def __init__(self) -> None:
         self.sessions: dict[str, Session] = {}
@@ -158,7 +156,7 @@ class MemoryStore:
         `playing_only=False` also matches finished games, so observers can
         render a war's terminal frame instead of losing sight of it.
 
-        Ordered by `updated_at` — Supabase parity (its query orders by the
+        Ordered by `updated_at` — PostgresStore parity (its query orders by the
         `updated_at` column); the stable sort breaks equal stamps toward the
         most recent upsert (dict order tracks re-insertion)."""
         ordered = sorted(self.games.values(), key=lambda g: g.updated_at)
@@ -180,7 +178,7 @@ class MemoryStore:
         return None
 
     async def upsert_game(self, gs: GameState) -> None:
-        # Stamp update recency — get_latest_game orders by it (SupabaseStore
+        # Stamp update recency — get_latest_game orders by it (PostgresStore
         # writes `updated_at: now()`; the two stores must agree). Re-insert so
         # dict order tracks recency too: the tie-breaker for equal stamps.
         gs.updated_at = datetime.now(timezone.utc).isoformat()
@@ -470,193 +468,6 @@ class PostgresStore:
             " values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing returning id",
             id, name, region, api, link, joshua, operator)
         return inserted is not None
-
-
-class SupabaseStore:
-    """Hosted Supabase (D4): service-role key, deny-all RLS for everyone else.
-
-    Lazy import so the bridge runs without the dependency in dev/tests.
-    """
-
-    def __init__(self, url: str, service_role_key: str) -> None:
-        from supabase import create_client  # imported here on purpose
-
-        self._client = create_client(url, service_role_key)
-
-    async def create_session(self, surface: str, link_profile: str, user_id: str | None,
-                             room_code: str | None = None, system_id: str | None = None) -> Session:
-        row = (
-            self._client.table("sessions")
-            .insert({"surface": surface, "link_profile": link_profile, "user_id": user_id,
-                     "room_code": room_code, "system_id": system_id})
-            .execute()
-            .data[0]
-        )
-        return Session(
-            id=row["id"], surface=row["surface"], link_profile=row["link_profile"],
-            defcon=row["defcon"], user_id=row["user_id"], last_seen_at=row["last_seen_at"],
-            room_code=row.get("room_code"), system_id=row.get("system_id"),
-        )
-
-    async def get_session(self, session_id: str) -> Session | None:
-        rows = self._client.table("sessions").select("*").eq("id", session_id).execute().data
-        if not rows:
-            return None
-        row = rows[0]
-        return Session(
-            id=row["id"], surface=row["surface"], link_profile=row["link_profile"],
-            defcon=row["defcon"], user_id=row["user_id"], last_seen_at=row["last_seen_at"],
-            room_code=row.get("room_code"), system_id=row.get("system_id"),
-        )
-
-    async def set_defcon(self, session_id: str, level: int) -> None:
-        self._client.table("sessions").update({"defcon": level}).eq("id", session_id).execute()
-
-    async def get_clearance_level(self, user_id: str | None) -> int:
-        if user_id is None:
-            return 5
-        rows = self._client.table("clearances").select("level").eq("user_id", user_id).execute().data
-        return rows[0]["level"] if rows else 5
-
-    async def set_operator(self, session_id: str, callsign: str, level: int) -> None:
-        # Roster auth is by definition the pre-Supabase identity source: the
-        # sessions.user_id column is a uuid FK to auth.users and cannot hold a
-        # callsign. With Supabase provisioned, identity comes from Auth JWTs
-        # and clearances rows instead (#35/#42).
-        raise NotImplementedError("roster auth requires Supabase Auth (#35/#42)")
-
-    async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        rows = (self._client.table("event_logs").select("*")
-                .eq("session_id", session_id)
-                .order("ts", desc=True).limit(limit).execute().data)
-        return list(reversed(rows))
-
-    async def get_active_game(self, session_id: str) -> GameState | None:
-        rows = (
-            self._client.table("game_states").select("*")
-            .eq("session_id", session_id).eq("status", "PLAYING")
-            .order("updated_at", desc=True).limit(1).execute().data
-        )
-        if not rows:
-            return None
-        r = rows[0]
-        return GameState(session_id=r["session_id"], game_id=r["game_id"], state=r["state"],
-                         status=r["status"], turn=r["turn"],
-                         interpretation=r.get("interpretation") or "core",
-                         updated_at=r.get("updated_at", ""))
-
-    async def get_latest_game(self, game_id: str | None, room_code: str | None = None,
-                              playing_only: bool = True) -> GameState | None:
-        query = self._client.table("game_states").select("*")
-        if playing_only:
-            query = query.eq("status", "PLAYING")
-        if game_id is not None:
-            query = query.eq("game_id", game_id)
-        if room_code is not None:
-            # Room-scoped (including GLOBAL_ROOM_KEY): resolve the room's
-            # sessions first, then take the newest game among them. Never a
-            # fixed global window — a busy exchange elsewhere must not push
-            # an older room's game out of visibility (a LIMIT-N scan across
-            # every room made the room's war invisible once >N newer games
-            # were PLAYING elsewhere, forking duplicate games on NEW).
-            sessions = self._client.table("sessions").select("id")
-            if room_code == GLOBAL_ROOM_KEY:
-                sessions = sessions.is_("room_code", "null")
-            else:
-                sessions = sessions.eq("room_code", room_code)
-            session_ids = [r["id"] for r in sessions.execute().data]
-            if not session_ids:
-                return None
-            query = query.in_("session_id", session_ids)
-        rows = query.order("updated_at", desc=True).limit(1).execute().data
-        if not rows:
-            return None
-        r = rows[0]
-        return GameState(session_id=r["session_id"], game_id=r["game_id"], state=r["state"],
-                         status=r["status"], turn=r["turn"],
-                         interpretation=r.get("interpretation") or "core",
-                         updated_at=r.get("updated_at", ""))
-
-    async def upsert_game(self, gs: GameState) -> None:
-        existing = (
-            self._client.table("game_states").select("id")
-            .eq("session_id", gs.session_id).eq("game_id", gs.game_id)
-            .order("updated_at", desc=True).limit(1).execute().data
-        )
-        values = {"session_id": gs.session_id, "game_id": gs.game_id, "state": gs.state,
-                  "status": gs.status, "turn": gs.turn,
-                  "interpretation": gs.interpretation, "updated_at": "now()"}
-        if existing:
-            self._client.table("game_states").update(values).eq("id", existing[0]["id"]).execute()
-        else:
-            self._client.table("game_states").insert(values).execute()
-
-    async def log_event(self, session_id: str | None, kind: str, actor: str, payload: dict[str, Any]) -> None:
-        self._client.table("event_logs").insert(
-            {"session_id": session_id, "kind": kind, "actor": actor, "payload": payload}
-        ).execute()
-
-    async def create_room(self, code: str | None = None) -> Room:
-        # UNIQUE(code) can reject the insert two ways: an explicit-code race
-        # (two sessions naming the same room concurrently) or a generated-code
-        # collision (MemoryStore's regenerate loop, ported). Neither may 500:
-        # POST /api/room promises idempotent explicit codes. The duplicate is
-        # detected behaviorally (does the room now exist?) rather than by
-        # exception type, so we stay independent of the client's error classes.
-        for _ in range(16):
-            candidate = code if code is not None else _new_room_code()
-            try:
-                row = (
-                    self._client.table("rooms")
-                    .insert({"code": candidate})
-                    .execute()
-                    .data[0]
-                )
-            except Exception:
-                existing = await self.get_room(candidate)
-                if existing is None:
-                    raise  # a real fault, not a duplicate code
-                if code is not None:
-                    return existing  # idempotent: never recreate/reset a room
-                continue  # generated collision: draw a fresh code
-            return Room(code=row["code"], created_at=row["created_at"],
-                        last_seen_at=row["last_seen_at"])
-        raise RuntimeError("could not allocate a unique room code")
-
-    async def get_room(self, code: str) -> Room | None:
-        rows = self._client.table("rooms").select("*").eq("code", code).execute().data
-        if not rows:
-            return None
-        row = rows[0]
-        return Room(code=row["code"], created_at=row["created_at"], last_seen_at=row["last_seen_at"])
-
-    async def touch_room(self, code: str) -> None:
-        self._client.table("rooms").update(
-            {"last_seen_at": datetime.now(timezone.utc).isoformat()}
-        ).eq("code", code).execute()
-
-    async def get_system_state(self, session_id: str) -> str:
-        # Opaque per-session system state, mirroring game_states' shape but
-        # keyed 1:1 on session_id (a session binds at most one system).
-        rows = (
-            self._client.table("session_system_state").select("state")
-            .eq("session_id", session_id).execute().data
-        )
-        return rows[0]["state"] if rows else ""
-
-    async def set_system_state(self, session_id: str, state: str) -> None:
-        existing = (
-            self._client.table("session_system_state").select("session_id")
-            .eq("session_id", session_id).execute().data
-        )
-        if existing:
-            self._client.table("session_system_state").update(
-                {"state": state}
-            ).eq("session_id", session_id).execute()
-        else:
-            self._client.table("session_system_state").insert(
-                {"session_id": session_id, "state": state}
-            ).execute()
 
 
 def make_store(database_url: str) -> Store:
