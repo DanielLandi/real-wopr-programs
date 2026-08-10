@@ -69,8 +69,8 @@ class RegisterExchange(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9-]{2,40}$")
     name: str = Field(min_length=2, max_length=60)
     region: str = Field(min_length=2, max_length=40)
-    api: str = Field(pattern=r"^https://")
-    link: str = Field(pattern=r"^wss://")
+    api: str = Field(pattern=r"^https://", max_length=200)
+    link: str = Field(pattern=r"^wss://", max_length=200)
     joshua: Literal["claude", "period"]
     operator: str | None = Field(default=None, max_length=24)
 

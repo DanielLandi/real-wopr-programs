@@ -135,6 +135,22 @@ def test_system_state_default_empty(store):
     asyncio.run(flow())
 
 
+def test_malformed_id_is_unknown_id(store):
+    """A malformed id must behave exactly like an unknown id — never raise.
+    Routes pass raw caller strings straight through (GET /api/session/{id},
+    GET /api/games/{game_id}/state/{session_id}, POST /api/session/{id}/defcon,
+    the WS handshake), so PostgresStore's `$1::uuid` casts must not turn a
+    bad id into a 500 where MemoryStore would quietly report "unknown"."""
+    async def flow():
+        assert await store.get_session("attack") is None
+        assert await store.get_active_game("attack") is None
+        await store.set_defcon("attack", 3)  # no error, no-op
+        assert await store.get_recent_events("attack") == []
+        assert await store.get_system_state("attack") == ""
+
+    asyncio.run(flow())
+
+
 def test_exchange_register_and_list(store):
     async def flow():
         assert await store.list_exchanges() == []
@@ -150,5 +166,51 @@ def test_exchange_register_and_list(store):
             api="https://x.example", link="wss://x.example", joshua="period",
             operator=None)
         assert dup is False
+
+    asyncio.run(flow())
+
+
+@pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
+def test_exchange_approved_row_flows_through_postgres():
+    """Postgres-leg proof that an approved phone-book row actually flows
+    through list_exchanges with the exact 7-key shape the /api/exchanges
+    route returns. Approval has no API yet (application-layer force to
+    approved=False on register, per db/migrations/0001_init.sql), so the
+    only way to exercise the approved path is a direct SQL flip — this is
+    that proof, not covered by the MemoryStore leg (which never touches SQL
+    column ordering / row shape)."""
+    from app.store import PostgresStore
+
+    url = pgharness.pg_url()
+    pgharness.apply_schema(url)
+    pgharness.truncate_all(url)
+
+    async def flow():
+        import asyncpg
+
+        store = PostgresStore(url)
+        ok = await store.register_exchange(
+            id="beta", name="Beta Exchange", region="US-West",
+            api="https://beta.example", link="wss://beta.example/link",
+            joshua="period", operator="op2")
+        assert ok is True
+        assert await store.list_exchanges() == []  # still pending
+
+        conn = await asyncpg.connect(url)
+        try:
+            await conn.execute(
+                "update exchanges set approved = true where id = $1", "beta")
+        finally:
+            await conn.close()
+
+        rows = await store.list_exchanges()
+        assert rows == [{
+            "id": "beta", "name": "Beta Exchange", "region": "US-West",
+            "api": "https://beta.example", "link": "wss://beta.example/link",
+            "joshua": "period", "operator": "op2",
+        }]
+        assert set(rows[0].keys()) == {
+            "id", "name", "region", "api", "link", "joshua", "operator"}
+        store._pool = None
 
     asyncio.run(flow())

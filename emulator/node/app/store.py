@@ -33,6 +33,19 @@ def normalize_room_code(code: str) -> str:
     return c
 
 
+def _as_uuid(value: str) -> str | None:
+    """None for strings Postgres would reject for a uuid cast — a malformed
+    id is just an unknown id (MemoryStore parity). Routes pass raw caller
+    strings straight through to the store (session_id path params, WS
+    session_id), so PostgresStore must not let asyncpg's DataError on
+    `$1::uuid` turn a bad id into a 500 where MemoryStore would quietly
+    return None/[]/"" or no-op."""
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
 def _new_room_code() -> str:
     return "".join(secrets.choice(ROOM_ALPHABET) for _ in range(6))
 
@@ -126,7 +139,10 @@ class MemoryStore:
         return self.sessions.get(session_id)
 
     async def set_defcon(self, session_id: str, level: int) -> None:
-        self.sessions[session_id].defcon = level
+        # Unknown id: no-op, matching PostgresStore's guarded update
+        # affecting zero rows (also the malformed-id case there).
+        if session_id in self.sessions:
+            self.sessions[session_id].defcon = level
 
     async def get_clearance_level(self, user_id: str | None) -> int:
         if user_id is None:
@@ -134,6 +150,12 @@ class MemoryStore:
         return self.clearances.get(user_id, 5)
 
     async def set_operator(self, session_id: str, callsign: str, level: int) -> None:
+        # Unknown id: no-op entirely, including the clearance write — parity
+        # with PostgresStore, where the session update and the clearance
+        # upsert share one transaction and a malformed/unknown id aborts it
+        # before either statement lands.
+        if session_id not in self.sessions:
+            return
         self.sessions[session_id].user_id = callsign
         self.clearances[callsign] = level
 
@@ -309,16 +331,22 @@ class PostgresStore:
         return self._session_from(row)
 
     async def get_session(self, session_id: str) -> Session | None:
+        uid = _as_uuid(session_id)
+        if uid is None:  # malformed id is just an unknown id (MemoryStore parity)
+            return None
         pool = await self._pool_or_connect()
         row = await pool.fetchrow(
-            "select * from sessions where id = $1::uuid", session_id)
+            "select * from sessions where id = $1::uuid", uid)
         return self._session_from(row) if row else None
 
     async def set_defcon(self, session_id: str, level: int) -> None:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: no-op (MemoryStore parity)
+            return
         pool = await self._pool_or_connect()
         await pool.execute(
             "update sessions set defcon = $2, last_seen_at = now()"
-            " where id = $1::uuid", session_id, level)
+            " where id = $1::uuid", uid, level)
 
     async def get_clearance_level(self, user_id: str | None) -> int:
         if user_id is None:
@@ -329,22 +357,28 @@ class PostgresStore:
         return level if level is not None else 5
 
     async def set_operator(self, session_id: str, callsign: str, level: int) -> None:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: no-op the whole transaction (MemoryStore parity)
+            return
         pool = await self._pool_or_connect()
         async with pool.acquire() as conn, conn.transaction():
             await conn.execute(
                 "update sessions set operator_callsign = $2 where id = $1::uuid",
-                session_id, callsign)
+                uid, callsign)
             await conn.execute(
                 "insert into operator_clearances (callsign, level) values ($1,$2)"
                 " on conflict (callsign) do update set level = excluded.level,"
                 " updated_at = now()", callsign, level)
 
     async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: no rows (MemoryStore parity)
+            return []
         pool = await self._pool_or_connect()
         rows = await pool.fetch(
             "select session_id, ts, kind, actor, payload from event_logs"
             " where session_id = $1::uuid order by ts desc, id desc limit $2",
-            session_id, limit)
+            uid, limit)
         out = [{"session_id": str(r["session_id"]), "ts": r["ts"].isoformat(),
                 "kind": r["kind"], "actor": r["actor"], "payload": r["payload"]}
                for r in rows]
@@ -352,16 +386,24 @@ class PostgresStore:
 
     async def log_event(self, session_id: str | None, kind: str, actor: str,
                         payload: dict[str, Any]) -> None:
+        uid = None
+        if session_id is not None:
+            uid = _as_uuid(session_id)
+            if uid is None:  # malformed (not merely absent) id: no-op
+                return
         pool = await self._pool_or_connect()
         await pool.execute(
             "insert into event_logs (session_id, kind, actor, payload)"
-            " values ($1::uuid,$2,$3,$4)", session_id, kind, actor, payload)
+            " values ($1::uuid,$2,$3,$4)", uid, kind, actor, payload)
 
     async def get_active_game(self, session_id: str) -> GameState | None:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: no active game (MemoryStore parity)
+            return None
         pool = await self._pool_or_connect()
         row = await pool.fetchrow(
             "select * from game_states where session_id = $1::uuid and"
-            " status = 'PLAYING' order by updated_at desc limit 1", session_id)
+            " status = 'PLAYING' order by updated_at desc limit 1", uid)
         return self._game_from(row) if row else None
 
     async def get_latest_game(self, game_id: str | None,
@@ -389,6 +431,14 @@ class PostgresStore:
         return self._game_from(row) if row else None
 
     async def upsert_game(self, gs: GameState) -> None:
+        uid = _as_uuid(gs.session_id)
+        if uid is None:
+            # gs.session_id always comes from a session this store created
+            # (routes never let a caller set it directly) — a malformed
+            # value cannot happen via any route. Guarded anyway for
+            # consistency with every other method taking a session_id;
+            # no-op rather than a 500, the same contract the read paths use.
+            return
         pool = await self._pool_or_connect()
         async with pool.acquire() as conn, conn.transaction():
             updated = await conn.fetchval(
@@ -396,13 +446,13 @@ class PostgresStore:
                 " interpretation=$6, updated_at=now() where id = ("
                 "  select id from game_states where session_id=$1::uuid and"
                 "  game_id=$2 order by updated_at desc limit 1) returning id",
-                gs.session_id, gs.game_id, gs.state, gs.status, gs.turn,
+                uid, gs.game_id, gs.state, gs.status, gs.turn,
                 gs.interpretation)
             if updated is None:
                 await conn.execute(
                     "insert into game_states (session_id, game_id, state,"
                     " status, turn, interpretation) values ($1::uuid,$2,$3,$4,$5,$6)",
-                    gs.session_id, gs.game_id, gs.state, gs.status, gs.turn,
+                    uid, gs.game_id, gs.state, gs.status, gs.turn,
                     gs.interpretation)
 
     async def create_room(self, code: str | None = None) -> Room:
@@ -440,18 +490,24 @@ class PostgresStore:
             "update rooms set last_seen_at = now() where code = $1", code)
 
     async def get_system_state(self, session_id: str) -> str:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: default state (MemoryStore parity)
+            return ""
         pool = await self._pool_or_connect()
         state = await pool.fetchval(
             "select state from session_system_state where session_id = $1::uuid",
-            session_id)
+            uid)
         return state if state is not None else ""
 
     async def set_system_state(self, session_id: str, state: str) -> None:
+        uid = _as_uuid(session_id)
+        if uid is None:  # unknown id: no-op (MemoryStore parity)
+            return
         pool = await self._pool_or_connect()
         await pool.execute(
             "insert into session_system_state (session_id, state) values"
             " ($1::uuid,$2) on conflict (session_id) do update set"
-            " state = excluded.state, updated_at = now()", session_id, state)
+            " state = excluded.state, updated_at = now()", uid, state)
 
     async def list_exchanges(self) -> list[dict[str, Any]]:
         pool = await self._pool_or_connect()
