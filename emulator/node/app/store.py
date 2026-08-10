@@ -191,6 +191,10 @@ class MemoryStore:
             code = _new_room_code()
             while code in self.rooms:  # regenerate on collision (generated codes only)
                 code = _new_room_code()
+        else:
+            # Explicit code: return existing room unchanged (idempotent)
+            if code in self.rooms:
+                return self.rooms[code]
         now = datetime.now(timezone.utc).isoformat()
         room = Room(code=code, created_at=now, last_seen_at=now)
         self.rooms[room.code] = room

@@ -96,9 +96,17 @@ def test_room_idempotency_and_touch(store):
         r1 = await store.create_room("ABCDEF")
         r2 = await store.create_room("ABCDEF")   # never resets, returns existing
         assert r1.code == r2.code == "ABCDEF"
+        assert r1.created_at == r2.created_at  # idempotent: same created_at
         assert (await store.get_room("ABCDEF")) is not None
         assert (await store.get_room("NOPE00")) is None
+        # Touch room and verify last_seen_at is updated
+        room_before = await store.get_room("ABCDEF")
+        assert room_before is not None
+        last_seen_before = room_before.last_seen_at
         await store.touch_room("ABCDEF")
+        room_after = await store.get_room("ABCDEF")
+        assert room_after is not None
+        assert room_after.last_seen_at >= last_seen_before
         generated = await store.create_room()
         assert len(generated.code) == 6 and generated.code != "ABCDEF"
 
