@@ -40,6 +40,15 @@ def test_register_duplicate_409(client):
     assert client.post("/api/exchanges/register", json=VALID).status_code == 409
 
 
+def test_register_duplicate_does_not_spend_quota(client):
+    budget = client.app.state.exchange_register_budget
+    assert client.post("/api/exchanges/register", json=VALID).status_code == 201
+    remaining_after_success = budget.remaining()
+    r = client.post("/api/exchanges/register", json=VALID)
+    assert r.status_code == 409
+    assert budget.remaining() == remaining_after_success
+
+
 @pytest.mark.parametrize("patch", [
     {"id": "Bad_ID!"}, {"id": "a"}, {"name": "x"}, {"region": "y"},
     {"api": "http://insecure.example"}, {"link": "https://not-wss.example"},

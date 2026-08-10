@@ -351,13 +351,14 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
 
     @app.post("/api/exchanges/register", status_code=201)
     async def register_exchange(body: RegisterExchange):
-        if not exchange_register_budget.spend():
+        if not exchange_register_budget.available():
             raise HTTPException(429, "registration quota exhausted")
         ok = await store.register_exchange(
             id=body.id, name=body.name, region=body.region, api=body.api,
             link=body.link, joshua=body.joshua, operator=body.operator)
         if not ok:
             raise HTTPException(409, "exchange id already registered")
+        exchange_register_budget.spend()
         await store.log_event(None, "route", "system",
                               {"event": "exchange-registered", "id": body.id})
         return {"id": body.id, "approved": False}
