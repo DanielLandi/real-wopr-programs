@@ -50,11 +50,8 @@ class Settings:
     # main exchange) shows the bare LOGON: unchanged.
     logon_banner: str = field(default_factory=lambda: os.environ.get("BRIDGE_LOGON_BANNER", ""))
 
-    # Supabase (D4) — unset => in-memory store (dev/tests)
-    supabase_url: str = field(default_factory=lambda: os.environ.get("SUPABASE_URL", ""))
-    supabase_service_role_key: str = field(
-        default_factory=lambda: os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-    )
+    # Postgres (Neon in production) — unset => in-memory store (dev/tests)
+    database_url: str = field(default_factory=lambda: os.environ.get("DATABASE_URL", ""))
 
     # Joshua (D5). Engine: claude | lisp | scripted. JOSHUA_ENABLED=true is
     # kept as a back-compat alias for claude.

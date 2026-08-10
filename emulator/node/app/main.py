@@ -130,7 +130,7 @@ def build_engines(settings, catalog, budget=None) -> dict[str, "Joshua"]:
 def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     """App factory; tests inject fakes for store/engines/runner."""
     settings = settings or load_settings()
-    store = store or make_store(settings.supabase_url, settings.supabase_service_role_key)
+    store = store or make_store(settings.database_url)
     catalog = load_catalog(settings.games_dir)
     runner = runner or CoreRunner(RunnerConfig(
         bin_dir=settings.games_dir,
@@ -179,6 +179,9 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         yield
+        close = getattr(store, "close", None)
+        if close is not None:
+            await close()
 
     app = FastAPI(title="real-wopr bridge", version="0.3.0", lifespan=lifespan)
     app.state.router = router

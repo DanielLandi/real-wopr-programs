@@ -1,12 +1,15 @@
 """State store — the bridge owns ALL DB access (design.md §3.1, deployment.md D4).
 
-Two implementations behind one protocol:
+Implementations behind one protocol:
 - MemoryStore: dev/tests, no external services.
+- PostgresStore: plain Postgres (Neon in production) via asyncpg.
 - SupabaseStore: hosted Supabase via the service-role key (server-side only).
+  Superseded by PostgresStore; retained until Task 6 removes it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import uuid
 from dataclasses import dataclass, field
@@ -214,6 +217,236 @@ class MemoryStore:
         self.system_states[session_id] = state
 
 
+class PostgresStore:
+    """Plain Postgres (Neon in production) via asyncpg.
+
+    The pool is created lazily on first use: create_app() is sync, so there
+    is no async construction point. asyncpg is imported lazily so the
+    in-memory dev/test path never needs it ([prod] extra only).
+    DB column operator_callsign <-> Session.user_id (roster callsign).
+    """
+
+    def __init__(self, database_url: str) -> None:
+        self._url = database_url
+        self._pool = None
+        self._pool_guard: asyncio.Lock | None = None
+
+    async def _pool_or_connect(self):
+        if self._pool is not None:
+            return self._pool
+        if self._pool_guard is None:
+            self._pool_guard = asyncio.Lock()
+        async with self._pool_guard:
+            if self._pool is None:
+                import asyncpg  # lazy on purpose: optional [prod] dependency
+                import json
+
+                async def _init(conn):
+                    await conn.set_type_codec(
+                        "jsonb", encoder=json.dumps, decoder=json.loads,
+                        schema="pg_catalog")
+
+                self._pool = await asyncpg.create_pool(
+                    self._url, min_size=0, max_size=5, init=_init)
+        return self._pool
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            pool, self._pool = self._pool, None
+            try:
+                await pool.close()
+            except RuntimeError as exc:
+                # asyncpg pools are bound to the event loop that created
+                # them. In production (main.py's lifespan) the pool is
+                # created and closed under the same loop and this never
+                # fires. The store-contract fixture, by its documented
+                # "async def flow(); asyncio.run(flow())" convention (see
+                # tests/test_gtw.py), creates the pool lazily inside a
+                # test's own asyncio.run() and tears it down in a separate
+                # asyncio.run() in fixture teardown — a different, already-
+                # closed loop by the time close() runs. asyncpg then can't
+                # gracefully terminate the old connection and raises this
+                # exact error; it's a test-harness artifact, not a real
+                # leak (the old loop already tore down its transports), so
+                # only this specific message is swallowed.
+                if "Event loop is closed" not in str(exc):
+                    raise
+
+    @staticmethod
+    def _session_from(row) -> Session:
+        return Session(
+            id=str(row["id"]), surface=row["surface"],
+            link_profile=row["link_profile"], defcon=row["defcon"],
+            user_id=row["operator_callsign"],
+            last_seen_at=row["last_seen_at"].isoformat(),
+            room_code=row["room_code"], system_id=row["system_id"],
+        )
+
+    @staticmethod
+    def _game_from(row) -> GameState:
+        return GameState(
+            session_id=str(row["session_id"]), game_id=row["game_id"],
+            state=row["state"], status=row["status"], turn=row["turn"],
+            interpretation=row["interpretation"],
+            updated_at=row["updated_at"].isoformat(),
+        )
+
+    async def create_session(self, surface: str, link_profile: str,
+                             user_id: str | None, room_code: str | None = None,
+                             system_id: str | None = None) -> Session:
+        pool = await self._pool_or_connect()
+        row = await pool.fetchrow(
+            "insert into sessions (surface, link_profile, operator_callsign,"
+            " room_code, system_id) values ($1,$2,$3,$4,$5) returning *",
+            surface, link_profile, user_id, room_code, system_id)
+        return self._session_from(row)
+
+    async def get_session(self, session_id: str) -> Session | None:
+        pool = await self._pool_or_connect()
+        row = await pool.fetchrow(
+            "select * from sessions where id = $1::uuid", session_id)
+        return self._session_from(row) if row else None
+
+    async def set_defcon(self, session_id: str, level: int) -> None:
+        pool = await self._pool_or_connect()
+        await pool.execute(
+            "update sessions set defcon = $2, last_seen_at = now()"
+            " where id = $1::uuid", session_id, level)
+
+    async def get_clearance_level(self, user_id: str | None) -> int:
+        if user_id is None:
+            return 5
+        pool = await self._pool_or_connect()
+        level = await pool.fetchval(
+            "select level from operator_clearances where callsign = $1", user_id)
+        return level if level is not None else 5
+
+    async def set_operator(self, session_id: str, callsign: str, level: int) -> None:
+        pool = await self._pool_or_connect()
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute(
+                "update sessions set operator_callsign = $2 where id = $1::uuid",
+                session_id, callsign)
+            await conn.execute(
+                "insert into operator_clearances (callsign, level) values ($1,$2)"
+                " on conflict (callsign) do update set level = excluded.level,"
+                " updated_at = now()", callsign, level)
+
+    async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        pool = await self._pool_or_connect()
+        rows = await pool.fetch(
+            "select session_id, ts, kind, actor, payload from event_logs"
+            " where session_id = $1::uuid order by ts desc, id desc limit $2",
+            session_id, limit)
+        out = [{"session_id": str(r["session_id"]), "ts": r["ts"].isoformat(),
+                "kind": r["kind"], "actor": r["actor"], "payload": r["payload"]}
+               for r in rows]
+        return list(reversed(out))
+
+    async def log_event(self, session_id: str | None, kind: str, actor: str,
+                        payload: dict[str, Any]) -> None:
+        pool = await self._pool_or_connect()
+        await pool.execute(
+            "insert into event_logs (session_id, kind, actor, payload)"
+            " values ($1::uuid,$2,$3,$4)", session_id, kind, actor, payload)
+
+    async def get_active_game(self, session_id: str) -> GameState | None:
+        pool = await self._pool_or_connect()
+        row = await pool.fetchrow(
+            "select * from game_states where session_id = $1::uuid and"
+            " status = 'PLAYING' order by updated_at desc limit 1", session_id)
+        return self._game_from(row) if row else None
+
+    async def get_latest_game(self, game_id: str | None,
+                              room_code: str | None = None,
+                              playing_only: bool = True) -> GameState | None:
+        pool = await self._pool_or_connect()
+        clauses, args = [], []
+
+        def arg(value):
+            args.append(value)
+            return f"${len(args)}"
+
+        if playing_only:
+            clauses.append("g.status = 'PLAYING'")
+        if game_id is not None:
+            clauses.append(f"g.game_id = {arg(game_id)}")
+        if room_code == GLOBAL_ROOM_KEY:
+            clauses.append("s.room_code is null")
+        elif room_code is not None:
+            clauses.append(f"s.room_code = {arg(room_code)}")
+        where = (" where " + " and ".join(clauses)) if clauses else ""
+        row = await pool.fetchrow(
+            "select g.* from game_states g join sessions s on s.id = g.session_id"
+            + where + " order by g.updated_at desc limit 1", *args)
+        return self._game_from(row) if row else None
+
+    async def upsert_game(self, gs: GameState) -> None:
+        pool = await self._pool_or_connect()
+        async with pool.acquire() as conn, conn.transaction():
+            updated = await conn.fetchval(
+                "update game_states set state=$3, status=$4, turn=$5,"
+                " interpretation=$6, updated_at=now() where id = ("
+                "  select id from game_states where session_id=$1::uuid and"
+                "  game_id=$2 order by updated_at desc limit 1) returning id",
+                gs.session_id, gs.game_id, gs.state, gs.status, gs.turn,
+                gs.interpretation)
+            if updated is None:
+                await conn.execute(
+                    "insert into game_states (session_id, game_id, state,"
+                    " status, turn, interpretation) values ($1::uuid,$2,$3,$4,$5,$6)",
+                    gs.session_id, gs.game_id, gs.state, gs.status, gs.turn,
+                    gs.interpretation)
+
+    async def create_room(self, code: str | None = None) -> Room:
+        pool = await self._pool_or_connect()
+        if code is not None:
+            code = normalize_room_code(code)
+            row = await pool.fetchrow(
+                "insert into rooms (code) values ($1) on conflict (code)"
+                " do nothing returning *", code)
+            if row is None:  # existed: idempotent, never reset (POST /api/room contract)
+                row = await pool.fetchrow("select * from rooms where code = $1", code)
+            return Room(code=row["code"], created_at=row["created_at"].isoformat(),
+                        last_seen_at=row["last_seen_at"].isoformat())
+        for _ in range(16):
+            candidate = _new_room_code()
+            row = await pool.fetchrow(
+                "insert into rooms (code) values ($1) on conflict (code)"
+                " do nothing returning *", candidate)
+            if row is not None:
+                return Room(code=row["code"], created_at=row["created_at"].isoformat(),
+                            last_seen_at=row["last_seen_at"].isoformat())
+        raise RuntimeError("room code space exhausted")
+
+    async def get_room(self, code: str) -> Room | None:
+        pool = await self._pool_or_connect()
+        row = await pool.fetchrow("select * from rooms where code = $1", code)
+        if row is None:
+            return None
+        return Room(code=row["code"], created_at=row["created_at"].isoformat(),
+                    last_seen_at=row["last_seen_at"].isoformat())
+
+    async def touch_room(self, code: str) -> None:
+        pool = await self._pool_or_connect()
+        await pool.execute(
+            "update rooms set last_seen_at = now() where code = $1", code)
+
+    async def get_system_state(self, session_id: str) -> str:
+        pool = await self._pool_or_connect()
+        state = await pool.fetchval(
+            "select state from session_system_state where session_id = $1::uuid",
+            session_id)
+        return state if state is not None else ""
+
+    async def set_system_state(self, session_id: str, state: str) -> None:
+        pool = await self._pool_or_connect()
+        await pool.execute(
+            "insert into session_system_state (session_id, state) values"
+            " ($1::uuid,$2) on conflict (session_id) do update set"
+            " state = excluded.state, updated_at = now()", session_id, state)
+
+
 class SupabaseStore:
     """Hosted Supabase (D4): service-role key, deny-all RLS for everyone else.
 
@@ -401,7 +634,8 @@ class SupabaseStore:
             ).execute()
 
 
-def make_store(url: str, service_role_key: str) -> Store:
-    if url and service_role_key:
-        return SupabaseStore(url, service_role_key)
+def make_store(database_url: str) -> Store:
+    """DATABASE_URL set => PostgresStore; empty => MemoryStore (dev/tests)."""
+    if database_url:
+        return PostgresStore(database_url)
     return MemoryStore()
