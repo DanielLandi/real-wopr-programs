@@ -81,6 +81,10 @@ class Settings:
         default_factory=lambda: int(os.environ.get("JOSHUA_CLAUDE_DAILY_CALLS", "500"))
     )
 
+    # Self-serve phone-book registrations accepted per UTC day (0 disables).
+    exchange_register_daily: int = field(
+        default_factory=lambda: int(os.environ.get("EXCHANGE_REGISTER_DAILY", "20")))
+
     # CORS (D3): single public origin in prod, localhost dev ports.
     cors_origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(

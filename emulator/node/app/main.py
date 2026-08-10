@@ -12,6 +12,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,6 +63,16 @@ class CreateRoom(BaseModel):
 
 class DefconChange(BaseModel):
     level: int = Field(ge=1, le=5)
+
+
+class RegisterExchange(BaseModel):
+    id: str = Field(pattern=r"^[a-z0-9-]{2,40}$")
+    name: str = Field(min_length=2, max_length=60)
+    region: str = Field(min_length=2, max_length=40)
+    api: str = Field(pattern=r"^https://")
+    link: str = Field(pattern=r"^wss://")
+    joshua: Literal["claude", "period"]
+    operator: str | None = Field(default=None, max_length=24)
 
 
 def _session_store_dir(settings, session_id: str):
@@ -139,6 +150,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         queue_size=settings.core_queue_size,
     ))
     budget = DailyBudget(settings.joshua_claude_daily_calls)
+    exchange_register_budget = DailyBudget(settings.exchange_register_daily)
     engines = engines or build_engines(settings, catalog, budget)
     # JOSHUA_ENGINE is no longer the switch — it is what a session gets when it
     # asks for nothing. Asking for one this exchange cannot serve falls back to
@@ -191,6 +203,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     app.state.gtw_hub = gtw_hub
     app.state.systems = systems
     app.state.system_runner = system_runner
+    app.state.exchange_register_budget = exchange_register_budget
 
     app.add_middleware(
         CORSMiddleware,
@@ -331,6 +344,23 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         await store.set_defcon(session_id, body.level)
         await store.log_event(session_id, "route", "system", {"defcon": body.level})
         return {"defcon": body.level}
+
+    @app.get("/api/exchanges")
+    async def list_exchanges():
+        return {"exchanges": await store.list_exchanges()}
+
+    @app.post("/api/exchanges/register", status_code=201)
+    async def register_exchange(body: RegisterExchange):
+        if not exchange_register_budget.spend():
+            raise HTTPException(429, "registration quota exhausted")
+        ok = await store.register_exchange(
+            id=body.id, name=body.name, region=body.region, api=body.api,
+            link=body.link, joshua=body.joshua, operator=body.operator)
+        if not ok:
+            raise HTTPException(409, "exchange id already registered")
+        await store.log_event(None, "route", "system",
+                              {"event": "exchange-registered", "id": body.id})
+        return {"id": body.id, "approved": False}
 
     # -- WebSocket (api-contract.md §3) ----------------------------------------
 
