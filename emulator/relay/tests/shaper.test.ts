@@ -189,3 +189,24 @@ test("drain: a close mid-drain settles the waiter instead of hanging it", async 
   assert.equal(frames.filter((f) => f.eom).length, 0,
     "the message completed, so this proves nothing about a close mid-drain");
 });
+
+test("drain: a deadline releases the caller with the line still painting (issue #62)", async () => {
+  // A drop waits for the parting words, but not forever: a queue that needs
+  // minutes at line rate must not hold a socket open for them.
+  const profile: LinkProfile = {
+    baud: 300, bits_per_char: 10, latency_ms: 0, jitter_ms: 0,
+    frame_bytes: 64, handshake: "none",
+  };
+  const { frames, deliver } = collect();
+  const shaper = new LinkShaper(profile, "dialup-300", "s1", deliver);
+  shaper.send({ kind: "output", payload: "X".repeat(600) });   // ~20s at 300 baud
+
+  const t0 = performance.now();
+  await shaper.drain(80);
+  const elapsed = performance.now() - t0;
+
+  assert.ok(elapsed < 1000, `the deadline did not fire (${elapsed.toFixed(0)}ms)`);
+  assert.equal(frames.filter((f) => f.eom).length, 0,
+    "the line finished painting, so the deadline proved nothing");
+  shaper.close();
+});

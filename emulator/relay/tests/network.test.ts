@@ -218,3 +218,67 @@ test("profileFor with an unmatched baud falls back to the kind default", () => {
     { name: "pstn", kind: "dialup", addressing: "phone", baud: 600 }, "authentic");
   assert.equal(p.baud, 300);
 });
+
+test("network relay: a node's sign-off survives its CLOSE at 300 baud (issue #62)", async () => {
+  // The same defect the /link leg had (#62), on the caller leg: a system
+  // sends its parting words and drops the line immediately behind them, and
+  // endCall's shaper.close() used to discard everything still being paced out
+  // at 300 baud — which at 30 chars/s is the whole display.
+  const relay = await startNetworkRelay(PSTN, { port: 0 });
+  const node = nodeClient(relay.port);
+  await node.open();
+  node.send({ t: "REGISTER", v: 1, node: "panamac",
+    claims: [{ network: "pstn", address: "(206) 555-0142", protocol: "SYSTEM/1" }] });
+  await node.next("REGISTERED");
+
+  const caller = dialClient(relay.port, "2065550142");
+  await caller.open();
+  const ring = await node.next("RING") as unknown as { call: number };
+  node.send({ t: "ANSWER", call: ring.call });
+
+  // Registered before the drop: a close that has already fired is a close the
+  // waiter never sees.
+  const dropped = caller.closed();
+  const signoff = "\nPANAMAC OFF\n";
+  node.send({ t: "FRAME", call: ring.call, data: signoff });
+  node.send({ t: "CLOSE", call: ring.call, reason: "NO CARRIER" });
+
+  const { reason } = await dropped;
+  assert.equal(reassemble(caller.envelopes).join(""), signoff,
+    "the sign-off display must reach the caller before the line drops");
+  assert.equal(reason, "NO CARRIER");
+
+  node.ws.close();
+  await relay.close();
+});
+
+test("network relay: a node socket that dies drops the call at once, no playout (#62)", async () => {
+  // The other half of #62's asymmetry. An orderly CLOSE frame is a goodbye and
+  // gets played out; a node whose socket simply died said nothing, and what
+  // the shaper still holds is the truncated half of whatever went wrong. The
+  // caller must not sit through 20s of it before learning the line is gone.
+  const relay = await startNetworkRelay(PSTN, { port: 0 });
+  const node = nodeClient(relay.port);
+  await node.open();
+  node.send({ t: "REGISTER", v: 1, node: "panamac",
+    claims: [{ network: "pstn", address: "(206) 555-0142", protocol: "SYSTEM/1" }] });
+  await node.next("REGISTERED");
+
+  const caller = dialClient(relay.port, "2065550142");
+  await caller.open();
+  const ring = await node.next("RING") as unknown as { call: number };
+  node.send({ t: "ANSWER", call: ring.call });
+  const dropped = caller.closed();
+  node.send({ t: "FRAME", call: ring.call, data: "X".repeat(600) });  // ~20s at 300 baud
+  await new Promise((r) => setTimeout(r, 50));                        // let it start painting
+  node.ws.close();
+
+  const t0 = Date.now();
+  const { reason } = await dropped;
+  const elapsed = Date.now() - t0;
+  assert.equal(reason, "NO CARRIER");
+  assert.ok(elapsed < 3000, `waited ${elapsed}ms — the dead node's leg was played out`);
+  assert.ok(caller.text.join("").length < 600, "the whole buffer arrived; nothing was cut short");
+
+  await relay.close();
+});

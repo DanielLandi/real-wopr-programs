@@ -60,6 +60,11 @@ export function profileFor(desc: NetworkDescriptor, mode: CommsMode): LinkProfil
   return tuned ?? DEFAULT_CONFIG.profiles[byKind[desc.kind]] ?? DEFAULT_CONFIG.profiles.off;
 }
 
+/** How long an orderly drop lets the caller's leg finish painting before it
+ *  closes anyway (#62). 30s is ~900 characters at 300 baud: far more than any
+ *  sign-off display, far less than a runaway feed would take. */
+const DRAIN_TIMEOUT_MS = 30_000;
+
 interface Call {
   id: number;
   caller: WebSocket;
@@ -88,6 +93,10 @@ export async function startNetworkRelay(
 
   const calls = new Map<number, Call>();
   const callsByNode = new Map<string, Set<number>>();
+  // Calls whose bookkeeping is done but whose caller leg is still painting the
+  // far end's parting words (#62). Held so a hang-up — or the relay going
+  // down — can cut the playout short instead of waiting it out.
+  const playingOut = new Map<number, Call>();
   let nextCall = 1;
 
   function nodeSocketOf(node: string): WebSocket | null {
@@ -95,17 +104,36 @@ export async function startNetworkRelay(
     return reg ? (reg.port as unknown as WebSocket) : null;
   }
 
-  function endCall(id: number, reason: string): void {
+  /** Close the caller's leg and forget the call. Separate from endCall so a
+   *  playout can finish the drop later without re-running the bookkeeping. */
+  function hangUp(call: Call, reason: string): void {
+    playingOut.delete(call.id);
+    call.shaper.close();
+    try { call.caller.close(1000, reason); } catch { /* already gone */ }
+  }
+
+  /** End a call. `playOut` holds the caller's socket open until the shaper has
+   *  finished painting what the node already sent — the orderly sign-off case
+   *  (#62): a system sends its parting words and drops the line immediately
+   *  behind them, and at 300 baud that display is still trickling through the
+   *  shaper when the CLOSE lands. Closing over the top of it discards the
+   *  paced queue and the visitor sees nothing at all.
+   *
+   *  Bookkeeping is unconditional and immediate either way: a call being
+   *  played out is already gone from the registry's point of view, and the
+   *  node is told so at once. Only the caller's leg lingers. */
+  function endCall(id: number, reason: string, playOut = false): void {
     const call = calls.get(id);
     if (!call) return;
     calls.delete(id);
     callsByNode.get(call.node)?.delete(id);
-    call.shaper.close();
-    try { call.caller.close(1000, reason); } catch { /* already gone */ }
     const sock = nodeSocketOf(call.node);
     if (sock && sock.readyState === WebSocket.OPEN) {
       sock.send(encodeNodeFrame({ t: "CLOSE", call: id, reason }));
     }
+    if (!playOut) { hangUp(call, reason); return; }
+    playingOut.set(id, call);
+    void call.shaper.drain(DRAIN_TIMEOUT_MS).then(() => hangUp(call, reason));
   }
 
   httpServer.on("upgrade", (req, socket, head) => {
@@ -161,7 +189,10 @@ export async function startNetworkRelay(
       }
 
       if (f.t === "CLOSE") {
-        if (calls.get(f.call)?.node === nodeId) endCall(f.call, f.reason ?? "NO CARRIER");
+        // The node saying goodbye: play the line out first (#62).
+        if (calls.get(f.call)?.node === nodeId) {
+          endCall(f.call, f.reason ?? "NO CARRIER", true);
+        }
         return;
       }
 
@@ -169,6 +200,9 @@ export async function startNetworkRelay(
     });
 
     ws.on("close", () => {
+      // No playout here, unlike the CLOSE frame above: a node whose socket
+      // died said no goodbye, and what the shaper still holds is the
+      // truncated half of whatever went wrong rather than parting words.
       if (!nodeId) return;
       for (const id of [...(callsByNode.get(nodeId) ?? [])]) endCall(id, "NO CARRIER");
       callsByNode.delete(nodeId);
@@ -210,6 +244,10 @@ export async function startNetworkRelay(
       }
     });
     caller.on("close", () => {
+      // Nobody left to play out to: closing the shaper settles its drain, so
+      // the pending playout finishes immediately instead of pacing into a
+      // dead socket for the rest of its deadline.
+      playingOut.get(id)?.shaper.close();
       if (calls.has(id)) endCall(id, "CALLER HUNG UP");
     });
   });
@@ -235,6 +273,7 @@ export async function startNetworkRelay(
     },
     close: async () => {
       for (const id of [...calls.keys()]) endCall(id, "RELAY DOWN");
+      for (const call of [...playingOut.values()]) hangUp(call, "RELAY DOWN");
       await new Promise<void>((resolve) => { nodeWss.close(() => resolve()); });
       await new Promise<void>((resolve) => { dialWss.close(() => resolve()); });
       await new Promise<void>((resolve) => { httpServer.close(() => resolve()); });

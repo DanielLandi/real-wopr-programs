@@ -44,15 +44,6 @@ export interface RunningServer {
   close: () => Promise<void>;
 }
 
-/** `p`, but never longer than `ms`. The timer is cleared on the winning path
- *  so a settled race leaves nothing pending on the event loop. */
-function deadline(p: Promise<void>, ms: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    void p.then(() => { clearTimeout(timer); resolve(); });
-  });
-}
-
 export async function startServer(opts: ServerOpts = {}): Promise<RunningServer> {
   const config = opts.config ?? configFromEnv();
   const port = opts.port ?? Number(process.env.COMMS_PORT ?? 8081);
@@ -223,7 +214,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
      *  drain at once, and the `closed` guard stops us re-announcing. */
     const dropCarrier = async (code: number, reason: string) => {
       if (closed) return;
-      await deadline(down.drain(), drainTimeoutMs);
+      await down.drain(drainTimeoutMs);
       if (closed) return;
       down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
       teardown(code, reason);

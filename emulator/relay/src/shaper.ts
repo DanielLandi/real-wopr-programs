@@ -99,11 +99,27 @@ export class LinkShaper {
    *  Anything sent while a drain is pending is part of that drain.
    *
    *  This is what lets a caller play the line out before dropping carrier
-   *  instead of closing over the top of it (issue #62); the caller owns the
-   *  deadline, since how long a drop may wait is not the shaper's policy. */
-  drain(): Promise<void> {
+   *  instead of closing over the top of it (issue #62). `timeoutMs` bounds the
+   *  wait: it resolves on the deadline whatever is left, because a queue that
+   *  needs minutes at line rate must not hold a socket open for them. The
+   *  deadline is the caller's to set — how long a drop may wait is a policy
+   *  about that link, not about shaping — and a drain with no deadline waits
+   *  for the line however long it takes. */
+  drain(timeoutMs?: number): Promise<void> {
     if (this.idle()) return Promise.resolve();
-    return new Promise<void>((resolve) => { this.drainWaiters.push(resolve); });
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      // Self-removing, so a drain released by its deadline leaves nothing
+      // behind for a later settle to call.
+      const waiter = () => {
+        if (timer !== null) clearTimeout(timer);
+        const i = this.drainWaiters.indexOf(waiter);
+        if (i >= 0) this.drainWaiters.splice(i, 1);
+        resolve();
+      };
+      this.drainWaiters.push(waiter);
+      if (timeoutMs !== undefined) timer = setTimeout(waiter, timeoutMs);
+    });
   }
 
   private idle(): boolean {
