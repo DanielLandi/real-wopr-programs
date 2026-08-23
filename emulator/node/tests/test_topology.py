@@ -12,9 +12,9 @@ def test_loads_the_three_networks():
     assert set(nets) == {"pstn", "norad", "bus"}
 
 
-def test_pstn_is_public_dialup_at_1200_baud():
+def test_pstn_is_public_dialup_at_600_baud():
     pstn = load_networks(PACK / "pack.json")["pstn"]
-    assert (pstn.kind, pstn.baud, pstn.addressing, pstn.public) == ("dialup", 1200, "phone", True)
+    assert (pstn.kind, pstn.baud, pstn.addressing, pstn.public) == ("dialup", 600, "phone", True)
 
 
 def test_bus_is_private_and_has_no_baud():

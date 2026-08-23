@@ -33,6 +33,10 @@ export const DEFAULT_CONFIG: CommsConfig = {
       baud: 300, bits_per_char: 10, latency_ms: 120, jitter_ms: 80,
       frame_bytes: 64, handshake: "dialup",
     },
+    "dialup-600": {
+      baud: 600, bits_per_char: 10, latency_ms: 120, jitter_ms: 70,
+      frame_bytes: 64, handshake: "dialup",
+    },
     "dialup-1200": {
       baud: 1200, bits_per_char: 10, latency_ms: 120, jitter_ms: 60,
       frame_bytes: 64, handshake: "dialup",
@@ -51,7 +55,7 @@ export const DEFAULT_CONFIG: CommsConfig = {
     },
   },
   surface_links: {
-    "home-terminal": "dialup-1200",
+    "home-terminal": "dialup-600",
     "norad-terminal": "leased-9600",
     "norad-bigboard": "internal-bus",
     "wopr-panel": "internal-bus",

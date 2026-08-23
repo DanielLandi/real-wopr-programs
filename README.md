@@ -30,7 +30,7 @@ And beside them, the harness that runs them:
 
 | Folder | What it is | Language |
 |---|---|---|
-| `emulator/relay/` | The networks — era shaping (1200 baud), dial FSM, switchboard | TypeScript |
+| `emulator/relay/` | The networks — era shaping (600 baud), dial FSM, switchboard | TypeScript |
 | `emulator/node/` | The host that runs programs as subprocesses and serves the API | Python |
 | `emulator/web/` | Browser surfaces — a proxy onto what the programs do | TypeScript/Next.js |
 | `emulator/devkit/` | A period line-mode IDE for editing and building programs | Python |

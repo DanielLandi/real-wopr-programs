@@ -245,7 +245,7 @@ test("a system's parting words survive the close at 300 baud (issue #62)", async
   // the surface — far longer than the close takes to arrive behind it.
   const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
   config.mode = "authentic";
-  config.profiles["dialup-1200"] = { ...DEFAULT_CONFIG.profiles["dialup-300"] };
+  config.profiles["dialup-600"] = { ...DEFAULT_CONFIG.profiles["dialup-300"] };
 
   const server = await startServer({
     port: 0,
