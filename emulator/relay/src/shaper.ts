@@ -36,6 +36,7 @@ export class LinkShaper {
   private lastDeliverAt = 0;
   private outbox: Array<{ at: number; frame: Envelope }> = [];
   private outboxTimer: ReturnType<typeof setTimeout> | null = null;
+  private drainWaiters: Array<() => void> = [];
 
   constructor(
     profile: LinkProfile,
@@ -92,6 +93,45 @@ export class LinkShaper {
     this.deliver(frame);
   }
 
+  /** Resolves once everything already enqueued has left the shaper: the paced
+   *  queue is empty, the pump is idle, and the latency outbox has flushed. A
+   *  closed shaper resolves at once — close() discards, it does not deliver.
+   *  Anything sent while a drain is pending is part of that drain.
+   *
+   *  This is what lets a caller play the line out before dropping carrier
+   *  instead of closing over the top of it (issue #62). `timeoutMs` bounds the
+   *  wait: it resolves on the deadline whatever is left, because a queue that
+   *  needs minutes at line rate must not hold a socket open for them. The
+   *  deadline is the caller's to set — how long a drop may wait is a policy
+   *  about that link, not about shaping — and a drain with no deadline waits
+   *  for the line however long it takes. */
+  drain(timeoutMs?: number): Promise<void> {
+    if (this.idle()) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      // Self-removing, so a drain released by its deadline leaves nothing
+      // behind for a later settle to call.
+      const waiter = () => {
+        if (timer !== null) clearTimeout(timer);
+        const i = this.drainWaiters.indexOf(waiter);
+        if (i >= 0) this.drainWaiters.splice(i, 1);
+        resolve();
+      };
+      this.drainWaiters.push(waiter);
+      if (timeoutMs !== undefined) timer = setTimeout(waiter, timeoutMs);
+    });
+  }
+
+  private idle(): boolean {
+    return this.closed
+      || (this.queue.length === 0 && !this.pumping && this.outbox.length === 0);
+  }
+
+  private settleDrain(): void {
+    if (!this.idle()) return;
+    for (const resolve of this.drainWaiters.splice(0)) resolve();
+  }
+
   /** Emission quantum: ~1/15 s of line rate per envelope, so the surface sees
    *  character-level trickle at 300 baud instead of 64-byte bursts. Uncapped
    *  links emit whole frames. */
@@ -129,6 +169,7 @@ export class LinkShaper {
       }
     } finally {
       this.pumping = false;
+      this.settleDrain();
     }
   }
 
@@ -156,6 +197,8 @@ export class LinkShaper {
         this.outboxTimer = null;
         if (!this.closed) this.drainOutbox();
       }, wait);
+    } else {
+      this.settleDrain();
     }
   }
 
@@ -165,5 +208,6 @@ export class LinkShaper {
     this.outbox = [];
     if (this.outboxTimer !== null) clearTimeout(this.outboxTimer);
     this.outboxTimer = null;
+    this.settleDrain();
   }
 }

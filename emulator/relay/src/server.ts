@@ -23,6 +23,9 @@ export interface ServerOpts {
   config?: CommsConfig;
   handshake?: HandshakeOpts;
   publicBase?: string;
+  /** How long a carrier drop waits for the downstream shaper to play out what
+   *  the far end already sent (#62). Defaults to 30s. */
+  drainTimeoutMs?: number;
   trunk?: {
     maxExchanges?: number;
     maxChannels?: number;
@@ -50,6 +53,11 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     failRate: Number(process.env.COMMS_FAIL_RATE ?? 0),
     ...opts.handshake,
   };
+  // A drop plays the line out before it announces carrier loss, but a
+  // pathological queue must not hold the visitor's socket open indefinitely:
+  // 30s is ~900 characters at 300 baud, far more than any sign-off display and
+  // far less than a runaway feed would take.
+  const drainTimeoutMs = opts.drainTimeoutMs ?? 30_000;
   // The fallback publicBase is resolved AFTER listen(): under COMMS_PORT=0
   // the pre-listen `port` is 0, which would bake ":0" into every directory
   // entry. Explicit configuration always wins.
@@ -190,6 +198,28 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       if (client.readyState === WebSocket.OPEN) client.close(code, reason);
     };
 
+    /** An orderly carrier drop: play out what the far end already put on the
+     *  wire, THEN drop. The node's DROP path sends its sign-off display and
+     *  closes the socket immediately behind it, so at authentic baud that
+     *  display is still trickling through `down` when the upstream close
+     *  lands — and teardown()'s down.close() discards the whole paced queue,
+     *  which swallowed the parting words on every real 300-baud call (#62).
+     *  The modem metaphor agrees: the far end's last bytes were already on the
+     *  wire when carrier dropped.
+     *
+     *  NO CARRIER still goes out via sendImmediate() — it is a line-state
+     *  transition, not paced serial data (#88) — but now behind the playout
+     *  rather than in front of it. The wait is bounded, and a visitor who
+     *  hangs up mid-playout wins: teardown() closes `down`, which settles the
+     *  drain at once, and the `closed` guard stops us re-announcing. */
+    const dropCarrier = async (code: number, reason: string) => {
+      if (closed) return;
+      await down.drain(drainTimeoutMs);
+      if (closed) return;
+      down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
+      teardown(code, reason);
+    };
+
     const connectUpstream = () => {
       const target = `${bridgeUrl.replace(/\/$/, "")}/ws/session/${session}?token=${encodeURIComponent(token)}`;
       upstream = new WebSocket(target, {
@@ -211,15 +241,11 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
           // Bridge sent something malformed; drop the frame, keep the line up.
         }
       });
-      upstream.on("close", () => {
-        // Deliver NO CARRIER immediately, bypassing baud pacing: teardown()'s
-        // down.close() discards anything still in the 300-baud queue, so a
-        // shaped send() here would be dropped and the surface would see a bare
-        // WS close with no carrier-loss on the line (issue #88).
-        down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
-        teardown(1000, "upstream closed");
-      });
+      upstream.on("close", () => { void dropCarrier(1000, "upstream closed"); });
       upstream.on("error", () => {
+        // No playout on the error path: an errored leg is a line already gone,
+        // and what the shaper still holds may be exactly the truncated half of
+        // whatever went wrong. Announce and drop.
         down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
         teardown(1011, "upstream error");
       });
