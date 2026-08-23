@@ -222,3 +222,70 @@ test("upstream drop delivers NO CARRIER on the line BEFORE the client socket clo
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   }
 });
+
+test("a system's parting words survive the close at 300 baud (issue #62)", async () => {
+  // The node's DROP path sends the sign-off display and closes the socket
+  // immediately behind it. At authentic baud that display is still trickling
+  // through the downstream shaper when the upstream close lands — and
+  // teardown()'s down.close() used to discard the whole paced queue, so the
+  // visitor saw the line drop with no parting words at all.
+  const display = "\nPANAMAC OFF\n";
+  const wss = new WebSocketServer({ port: 0 });
+  wss.on("connection", (ws) => {
+    ws.send(encodeEnvelope({
+      v: 1, session: "s", seq: 0, kind: "output",
+      link: "dialup-300", payload: display, eom: true,
+    }));
+    ws.close();
+  });
+  await new Promise<void>((resolve) => wss.once("listening", resolve));
+  const bridgePort = (wss.address() as { port: number }).port;
+
+  // The real 300-baud line: ~30 chars/s, so this display takes ~0.4s to reach
+  // the surface — far longer than the close takes to arrive behind it.
+  const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
+  config.mode = "authentic";
+  config.profiles["dialup-1200"] = { ...DEFAULT_CONFIG.profiles["dialup-300"] };
+
+  const server = await startServer({
+    port: 0,
+    bridgeUrl: `ws://127.0.0.1:${bridgePort}`,
+    internalToken: "test-secret",
+    config,
+    handshake: { timeScale: 0.01, rng: () => 0.5, failRate: 0 },
+  });
+
+  const events: string[] = [];
+  const outputs: Envelope[] = [];
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${server.port}/link?surface=home-terminal&session=22222222-2222-2222-2222-222222222222&token=tk`,
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("no close observed")), 10_000);
+      ws.on("message", (data) => {
+        const e = decodeEnvelope(data.toString());
+        if (e.kind === "output") { outputs.push(e); events.push("output"); }
+        if (e.kind === "control" && e.payload === "NO CARRIER") events.push("no-carrier");
+      });
+      ws.on("close", () => {
+        events.push("close");
+        clearTimeout(timeout);
+        resolve();
+      });
+      ws.on("error", reject);
+    });
+
+    assert.equal(reassemble(outputs).join(""), display,
+      "the sign-off display must reach the surface before the line drops");
+    assert.equal(events.at(-1), "close");
+    assert.equal(events.at(-2), "no-carrier",
+      "NO CARRIER is the last thing on the line, after the parting words");
+    assert.ok(events.indexOf("output") < events.indexOf("no-carrier"),
+      `the display must precede the carrier drop: ${events.join(",")}`);
+  } finally {
+    ws.close();
+    await server.close();
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }
+});

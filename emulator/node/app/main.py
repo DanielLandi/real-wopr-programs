@@ -417,8 +417,9 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             if resp.line == "DROP":
                 # Close, and say nothing about it. Carrier loss is announced by
                 # the comms layer, which is the only thing that connects here
-                # (D3) and which already sends a control NO CARRIER the instant
-                # this socket closes — out of band, ahead of teardown
+                # (D3) and which sends a control NO CARRIER when this socket
+                # closes — out of band, after it has played out the display
+                # above at line rate (#62) and ahead of teardown
                 # (relay/src/server.ts, issue #88). Announcing here as well is
                 # what printed NO CARRIER twice on a period system's sign-off
                 # (#49): once as this frame's text, once as the comms signal.

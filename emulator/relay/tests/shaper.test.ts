@@ -149,3 +149,43 @@ test("framing: chunker respects byte width and multi-byte boundaries", () => {
   const chunks = chunkPayload("€€€", 4);
   assert.deepEqual(chunks, ["€", "€", "€"]);
 });
+
+test("drain: resolves only once every queued byte has reached the surface (issue #62)", async () => {
+  // A system's parting words sit in the paced queue when the far end hangs
+  // up. Anything that wants them to land needs to know when the line has
+  // finished painting — close() alone throws the queue away.
+  const profile: LinkProfile = {
+    baud: 3000, bits_per_char: 10, latency_ms: 5, jitter_ms: 2,
+    frame_bytes: 30, handshake: "none",
+  };
+  const { frames, deliver } = collect();
+  const shaper = new LinkShaper(profile, "test-3000", "s1", deliver);
+  const signoff = "PANAMAC OFF. THANK YOU FOR FLYING PAN AM.\n".repeat(4);
+  shaper.send({ kind: "output", payload: signoff });
+
+  await shaper.drain();
+
+  assert.deepEqual(reassemble(frames), [signoff],
+    "drain resolved with bytes still in the queue or the outbox");
+  shaper.close();
+});
+
+test("drain: a close mid-drain settles the waiter instead of hanging it", async () => {
+  // The error and hang-up paths close without draining. A drain already in
+  // flight must not leave its caller awaiting a promise that never settles —
+  // that would strand the teardown instead of the bytes.
+  const profile: LinkProfile = {
+    baud: 300, bits_per_char: 10, latency_ms: 0, jitter_ms: 0,
+    frame_bytes: 64, handshake: "none",
+  };
+  const { frames, deliver } = collect();
+  const shaper = new LinkShaper(profile, "dialup-300", "s1", deliver);
+  shaper.send({ kind: "output", payload: "X".repeat(600) });   // ~20s at 300 baud
+  const drained = shaper.drain();
+  setTimeout(() => shaper.close(), 20);
+
+  await drained;    // the test times out rather than fails if this never settles
+
+  assert.equal(frames.filter((f) => f.eom).length, 0,
+    "the message completed, so this proves nothing about a close mid-drain");
+});
