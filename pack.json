@@ -8,7 +8,7 @@
   "networks": {
     "pstn": {
       "kind": "dialup",
-      "baud": 1200,
+      "baud": 600,
       "addressing": "phone",
       "public": true
     },

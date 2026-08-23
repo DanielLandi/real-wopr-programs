@@ -214,8 +214,10 @@ test("profileFor without a declared baud keeps the kind default", () => {
 });
 
 test("profileFor with an unmatched baud falls back to the kind default", () => {
+  // 2400 is a real period rate with no tuned profile here. It used to be 600,
+  // which stopped being unmatched the day the home terminal moved onto it.
   const p = profileFor(
-    { name: "pstn", kind: "dialup", addressing: "phone", baud: 600 }, "authentic");
+    { name: "pstn", kind: "dialup", addressing: "phone", baud: 2400 }, "authentic");
   assert.equal(p.baud, 300);
 });
 
