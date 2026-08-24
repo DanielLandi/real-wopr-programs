@@ -6,7 +6,7 @@ import {
 import { DIAL_SYSTEMS } from "./sims.ts";
 import { buildSweep } from "./wardial.ts";
 
-// A representative phone book: one community exchange, then the local
+// A representative phone book: one community exchange, then the five local
 // SYSTEM/1 numbers, then the default WOPR line (appended by the parser).
 const EXCHANGE = {
   id: "ex-cheyenne",
