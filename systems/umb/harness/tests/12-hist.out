@@ -1,0 +1,11 @@
+SYSTEM/1 umb OK
+STATE 1
+Y0
+DISPLAY 4
+DATE   DESCRIPTION              AMOUNT
+11-03  DEPOSIT                  920.00
+11-01  CHECK 1042              -118.45
+10-28  DEPOSIT                1,040.00
+PROMPT READY:
+LINE UP
+END

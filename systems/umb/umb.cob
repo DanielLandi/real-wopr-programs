@@ -22,18 +22,32 @@
            SELECT ACCT-IN ASSIGN TO "data/accounts.dat"
                ORGANIZATION IS LINE SEQUENTIAL
                FILE STATUS IS WS-AFS.
+           SELECT HIST-IN ASSIGN TO "data/history.dat"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-HFS.
        DATA DIVISION.
        FILE SECTION.
        FD  SYS-IN.
        01  IN-REC              PIC X(256).
        FD  ACCT-IN.
        01  ACCT-REC            PIC X(80).
+       FD  HIST-IN.
+       01  HIST-REC            PIC X(80).
        WORKING-STORAGE SECTION.
        01  WS-FS               PIC XX.
        01  WS-AFS              PIC XX.
+       01  WS-HFS              PIC XX.
        01  WS-ARG              PIC X(10) VALUE SPACES.
        01  WS-FOUND            PIC X     VALUE "N".
        01  WS-AEOF             PIC X     VALUE "N".
+       01  WS-HEOF             PIC X     VALUE "N".
+       01  WS-ROWS             PIC 9(3)  VALUE 0.
+       01  WS-ROW-D            PIC Z(2)9.
+       01  WS-RSTART           PIC 9(4)  VALUE 0.
+       01  WS-RLEN             PIC 9(4)  VALUE 0.
+       01  WS-BUF.
+           05  WS-BUF-ROW      PIC X(46) OCCURS 40 TIMES.
+       01  WS-K                PIC 9(3).
        01  WS-HIT              PIC X(80) VALUE SPACES.
        01  WS-CMD              PIC X(16) VALUE SPACES.
        01  WS-STATE-N          PIC 9(4)  VALUE 0.
@@ -180,6 +194,10 @@
                    MOVE WS-INPUT(6:10) TO WS-ARG
                    PERFORM FIND-ACCT
                    PERFORM DO-ACCT
+               WHEN WS-INPUT-LEN > 5 AND WS-INPUT(1:5) = "HIST "
+                   MOVE WS-INPUT(6:10) TO WS-ARG
+                   PERFORM FIND-ACCT
+                   PERFORM DO-HIST
                WHEN OTHER
                    PERFORM SAY-INVALID
            END-EVALUATE.
@@ -249,6 +267,60 @@
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.
+       DO-HIST.
+           IF WS-FOUND NOT = "Y"
+               DISPLAY "SYSTEM/1 umb OK"
+               DISPLAY "STATE 1"
+               DISPLAY "Y0"
+               DISPLAY "DISPLAY 1"
+               DISPLAY "ACCOUNT NOT ON FILE"
+               DISPLAY "PROMPT READY:"
+               DISPLAY "LINE UP"
+               DISPLAY "END"
+           ELSE
+               MOVE 0 TO WS-ROWS
+               MOVE "N" TO WS-HEOF
+               OPEN INPUT HIST-IN
+               IF WS-HFS NOT = "00"
+                   PERFORM DATA-ERROR
+               END-IF
+               PERFORM UNTIL WS-HEOF = "Y" OR WS-ROWS = 40
+                   READ HIST-IN
+                       AT END MOVE "Y" TO WS-HEOF
+                       NOT AT END
+                           IF HIST-REC(1:10) = WS-ARG
+                               ADD 1 TO WS-ROWS
+                               MOVE HIST-REC(11:46)
+                                   TO WS-BUF-ROW(WS-ROWS)
+                           END-IF
+                   END-READ
+               END-PERFORM
+               CLOSE HIST-IN
+               COMPUTE WS-ROWS = WS-ROWS + 1
+               MOVE WS-ROWS TO WS-ROW-D
+               PERFORM LTRIM-ROWS
+               COMPUTE WS-ROWS = WS-ROWS - 1
+               DISPLAY "SYSTEM/1 umb OK"
+               DISPLAY "STATE 1"
+               DISPLAY "Y0"
+               DISPLAY "DISPLAY " WS-ROW-D(WS-RSTART:WS-RLEN)
+               DISPLAY "DATE   DESCRIPTION              AMOUNT"
+               PERFORM VARYING WS-K FROM 1 BY 1 UNTIL WS-K > WS-ROWS
+                   DISPLAY WS-BUF-ROW(WS-K)(1:5) "  "
+                       WS-BUF-ROW(WS-K)(6:21) WS-BUF-ROW(WS-K)(27:10)
+               END-PERFORM
+               DISPLAY "PROMPT READY:"
+               DISPLAY "LINE UP"
+               DISPLAY "END"
+           END-IF.
+       LTRIM-ROWS.
+      *    WS-ROW-D is PIC Z(2)9, left-padded with spaces.
+           MOVE 1 TO WS-RSTART
+           PERFORM UNTIL WS-RSTART > 3
+                   OR WS-ROW-D(WS-RSTART:1) NOT = SPACE
+               ADD 1 TO WS-RSTART
+           END-PERFORM
+           COMPUTE WS-RLEN = 4 - WS-RSTART.
        DATA-ERROR.
            DISPLAY "SYSTEM/1 umb OK"
            DISPLAY "STATE 0"
