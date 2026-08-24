@@ -19,12 +19,22 @@
            SELECT SYS-IN ASSIGN TO "/dev/stdin"
                ORGANIZATION IS LINE SEQUENTIAL
                FILE STATUS IS WS-FS.
+           SELECT ACCT-IN ASSIGN TO "data/accounts.dat"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS WS-AFS.
        DATA DIVISION.
        FILE SECTION.
        FD  SYS-IN.
        01  IN-REC              PIC X(256).
+       FD  ACCT-IN.
+       01  ACCT-REC            PIC X(80).
        WORKING-STORAGE SECTION.
        01  WS-FS               PIC XX.
+       01  WS-AFS              PIC XX.
+       01  WS-ARG              PIC X(10) VALUE SPACES.
+       01  WS-FOUND            PIC X     VALUE "N".
+       01  WS-AEOF             PIC X     VALUE "N".
+       01  WS-HIT              PIC X(80) VALUE SPACES.
        01  WS-CMD              PIC X(16) VALUE SPACES.
        01  WS-STATE-N          PIC 9(4)  VALUE 0.
        01  WS-INPUT            PIC X(240) VALUE SPACES.
@@ -166,6 +176,10 @@
            EVALUATE TRUE
                WHEN WS-INPUT-LEN = 4 AND WS-INPUT(1:4) = "HELP"
                    PERFORM DO-HELP
+               WHEN WS-INPUT-LEN > 5 AND WS-INPUT(1:5) = "ACCT "
+                   MOVE WS-INPUT(6:10) TO WS-ARG
+                   PERFORM FIND-ACCT
+                   PERFORM DO-ACCT
                WHEN OTHER
                    PERFORM SAY-INVALID
            END-EVALUATE.
@@ -191,6 +205,47 @@
            DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
            DISPLAY "END".
+       FIND-ACCT.
+      *    Sequential scan, the period-correct shape for a LINE
+      *    SEQUENTIAL master: no indexed files, no sort.
+           MOVE "N" TO WS-FOUND
+           MOVE "N" TO WS-AEOF
+           OPEN INPUT ACCT-IN
+           PERFORM UNTIL WS-AEOF = "Y" OR WS-FOUND = "Y"
+               READ ACCT-IN
+                   AT END MOVE "Y" TO WS-AEOF
+                   NOT AT END
+                       IF ACCT-REC(1:10) = WS-ARG
+                           MOVE ACCT-REC TO WS-HIT
+                           MOVE "Y" TO WS-FOUND
+                       END-IF
+               END-READ
+           END-PERFORM
+           CLOSE ACCT-IN.
+       DO-ACCT.
+           IF WS-FOUND NOT = "Y"
+               DISPLAY "SYSTEM/1 umb OK"
+               DISPLAY "STATE 1"
+               DISPLAY "Y0"
+               DISPLAY "DISPLAY 1"
+               DISPLAY "ACCOUNT NOT ON FILE"
+               DISPLAY "PROMPT READY:"
+               DISPLAY "LINE UP"
+               DISPLAY "END"
+           ELSE
+               DISPLAY "SYSTEM/1 umb OK"
+               DISPLAY "STATE 1"
+               DISPLAY "Y0"
+               DISPLAY "DISPLAY 5"
+               DISPLAY "ACCT   " WS-HIT(1:10) "  " WS-HIT(11:8)
+               DISPLAY "NAME   " WS-HIT(19:24)
+               DISPLAY "BRANCH " WS-HIT(43:3) "  " WS-HIT(46:12)
+               DISPLAY "BAL    " WS-HIT(58:10)
+               DISPLAY "HOLD   " WS-HIT(68:10)
+               DISPLAY "PROMPT READY:"
+               DISPLAY "LINE UP"
+               DISPLAY "END"
+           END-IF.
        PROTOCOL-ERROR.
            DISPLAY "SYSTEM/1 umb OK"
            DISPLAY "STATE 0"
