@@ -17,4 +17,5 @@ export const DIALABLE_SYSTEMS: readonly DialableSystem[] = [
   { systemId: "protovision", number: "(408) 555-0163", title: "PROTOVISION" },
   { systemId: "reference", number: "(311) 555-0101", title: "REFERENCE SYSTEM" },
   { systemId: "school-mon", number: "(206) 555-0142", title: "SEATTLE SCHOOL DISTRICT" },
+  { systemId: "umb", number: "(408) 555-0164", title: "UNION MARINE BANK" },
 ];

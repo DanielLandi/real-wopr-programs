@@ -38,6 +38,7 @@ const LISTED: ReadonlyArray<{ systemId: string; name: string; label: string }> =
   { systemId: "school-mon", name: "SEATTLE SCHOOL DISTRICT", label: "SCHOOL DIST" },
   { systemId: "protovision", name: "PROTOVISION", label: "GAME CO" },
   { systemId: "pactel", name: "PACIFIC TELEPHONE", label: "TELCO" },
+  { systemId: "umb", name: "UNION MARINE BANK", label: "BANK" },
 ];
 
 /** Dialable, but deliberately absent from the film's list of numbers. Stated
