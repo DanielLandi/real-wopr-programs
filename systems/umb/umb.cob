@@ -388,19 +388,29 @@
                CLOSE HIST-IN
                PERFORM COMMON-HEADER
                PERFORM EMIT-STATE
-      *        The DISPLAY count covers the column header as well as
-      *        the rows, so borrow the row counter for the one line it
-      *        takes to format and hand it straight back.
-               COMPUTE WS-ROWS = WS-ROWS + 1
-               MOVE WS-ROWS TO WS-ROW-D
-               PERFORM LTRIM-ROWS
-               COMPUTE WS-ROWS = WS-ROWS - 1
-               DISPLAY "DISPLAY " WS-ROW-D(WS-RSTART:WS-RLEN)
-               DISPLAY "DATE   DESCRIPTION              AMOUNT"
-               PERFORM VARYING WS-K FROM 1 BY 1 UNTIL WS-K > WS-ROWS
-                   DISPLAY WS-BUF-ROW(WS-K)(1:5) "  "
-                       WS-BUF-ROW(WS-K)(6:21) WS-BUF-ROW(WS-K)(27:10)
-               END-PERFORM
+               IF WS-ROWS = 0
+      *            25 of the 40 accounts carry no transactions, so
+      *            this is the common answer, not an edge case: say
+      *            so, rather than rule off an empty column header.
+                   DISPLAY "DISPLAY 1"
+                   DISPLAY "NO ACTIVITY THIS PERIOD"
+               ELSE
+      *            The DISPLAY count covers the column header as well
+      *            as the rows, so borrow the row counter for the one
+      *            line it takes to format and hand it straight back.
+                   COMPUTE WS-ROWS = WS-ROWS + 1
+                   MOVE WS-ROWS TO WS-ROW-D
+                   PERFORM LTRIM-ROWS
+                   COMPUTE WS-ROWS = WS-ROWS - 1
+                   DISPLAY "DISPLAY " WS-ROW-D(WS-RSTART:WS-RLEN)
+                   DISPLAY "DATE   DESCRIPTION              AMOUNT"
+                   PERFORM VARYING WS-K FROM 1 BY 1
+                           UNTIL WS-K > WS-ROWS
+                       DISPLAY WS-BUF-ROW(WS-K)(1:5) "  "
+                           WS-BUF-ROW(WS-K)(6:21)
+                           WS-BUF-ROW(WS-K)(27:10)
+                   END-PERFORM
+               END-IF
                DISPLAY "PROMPT READY:"
                DISPLAY "LINE UP"
                DISPLAY "END"
