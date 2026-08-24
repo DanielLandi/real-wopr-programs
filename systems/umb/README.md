@@ -5,13 +5,14 @@ Answers `(408) 555-0164`.
 
 ## What is shown, and what is ours
 
-The film shows one thing: a banner, in the war-dial callback scene.
+The film shows one thing: a banner.
 
     UNION MARINE BANK - SOUTHWEST REGIONAL DATA CENTER
 
-David notes the hit "might come in handy someday" and moves on. Nothing else
-about this system appears on screen, so everything below the banner is our
-documented interpretation, not a reconstruction:
+That line is the whole of the attestation (`CREDITS.md`) — where in the film it
+appears, and what is said around it, are not attested here and are not claimed.
+Everything below the banner is our documented interpretation, not a
+reconstruction:
 
 | Element | Provenance |
 | --- | --- |

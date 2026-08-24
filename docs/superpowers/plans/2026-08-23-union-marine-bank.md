@@ -1081,13 +1081,14 @@ Answers `(408) 555-0164`.
 
 ## What is shown, and what is ours
 
-The film shows one thing: a banner, in the war-dial callback scene.
+The film shows one thing: a banner.
 
     UNION MARINE BANK - SOUTHWEST REGIONAL DATA CENTER
 
-David notes the hit "might come in handy someday" and moves on. Nothing else
-about this system appears on screen, so everything below the banner is our
-documented interpretation, not a reconstruction:
+That line is the whole of the attestation (`CREDITS.md`) — where in the film it
+appears, and what is said around it, are not attested here and are not claimed.
+Everything below the banner is our documented interpretation, not a
+reconstruction:
 
 | Element | Provenance |
 | --- | --- |
@@ -1157,6 +1158,12 @@ becomes two rows — the bank promoted, the rest unchanged:
 ```
 
 Leave the Non-goals entry — "Copying Andy Glenn's specific system designs (bank / BBS / starwars / telstar)" — **exactly as written**. It is not contradicted: nothing was copied.
+
+- [ ] **Step 1b: Amend the war-dial montage list**
+
+`docs/fidelity-notes.md` §10 enumerates the montage's hits as a closed set of four — "the
+airline, the school, Protovision, Pacific Telephone". This branch makes it five. Found by the
+whole-branch review; without this the paired PR leaves a fidelity document stale.
 
 - [ ] **Step 2: Document the system**
 
