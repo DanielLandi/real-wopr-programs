@@ -211,6 +211,9 @@
            MOVE "N" TO WS-FOUND
            MOVE "N" TO WS-AEOF
            OPEN INPUT ACCT-IN
+           IF WS-AFS NOT = "00"
+               PERFORM DATA-ERROR
+           END-IF
            PERFORM UNTIL WS-AEOF = "Y" OR WS-FOUND = "Y"
                READ ACCT-IN
                    AT END MOVE "Y" TO WS-AEOF
@@ -246,6 +249,14 @@
                DISPLAY "LINE UP"
                DISPLAY "END"
            END-IF.
+       DATA-ERROR.
+           DISPLAY "SYSTEM/1 umb OK"
+           DISPLAY "STATE 0"
+           DISPLAY "DISPLAY 1"
+           DISPLAY "DATA BASE UNAVAILABLE"
+           DISPLAY "LINE DROP"
+           DISPLAY "END"
+           STOP RUN GIVING 1.
        PROTOCOL-ERROR.
            DISPLAY "SYSTEM/1 umb OK"
            DISPLAY "STATE 0"
