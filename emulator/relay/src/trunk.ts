@@ -26,7 +26,7 @@ export const TRUNK_MAX_FRAME_BYTES = 8192;
 // that true on the wire — the REGISTER codec's membership check below refuses
 // it, the tieline CLI never offers it, and the directory's roster sort will
 // never meet one.
-export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL"] as const;
+export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL", "BANK"] as const;
 export const WILDCARD_SLOTS = ["OTHER-1", "OTHER-2"] as const;
 export const ALL_SLOTS: readonly string[] = [...NAMED_SLOTS, ...WILDCARD_SLOTS];
 

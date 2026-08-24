@@ -353,10 +353,10 @@ const WORLD1 = [
   { ...SEED, id: "w1-panam", name: "PAN AM", slot: "PANAM", system: "airline" },
   { ...SEED, id: "w1-proto", name: "PROTOVISION", slot: "PROTOVISION", system: "protovision" },
   { ...SEED, id: "w1-pactel", name: "PACIFIC TELEPHONE", slot: "PACTEL", system: "pactel" },
-  // The bank has no NAMED_SLOT of its own (trunk.ts's roster is fixed —
-  // adding one is a trunk decision, not a fixture decision), so it seeds
-  // into a wildcard slot like any other overflow system would.
-  { ...SEED, id: "w1-umb", name: "UNION MARINE BANK", slot: "OTHER-1", system: "umb" },
+  // The bank has a named slot because it is part of the film's war-dial
+  // cast, same as PANAM and PACTEL (trunk.ts NAMED_SLOTS) — not an overflow
+  // system, so it does not seed into a wildcard.
+  { ...SEED, id: "w1-umb", name: "UNION MARINE BANK", slot: "BANK", system: "umb" },
 ];
 const worldCtx = { exchanges: WORLD1, systems: DIAL_SYSTEMS, hits: null };
 

@@ -61,7 +61,7 @@ TIELINE_SLOT=SCHOOL TIELINE_NAME="CHEYENNE ANNEX" TIELINE_REGION="SAO PAULO BR" 
 
 | Env | Meaning |
 | --- | --- |
-| `TIELINE_SLOT` | `WOPR` `SCHOOL` `PANAM` `PROTOVISION` `PACTEL` `OTHER-1` `OTHER-2`. There is no `HOME` slot: that is the caller's own seat — David's desk — and it cannot be claimed. |
+| `TIELINE_SLOT` | `WOPR` `SCHOOL` `PANAM` `PROTOVISION` `PACTEL` `BANK` `OTHER-1` `OTHER-2`. There is no `HOME` slot: that is the caller's own seat — David's desk — and it cannot be claimed. |
 | `TIELINE_WORLD` | a world number, or `NEW` for a fresh world (default: lowest world with the slot open) |
 | `TIELINE_RESERVE_KEY` | only needed to claim a reserved world — world 1 is the flagship's; the hub operator issues it |
 | `TIELINE_NAME` / `TIELINE_REGION` / `TIELINE_OPERATOR` | how the phone book lists you |
@@ -115,7 +115,7 @@ entry names a system the bridge will not open. The school's id became
 `school-mon` when it was split into monitor + records (`docs/systems.md` §2.6).
 
 `slot` comes from the named roster (`WOPR` `SCHOOL` `PANAM` `PROTOVISION`
-`PACTEL`) — not a wildcard. `name` and `region` are 2-24 characters, the same
+`PACTEL` `BANK`) — not a wildcard. `name` and `region` are 2-24 characters, the same
 bounds the REGISTER wire imposes, because the DIRECTORY screen's 80-column
 budget is computed against them. `joshua` defaults to `period`.
 
