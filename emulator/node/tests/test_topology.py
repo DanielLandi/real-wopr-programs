@@ -41,6 +41,7 @@ def test_every_dialable_system_keeps_the_number_its_manifest_already_had():
     for sid, number in [
         ("airline", "(212) 555-0177"), ("pactel", "(311) 555-0100"),
         ("protovision", "(408) 555-0163"), ("reference", "(311) 555-0101"),
+        ("school-mon", "(206) 555-0142"), ("umb", "(408) 555-0164"),
     ]:
         assert nodes[sid].networks["pstn"].address == number
     assert "pstn" not in nodes["school"].networks

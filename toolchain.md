@@ -8,7 +8,7 @@ absent without stopping the others.
 |---|---|---|---|---|
 | Fortran | all `games/` | `gfortran` | `brew install gcc` | `apt install gfortran` |
 | Common Lisp | `joshua/` | `sbcl` | `brew install sbcl` | `apt install sbcl` |
-| COBOL | `airline`, `reference` | `cobc` (GnuCOBOL) | `brew install gnucobol` | `apt install gnucobol` |
+| COBOL | `airline`, `reference`, `umb` | `cobc` (GnuCOBOL) | `brew install gnucobol` | `apt install gnucobol` |
 | C | `pactel` | `cc` / `gcc` | Xcode Command Line Tools | `apt install gcc` |
 | 6502 assembly | `protovision` | `cl65` + `sim65` (cc65) | `brew install cc65` | `apt install cc65` |
 | BASIC | `school` | `bwbasic` (Bywater BASIC) | build from source | `apt install bwbasic` |

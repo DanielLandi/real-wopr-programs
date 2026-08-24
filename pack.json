@@ -200,6 +200,15 @@
       "title": "SEATTLE SCHOOL DISTRICT",
       "path": "systems/school-mon",
       "binary": "school-mon"
+    },
+    {
+      "id": "umb",
+      "kind": "system",
+      "protocol": "SYSTEM/1",
+      "language": "cobol",
+      "title": "UNION MARINE BANK",
+      "path": "systems/umb",
+      "binary": "umb"
     }
   ]
 }

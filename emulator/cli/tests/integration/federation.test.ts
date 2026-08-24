@@ -133,7 +133,8 @@ test("the federation, end to end", async (t) => {
 
   try {
   await t.test("every declared node that is a program is running", () => {
-  for (const id of ["school", "school-db", "airline", "pactel", "protovision", "reference"]) {
+  for (const id of ["school", "school-mon", "school-db", "school-ada",
+                    "airline", "pactel", "protovision", "reference", "umb"]) {
     assert.ok(fed.nodes.has(id), `${id} was not started`);
   }
   // WOPR mounts others and needs the router; it is skipped, not faked.

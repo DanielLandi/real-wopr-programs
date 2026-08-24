@@ -12,7 +12,7 @@ spec.loader.exec_module(gdd)
 
 def test_collect_dialable_is_the_registry_not_the_directory_listing():
     ids = [d["id"] for d in gdd.collect_dialable(PACK)]
-    assert ids == ["airline", "pactel", "protovision", "reference", "school-mon"]
+    assert ids == ["airline", "pactel", "protovision", "reference", "school-mon", "umb"]
     assert "school" not in ids and "school-db" not in ids
 
 

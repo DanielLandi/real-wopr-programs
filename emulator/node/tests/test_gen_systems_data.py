@@ -48,6 +48,8 @@ HAND_MAINTAINED = {
     "systems/school-mon/data/catlog.dat",    # its disk catalogue
     "systems/pactel/data/accounts.dat",      # Pacific Telephone's subscribers
     "systems/pactel/data/calls.dat",         # and their toll records
+    "systems/umb/data/accounts.dat",         # Union Marine Bank's depositors
+    "systems/umb/data/history.dat",          # and their transaction ledger
 }
 
 

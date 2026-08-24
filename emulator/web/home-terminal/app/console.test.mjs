@@ -6,7 +6,7 @@ import {
 import { DIAL_SYSTEMS } from "./sims.ts";
 import { buildSweep } from "./wardial.ts";
 
-// A representative phone book: one community exchange, then the four local
+// A representative phone book: one community exchange, then the five local
 // SYSTEM/1 numbers, then the default WOPR line (appended by the parser).
 const EXCHANGE = {
   id: "ex-cheyenne",
@@ -339,7 +339,7 @@ test("directoryText does not print an exchange's region", () => {
 // --- one line per machine: a world entry absorbs its local dial-list twin ---
 
 // What production looks like: the hub seeds world 1 with the flagship's own
-// slots, four of which are the period systems that are ALSO on David's paper
+// slots, five of which are the period systems that are ALSO on David's paper
 // list (sims.ts DIAL_SYSTEMS). Same machine, reached two ways.
 //
 // These `system` ids stand in for the operator's TRUNK_LOCAL_WORLD (see the
@@ -353,6 +353,10 @@ const WORLD1 = [
   { ...SEED, id: "w1-panam", name: "PAN AM", slot: "PANAM", system: "airline" },
   { ...SEED, id: "w1-proto", name: "PROTOVISION", slot: "PROTOVISION", system: "protovision" },
   { ...SEED, id: "w1-pactel", name: "PACIFIC TELEPHONE", slot: "PACTEL", system: "pactel" },
+  // The bank has a named slot because it is part of the film's war-dial
+  // cast, same as PANAM and PACTEL (trunk.ts NAMED_SLOTS) — not an overflow
+  // system, so it does not seed into a wildcard.
+  { ...SEED, id: "w1-umb", name: "UNION MARINE BANK", slot: "BANK", system: "umb" },
 ];
 const worldCtx = { exchanges: WORLD1, systems: DIAL_SYSTEMS, hits: null };
 
@@ -366,14 +370,14 @@ test("a world entry absorbs its local dial-list twin — one row, number kept", 
   assert.equal(school[0].slot, "SCHOOL");
   assert.equal(school[0].number, "(206) 555-0142");
   assert.equal(school[0].target, WORLD1[1], "the world entry is the canonical line");
-  // All four twins are absorbed: no standalone DialSystem row survives.
+  // All five twins are absorbed: no standalone DialSystem row survives.
   for (const s of DIAL_SYSTEMS) {
     assert.equal(
       entries.some((e) => e.target === s), false,
       `${s.name} still has a standalone dial-list row`,
     );
   }
-  // Five world slots + UNKNOWN, and nothing else.
+  // Six world slots + UNKNOWN, and nothing else.
   assert.equal(entries.length, WORLD1.length + 1);
   const text = directoryText(worldCtx);
   assert.equal((text.match(/SEATTLE SCHOOL/g) ?? []).length, 1, `the school is listed twice:\n${text}`);
@@ -412,7 +416,8 @@ test("an unmatched sim lists exactly as before — the pre-worlds directory is p
       "02  SEATTLE SCHOOL DISTRICT  (206) 555-0142",
       "03  PROTOVISION  (408) 555-0163",
       "04  PACIFIC TELEPHONE  (311) 555-0100",
-      `05  UNKNOWN  ${DEFAULT_WOPR_NUMBER}`,
+      "05  UNION MARINE BANK  (408) 555-0164",
+      `06  UNKNOWN  ${DEFAULT_WOPR_NUMBER}`,
       "",
       "DIAL <NN>   DIAL <NAME>   ATDT <NUMBER>   OR JUST THE NUMBER", ""].join("\n"),
   );

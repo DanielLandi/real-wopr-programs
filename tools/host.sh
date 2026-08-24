@@ -51,7 +51,7 @@ upper() { printf '%s' "$1" | tr '[:lower:]' '[:upper:]'; }
 
 # No HOME: that is the caller's own seat, not a service anyone hosts. The hub's
 # roster leaves it out too, so a REGISTER claiming it would not even decode.
-SLOTS="WOPR SCHOOL PANAM PROTOVISION PACTEL OTHER-1 OTHER-2"
+SLOTS="WOPR SCHOOL PANAM PROTOVISION PACTEL BANK OTHER-1 OTHER-2"
 
 if [ -n "${TIELINE_SLOT:-}" ]; then
   TIELINE_SLOT=$(upper "$TIELINE_SLOT")
