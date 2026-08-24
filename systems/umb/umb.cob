@@ -163,7 +163,25 @@
                END-IF
            END-IF.
        DO-AUTHED.
-           PERFORM SAY-INVALID.
+           EVALUATE TRUE
+               WHEN WS-INPUT-LEN = 4 AND WS-INPUT(1:4) = "HELP"
+                   PERFORM DO-HELP
+               WHEN OTHER
+                   PERFORM SAY-INVALID
+           END-EVALUATE.
+       DO-HELP.
+           DISPLAY "SYSTEM/1 umb OK"
+           DISPLAY "STATE 1"
+           DISPLAY "Y0"
+           DISPLAY "DISPLAY 5"
+           DISPLAY "UMB INQUIRY COMMANDS:"
+           DISPLAY "  ACCT <NUMBER>   ACCOUNT SUMMARY"
+           DISPLAY "  HIST <NUMBER>   RECENT ACTIVITY"
+           DISPLAY "  HELP            THIS LIST"
+           DISPLAY "  BYE             SIGN OFF"
+           DISPLAY "PROMPT READY:"
+           DISPLAY "LINE UP"
+           DISPLAY "END".
        SAY-INVALID.
            DISPLAY "SYSTEM/1 umb OK"
            DISPLAY "STATE 1"
