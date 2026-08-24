@@ -198,6 +198,8 @@
                    MOVE WS-INPUT(6:10) TO WS-ARG
                    PERFORM FIND-ACCT
                    PERFORM DO-HIST
+               WHEN WS-INPUT-LEN = 3 AND WS-INPUT(1:3) = "BYE"
+                   PERFORM DO-BYE
                WHEN OTHER
                    PERFORM SAY-INVALID
            END-EVALUATE.
@@ -213,6 +215,17 @@
            DISPLAY "  BYE             SIGN OFF"
            DISPLAY "PROMPT READY:"
            DISPLAY "LINE UP"
+           DISPLAY "END".
+       DO-BYE.
+      *    STATE 0 and LINE DROP: the line is gone. The display has to
+      *    reach the visitor before the carrier drops, which is the
+      *    relay's job since #62 -- at 600 baud this sign-off is exactly
+      *    the case that used to be discarded.
+           DISPLAY "SYSTEM/1 umb OK"
+           DISPLAY "STATE 0"
+           DISPLAY "DISPLAY 1"
+           DISPLAY "UMB INQUIRY SUBSYSTEM - SESSION ENDED"
+           DISPLAY "LINE DROP"
            DISPLAY "END".
        SAY-INVALID.
            DISPLAY "SYSTEM/1 umb OK"
