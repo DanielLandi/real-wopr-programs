@@ -1,0 +1,16 @@
+{
+  "id": "umb",
+  "title": "UNION MARINE BANK",
+  "language": "cobol",
+  "binary": "umb",
+  "number": "(408) 555-0164",
+  "timeout_s": 2,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(408) 555-0164",
+        "protocol": "SYSTEM/1"
+      }
+    }
+  }
+}
