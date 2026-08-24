@@ -96,7 +96,7 @@ World 1 is not registered by anyone: the hub synthesizes it at startup from
 Each seeded entry dials the public base directly — there is no trunk hop,
 because the flagship is the hub's own machine — and a slot that is a period
 system names the bridge `system` id that opens a session against it
-(`airline`, `school-mon`, `pactel`, `protovision`, `reference` — a dialable
+(`airline`, `school-mon`, `pactel`, `protovision`, `reference`, `umb` — a dialable
 system is one whose manifest carries a `number`, which is why `school` and
 `school-db` are not on that list).
 
