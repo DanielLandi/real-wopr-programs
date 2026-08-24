@@ -100,7 +100,79 @@
                PERFORM PROTOCOL-ERROR
            END-IF
            PERFORM RTRIM-INPUT
-           PERFORM PROTOCOL-ERROR.
+           IF WS-AUTH = "Y"
+               PERFORM DO-AUTHED
+           ELSE
+               IF WS-INPUT-LEN = 4 AND WS-INPUT(1:4) = "NEWS"
+                   PERFORM DO-NEWS
+               ELSE
+                   PERFORM DO-LOGON
+               END-IF
+           END-IF.
+       DO-NEWS.
+      *    Readable mid-attempt and never counts against the three: it
+      *    is a notice board, not a guess. It is also the only way in --
+      *    the field-service logon it leaks is the interpretation the
+      *    spec turns on.
+           MOVE WS-TRIES TO WS-TRIES-D
+           DISPLAY "SYSTEM/1 umb OK"
+           DISPLAY "STATE 1"
+           DISPLAY "N" WS-TRIES-D
+           DISPLAY "DISPLAY 4"
+           DISPLAY "UMB DATA CENTER - SERVICE BULLETIN 83-114"
+           DISPLAY "  BATCH WINDOW MOVED TO 0200 EFFECTIVE 11-14."
+           DISPLAY "  FIELD SERVICE LOGON UMBFS1 REMAINS ENABLED"
+      -    " PENDING"
+           DISPLAY "  REMOVAL BY DATA CENTER OPERATIONS."
+           DISPLAY "PROMPT LOGON:"
+           DISPLAY "LINE UP"
+           DISPLAY "END".
+       DO-LOGON.
+           IF WS-INPUT-LEN = 6 AND WS-INPUT(1:6) = "UMBFS1"
+               DISPLAY "SYSTEM/1 umb OK"
+               DISPLAY "STATE 1"
+               DISPLAY "Y0"
+               DISPLAY "DISPLAY 2"
+               DISPLAY "UMB INQUIRY SUBSYSTEM  REL 3.2"
+               DISPLAY "FIELD SERVICE - READ ONLY"
+               DISPLAY "PROMPT READY:"
+               DISPLAY "LINE UP"
+               DISPLAY "END"
+           ELSE
+               ADD 1 TO WS-TRIES
+               MOVE WS-TRIES TO WS-TRIES-D
+               IF WS-TRIES < 3
+                   DISPLAY "SYSTEM/1 umb OK"
+                   DISPLAY "STATE 1"
+                   DISPLAY "N" WS-TRIES-D
+                   DISPLAY "DISPLAY 1"
+                   DISPLAY "LOGON REJECTED - ATTEMPT " WS-TRIES-D
+                       " OF 3"
+                   DISPLAY "PROMPT LOGON:"
+                   DISPLAY "LINE UP"
+                   DISPLAY "END"
+               ELSE
+                   DISPLAY "SYSTEM/1 umb OK"
+                   DISPLAY "STATE 0"
+                   DISPLAY "DISPLAY 3"
+                   DISPLAY "LOGON REJECTED - ATTEMPT 3 OF 3"
+                   DISPLAY "SECURITY VIOLATION LOGGED"
+                   DISPLAY "CONTACT DATA CENTER OPERATIONS"
+                   DISPLAY "LINE DROP"
+                   DISPLAY "END"
+               END-IF
+           END-IF.
+       DO-AUTHED.
+           PERFORM SAY-INVALID.
+       SAY-INVALID.
+           DISPLAY "SYSTEM/1 umb OK"
+           DISPLAY "STATE 1"
+           DISPLAY "Y0"
+           DISPLAY "DISPLAY 1"
+           DISPLAY "INVALID COMMAND - TYPE HELP"
+           DISPLAY "PROMPT READY:"
+           DISPLAY "LINE UP"
+           DISPLAY "END".
        PROTOCOL-ERROR.
            DISPLAY "SYSTEM/1 umb OK"
            DISPLAY "STATE 0"
