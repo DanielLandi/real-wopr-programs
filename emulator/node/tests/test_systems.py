@@ -111,4 +111,5 @@ def test_the_real_pack_matches_the_documented_dialable_set():
     """Guards the plan's own premise. If this list changes, the phone book
     changes with it — deliberately, via Task 3's generator."""
     registry = load_systems(PACK / "systems")
-    assert set(registry) == {"airline", "pactel", "protovision", "reference", "school-mon"}
+    assert set(registry) == {"airline", "pactel", "protovision", "reference", "school-mon",
+                             "umb"}
