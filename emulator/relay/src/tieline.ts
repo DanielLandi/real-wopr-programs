@@ -21,8 +21,10 @@ export interface TielineOpts {
   localBridge: string;     // http://127.0.0.1:8000
   reconnect?: boolean;     // default true; tests pass false
   onAssigned?: (exchange: string, world: number, slot: string) => void;
-  // Fires for every OPEN, inbound (origin present when known) or outbound
-  // (the OPEN this host's own place() caused arriving back as a channel).
+  // Fires only for an INBOUND call: a call this host places is answered with
+  // PLACED, not an OPEN (Switchboard.placeCall sends OPEN only to the
+  // target), so this never fires for a call place() caused. origin is
+  // present when a machine called, absent when a visitor did.
   onOpen?: (chan: number, origin?: CallOrigin) => void;
 }
 
@@ -180,6 +182,13 @@ export function startTieline(opts: TielineOpts): {
         h.once("close", onClose);
       });
     },
+    // A startup gate, not a liveness signal: true once ASSIGNED has arrived
+    // for the current connect attempt, but it does NOT go false the instant
+    // the trunk drops — it only clears when the next connect() attempt
+    // begins (everAssigned is reset there). So after a disconnect this can
+    // read true for the whole backoff window, stale by up to 60s. Fine for
+    // "wait for registration before placing a first call"; wrong for "am I
+    // connected right now" — check the socket for that, as place() does.
     assigned: () => everAssigned,
   };
 }
