@@ -550,3 +550,84 @@ test("codec: OPEN carries an optional origin, in either shape", () => {
   assert.throws(() => decodeTrunkFrame(JSON.stringify(
     { t: "OPEN", chan: 1, query: "", origin: { slot: "NOPE" } })), /origin|slot/);
 });
+
+test("placeCall: bridges two exchanges and tells the callee who called", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort();
+  const placedA = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                                   joshua: "period", world: 1, slot: "WOPR" });
+  const placedB = sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                                   joshua: "period", world: 1, slot: "PANAM" });
+  assert.notEqual(typeof placedA, "string");
+  assert.notEqual(typeof placedB, "string");
+  const codeA = (placedA as { code: string }).code;
+
+  const r = sb.placeCall(codeA, { world: 1, slot: "PANAM" });
+  assert.equal(typeof r, "object", `expected a channel, got ${JSON.stringify(r)}`);
+  const { chan } = r as { chan: number };
+
+  // The callee sees an OPEN carrying the CALLER's world and slot.
+  const openB = b.sent.map((s) => JSON.parse(s)).find((f) => f.t === "OPEN");
+  assert.ok(openB, "the callee never received an OPEN");
+  assert.deepEqual(openB.origin, { world: 1, slot: "WOPR" });
+
+  // Frames cross both ways, through the ordinary relay path.
+  sb.handleHostFrame(codeA, { t: "FRAME", chan, data: "HELLO" });
+  const toB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "FRAME");
+  assert.deepEqual(toB.map((f) => f.data), ["HELLO"]);
+
+  const codeB = (placedB as { code: string }).code;
+  sb.handleHostFrame(codeB, { t: "FRAME", chan: openB.chan, data: "HI BACK" });
+  const toA = a.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "FRAME");
+  assert.deepEqual(toA.map((f) => f.data), ["HI BACK"]);
+});
+
+test("placeCall: a closed leg closes its peer", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "WOPR" });
+  sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                   joshua: "period", world: 1, slot: "PANAM" });
+  const codeA = (pa as { code: string }).code;
+  const { chan } = sb.placeCall(codeA, { world: 1, slot: "PANAM" }) as { chan: number };
+  const openB = b.sent.map((s) => JSON.parse(s)).find((f) => f.t === "OPEN");
+
+  sb.handleHostFrame(codeA, { t: "CLOSE", chan, reason: "caller hung up" });
+  const closeB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "CLOSE");
+  assert.equal(closeB.length, 1, "the callee's leg was left open");
+  assert.equal(closeB[0].chan, openB.chan);
+});
+
+test("placeCall: every refusal reason is reachable and distinct", () => {
+  const sb = new Switchboard({ reservedWorlds: [], maxChannels: 1 });
+  const a = fakePort(), b = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "WOPR" });
+  const codeA = (pa as { code: string }).code;
+
+  assert.equal(sb.placeCall(codeA, { world: 1, slot: "PANAM" }), "offline",
+    "no exchange in that slot");
+  assert.equal(sb.placeCall(codeA, { world: 1, slot: "WOPR" }), "self",
+    "an exchange must not call itself");
+  assert.equal(sb.placeCall(codeA, { seat: "nobody" }), "seat-gone",
+    "seats arrive in piece B; until then the handle cannot resolve");
+
+  sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                   joshua: "period", world: 1, slot: "PANAM" });
+  assert.equal(typeof sb.placeCall(codeA, { world: 1, slot: "PANAM" }), "object");
+  assert.equal(sb.placeCall(codeA, { world: 1, slot: "PANAM" }), "busy",
+    "maxChannels is 1, so the second call finds the callee full");
+});
+
+test("placeCall: an omitted world means the caller's own world", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 2, slot: "WOPR" });
+  sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                   joshua: "period", world: 2, slot: "PANAM" });
+  const codeA = (pa as { code: string }).code;
+  assert.equal(typeof sb.placeCall(codeA, { slot: "PANAM" }), "object",
+    "a slot with no world should resolve inside the caller's world");
+});

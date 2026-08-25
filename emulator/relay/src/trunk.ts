@@ -488,6 +488,61 @@ export class Switchboard {
     }));
   }
 
+  /** A ChannelPort that writes onto ANOTHER exchange's trunk socket. This is
+   *  what makes a machine call reuse the visitor relay path unchanged:
+   *  handleHostFrame already does `ex.channels.get(chan)?.send(data)`, so if
+   *  that port is one of these, the frame lands on the peer as a FRAME. */
+  private peerPort(peer: Exchange, peerChan: number): ChannelPort {
+    return {
+      send: (data: string) => {
+        peer.port.send(JSON.stringify({ t: "FRAME", chan: peerChan, data }));
+      },
+      close: (_code?: number, reason?: string) => {
+        if (!peer.channels.has(peerChan)) return;
+        peer.channels.delete(peerChan);
+        peer.port.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
+      },
+    };
+  }
+
+  /** Place a call from one exchange to a world-local slot. Returns the
+   *  caller's own channel number, or the reason it was refused. */
+  placeCall(fromCode: string, to: CallTarget): { chan: number } | RefusedReason {
+    const from = this.exchanges.get(fromCode);
+    if (!from) return "offline";
+    // Seat targets are piece B. The wire accepts them already so piece B does
+    // not have to change the protocol a second time; until it lands there is
+    // no seat registry, so no handle can resolve.
+    if ("seat" in to) return "seat-gone";
+
+    const world = to.world ?? from.world;
+    let target: Exchange | undefined;
+    for (const ex of this.exchanges.values()) {
+      if (ex.world === world && ex.slot === to.slot) { target = ex; break; }
+    }
+    if (!target) return "offline";
+    if (target.code === from.code) return "self";
+    if (target.channels.size >= this.maxChannels) return "busy";
+    if (from.channels.size >= this.maxChannels) return "busy";
+
+    const calleeChan = target.nextChan;
+    const callerChan = from.nextChan;
+    const encoded = JSON.stringify({
+      t: "OPEN", chan: calleeChan, query: "",
+      origin: { world: from.world, slot: from.slot },
+    });
+    // Same guard openChannel uses: never send a frame the peer's decoder
+    // would drop, which would leave this end's channel slot half-open.
+    if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) return "oversize";
+
+    target.nextChan += 1;
+    from.nextChan += 1;
+    target.channels.set(calleeChan, this.peerPort(from, callerChan));
+    from.channels.set(callerChan, this.peerPort(target, calleeChan));
+    target.port.send(encoded);
+    return { chan: callerChan };
+  }
+
   sweepDead(): string[] {
     const dropped: string[] = [];
     for (const ex of this.exchanges.values()) {
