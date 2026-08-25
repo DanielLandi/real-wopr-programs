@@ -631,3 +631,40 @@ test("placeCall: an omitted world means the caller's own world", () => {
   assert.equal(typeof sb.placeCall(codeA, { slot: "PANAM" }), "object",
     "a slot with no world should resolve inside the caller's world");
 });
+
+test("depth: a call that arrived with an origin may not place another", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort(), c = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "WOPR" });
+  const pb = sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "PANAM" });
+  sb.register(c, { t: "REGISTER", v: 1, name: "C EXCH", region: "SEATTLE US",
+                   joshua: "period", world: 1, slot: "PACTEL" });
+  const codeA = (pa as { code: string }).code, codeB = (pb as { code: string }).code;
+
+  sb.placeCall(codeA, { world: 1, slot: "PANAM" });
+  const openB = b.sent.map((s) => JSON.parse(s)).find((f) => f.t === "OPEN");
+
+  // B answering A may not relay onward: one hop, so a ring cannot form.
+  assert.equal(sb.placeCall(codeB, { world: 1, slot: "PACTEL" }, openB.chan), "depth");
+
+  // But B placing a call of its OWN — not on behalf of that channel — is fine.
+  assert.equal(typeof sb.placeCall(codeB, { world: 1, slot: "PACTEL" }), "object");
+});
+
+test("depth: a visitor-opened channel is not originated, so its callee may place", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "WOPR" });
+  sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                   joshua: "period", world: 1, slot: "PANAM" });
+  const codeA = (pa as { code: string }).code;
+  const visitor = fakePort();
+  const chan = sb.openChannel(codeA, visitor, "");
+  assert.equal(typeof chan, "number", "the visitor channel did not open");
+  // A person called A. A answering a person may call onward — that is the
+  // whole point: WOPR calls PANAM because a visitor asked it to.
+  assert.equal(typeof sb.placeCall(codeA, { world: 1, slot: "PANAM" }, chan as number), "object");
+});

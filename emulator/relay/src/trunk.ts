@@ -189,6 +189,10 @@ interface Exchange {
   world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
+  /** Channels on THIS exchange that arrived carrying an origin — i.e. a
+   *  machine called us. A call answering one of these may not place another:
+   *  that is the one-hop cap, and it is why a ring cannot form. */
+  originated: Set<number>;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void;
                          reject: (e: string) => void; timer: NodeJS.Timeout }>;
   nextRid: number;
@@ -362,7 +366,8 @@ export class Switchboard {
       code, name: f.name.toUpperCase(), region: f.region.toUpperCase(),
       joshua: f.joshua, operator: f.operator, port,
       world: placed.world, slot: placed.slot,
-      channels: new Map(), nextChan: 1, pending: new Map(), nextRid: 1, missedPongs: 0,
+      channels: new Map(), nextChan: 1, originated: new Set(),
+      pending: new Map(), nextRid: 1, missedPongs: 0,
     });
     return { code, world: placed.world, slot: placed.slot };
   }
@@ -398,6 +403,7 @@ export class Switchboard {
     const ex = this.exchanges.get(code);
     if (!ex || !ex.channels.has(chan)) return;
     ex.channels.delete(chan);
+    ex.originated.delete(chan);
     ex.port.send(JSON.stringify({ t: "CLOSE", chan }));
   }
 
@@ -413,6 +419,7 @@ export class Switchboard {
     // legs instead of corrupting the stream.
     if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) {
       ex.channels.delete(chan);
+      ex.originated.delete(chan);
       client.close(1009, "frame exceeds trunk capacity");
       ex.port.send(JSON.stringify({ t: "CLOSE", chan, reason: "oversize frame" }));
       return;
@@ -428,6 +435,7 @@ export class Switchboard {
       // Relay the host's stated reason (decode caps it) instead of discarding it.
       ex.channels.get(f.chan)?.close(1000, f.reason ?? "call ended");
       ex.channels.delete(f.chan);
+      ex.originated.delete(f.chan);
     }
     else if (f.t === "RESPONSE") {
       const p = ex.pending.get(f.rid);
@@ -505,11 +513,22 @@ export class Switchboard {
     };
   }
 
-  /** Place a call from one exchange to a world-local slot. Returns the
-   *  caller's own channel number, or the reason it was refused. */
-  placeCall(fromCode: string, to: CallTarget): { chan: number } | RefusedReason {
+  /** Place a call from one exchange to a world-local slot. `on` names the
+   *  channel this call answers, if any — the depth cap uses it to refuse a
+   *  relay. Returns the caller's own channel number, or the reason it was
+   *  refused. */
+  placeCall(fromCode: string, to: CallTarget, on?: number): { chan: number } | RefusedReason {
     const from = this.exchanges.get(fromCode);
     if (!from) return "offline";
+    // Honesty about the boundary: `on` is supplied by the host, and the hub
+    // cannot see causality. An honest host sets it and cannot relay; a
+    // dishonest one could omit it. This is loop prevention for a federation of
+    // cooperating hosts, not a defence against a hostile one — the channel cap
+    // (maxChannels) is what bounds a bad actor's blast radius.
+    // The one-hop cap. `on` names the channel this call answers; if that
+    // channel arrived with an origin, the caller is relaying, and relaying is
+    // what makes loops possible.
+    if (on !== undefined && from.originated.has(on)) return "depth";
     // Seat targets are piece B. The wire accepts them already so piece B does
     // not have to change the protocol a second time; until it lands there is
     // no seat registry, so no handle can resolve.
@@ -538,6 +557,7 @@ export class Switchboard {
     target.nextChan += 1;
     from.nextChan += 1;
     target.channels.set(calleeChan, this.peerPort(from, callerChan));
+    target.originated.add(calleeChan);
     from.channels.set(callerChan, this.peerPort(target, calleeChan));
     target.port.send(encoded);
     return { chan: callerChan };
