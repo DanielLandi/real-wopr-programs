@@ -372,7 +372,14 @@ test("two tielines share world 2 in different slots (world 1 is reserved); hangu
 // callee learns who called. onOpen's inbound-only asymmetry (spec §1) is
 // asserted directly: the placing side must never see its own placed call
 // echoed back as an inbound open.
-test("e2e: one exchange calls another's slot, and frames cross both ways", async () => {
+//
+// What this does NOT prove, because no host can: frames crossing both ways,
+// and a clean close. Those are pinned at HUB level only — tests/trunk.test.ts,
+// "placeCall: bridges two exchanges..." and "a closed leg closes its peer" —
+// because a tieline has no local endpoint for a machine call at either end,
+// so there is nothing here to send from or receive into. Issue #67; the
+// endpoints arrive with the piece that converses.
+test("e2e: one exchange places a call to another's slot, and the callee is told who called", async () => {
   const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
   const hubUrl = `ws://127.0.0.1:${server.port}/trunk`;
   const inboundA: Array<{ chan: number; origin?: unknown }> = [];

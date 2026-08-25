@@ -156,6 +156,30 @@ export function startTieline(opts: TielineOpts): {
   connect();
   return {
     stop: () => { stopped = true; hub?.close(); for (const c of channels.values()) c.local.close(); },
+    /** Place a call to another exchange's world-local slot, over the trunk.
+     *
+     *  `on` is the one-hop cap, and the hub can only believe what it says:
+     *  the switchboard cannot see causality. If you are placing this call
+     *  BECAUSE you are answering an inbound one, you MUST pass that inbound
+     *  channel — the `chan` your `onOpen` was given — as `on`. The hub then
+     *  refuses "depth" if that channel came from a machine, which is what
+     *  stops a ring forming. Omit `on` only for a call this host originated
+     *  by itself. Omitting it on a relayed call is not a shortcut; it is the
+     *  loop-prevention mechanism switched off.
+     *
+     *  KNOWN GAP — issue #67. The `chan` this resolves with is a HUB-SIDE
+     *  identifier and nothing more. This module has no local endpoint for a
+     *  machine call at EITHER end, so the placer can neither send on that
+     *  channel, read from it, nor hang it up: there is no `send(chan, data)`
+     *  and no `close(chan)` on this object, and the placer is not even told
+     *  when the callee closes (the FRAME and CLOSE handlers look the channel
+     *  up in a map that only an inbound OPEN ever fills, and a placer never
+     *  receives an OPEN — it receives PLACED). At the other end, an inbound
+     *  machine call is dialled with an empty query the local `/link` refuses.
+     *  So: a call is really placed, refusals and PLACED are real, and no data
+     *  crosses. Deciding what a machine call attaches to locally belongs with
+     *  the piece that actually converses (piece D); guessing it here is API
+     *  that piece would have to undo. */
     place(to: CallTarget, on?: number): Promise<{ chan: number } | RefusedReason> {
       // No socket, or one already on its way out: resolve rather than
       // reject, so a caller handles "could not place" in one branch instead

@@ -3,9 +3,11 @@
 // allowlisted REST subset down each trunk, and never inspects relayed payloads.
 
 /** Where a relayed call came from. A machine caller is a world-local slot; a
- *  person is an opaque seat handle (worlds phase 2 piece B). Its PRESENCE is
- *  how a bridge tells a machine call from a visitor call — that is the whole
- *  mechanism, not a hint. */
+ *  person is an opaque seat handle (worlds phase 2 piece B). Today its
+ *  PRESENCE is how a bridge tells a machine call from a visitor call — that is
+ *  the whole mechanism, not a hint. That stops being true the moment piece B
+ *  starts sending `origin: { seat }` on a visitor's OPEN: from then on the
+ *  SHAPE discriminates, not the presence. See `Exchange.originated`. */
 export type CallOrigin = { world: number; slot: string } | { seat: string };
 
 /** Who a PLACE is addressed to. The seat shape is accepted by the wire now so
@@ -198,9 +200,16 @@ interface Exchange {
   world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
-  /** Channels on THIS exchange that arrived carrying an origin — i.e. a
-   *  machine called us. A call answering one of these may not place another:
-   *  that is the one-hop cap, and it is why a ring cannot form. */
+  /** Channels on THIS exchange that arrived FROM A MACHINE — a call another
+   *  exchange placed to us. A call answering one of these may not place
+   *  another: that is the one-hop cap, and it is why a ring cannot form.
+   *
+   *  The predicate is "from a machine", NOT "arrived carrying an origin", and
+   *  the difference is a trap piece B walks straight into: once seats exist,
+   *  EVERY inbound OPEN carries an origin — a visitor's is `origin: { seat }`.
+   *  Testing for an origin's presence would then mark every visitor channel
+   *  originated and refuse the person -> machine -> machine chain the spec
+   *  exists to allow. placeCall is the only writer, and must stay so. */
   originated: Set<number>;
   pending: Map<number, { resolve: (r: { status: number; body: string }) => void;
                          reject: (e: string) => void; timer: NodeJS.Timeout }>;
@@ -574,6 +583,12 @@ export class Switchboard {
     if ("seat" in to) return "seat-gone";
 
     const world = to.world ?? from.world;
+    // REGISTERED exchanges only. World 1's SEEDED slots (the `localWorld`
+    // manifest) have no trunk port to send an OPEN down, so a PLACE to the
+    // flagship's own WOPR answers "offline" while `GET /trunk/directory`
+    // lists that same slot online — the directory synthesizes those entries,
+    // this cannot. Piece D meets it head-on rather than at the margins: the
+    // film's beat is the FLAGSHIP's Joshua placing the call. See issue #67.
     let target: Exchange | undefined;
     for (const ex of this.exchanges.values()) {
       if (ex.world === world && ex.slot === to.slot) { target = ex; break; }
@@ -586,6 +601,13 @@ export class Switchboard {
     const calleeChan = target.nextChan;
     const callerChan = from.nextChan;
     const encoded = JSON.stringify({
+      // Nothing resolves an empty query yet: the callee's tieline dials
+      // `${localComms}/link?` and server.ts refuses it outright for want of
+      // `surface` and `session`, closing the local socket 4400 before a byte
+      // moves. What session a machine call mints on the callee — whether it
+      // mints one at all — is the piece-that-converses question (piece D), so
+      // it is left open here rather than guessed into API D would have to
+      // undo. See issue #67.
       t: "OPEN", chan: calleeChan, query: "",
       origin: { world: from.world, slot: from.slot },
     });
