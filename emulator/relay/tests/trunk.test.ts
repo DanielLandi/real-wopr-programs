@@ -496,3 +496,57 @@ test("Switchboard: a host PONG frame resets the missed-pong counter", () => {
   assert.deepEqual(dropped, []);
   assert.equal(flatDir(sb, "https://hub").length, 1);
 });
+
+// ---- codec: PLACE / PLACED / REFUSED / OPEN origin -------------------------------
+
+test("codec: PLACE round-trips both target shapes", () => {
+  const slotCall = decodeTrunkFrame(JSON.stringify(
+    { t: "PLACE", call: 1, to: { world: 1, slot: "PANAM" } }));
+  assert.equal(slotCall.t, "PLACE");
+  // The seat shape is piece B's target, but the WIRE must accept it now so
+  // piece B is a switchboard change rather than a second protocol change.
+  const seatCall = decodeTrunkFrame(JSON.stringify(
+    { t: "PLACE", call: 2, to: { seat: "abc" } }));
+  assert.equal(seatCall.t, "PLACE");
+});
+
+test("codec: PLACE rejects a malformed target", () => {
+  const bad = [
+    { t: "PLACE", call: 1, to: { slot: "NOPE" } },            // off the roster
+    { t: "PLACE", call: 1, to: { world: 0, slot: "PANAM" } },  // worlds start at 1
+    { t: "PLACE", call: 1, to: {} },                           // neither shape
+    { t: "PLACE", call: 1 },                                   // no target
+    { t: "PLACE", to: { slot: "PANAM" } },                     // no call id
+    { t: "PLACE", call: "x", to: { slot: "PANAM" } },          // call not a number
+    { t: "PLACE", call: 1, on: "x", to: { slot: "PANAM" } },   // on not a number
+    { t: "PLACE", call: 1, to: { seat: 7 } },                  // seat not a string
+  ];
+  for (const f of bad) {
+    assert.throws(() => decodeTrunkFrame(JSON.stringify(f)), /PLACE|call|target|slot|world|seat|on/,
+      `accepted a malformed PLACE: ${JSON.stringify(f)}`);
+  }
+});
+
+test("codec: PLACED and REFUSED round-trip, and REFUSED's reason is closed", () => {
+  const placed = decodeTrunkFrame(JSON.stringify({ t: "PLACED", call: 3, chan: 9 }));
+  assert.equal(placed.t, "PLACED");
+  for (const reason of ["offline", "busy", "seat-gone", "depth", "oversize", "self"]) {
+    const r = decodeTrunkFrame(JSON.stringify({ t: "REFUSED", call: 3, reason }));
+    assert.equal(r.t, "REFUSED");
+  }
+  assert.throws(() => decodeTrunkFrame(JSON.stringify(
+    { t: "REFUSED", call: 3, reason: "because" })), /reason/);
+});
+
+test("codec: OPEN carries an optional origin, in either shape", () => {
+  const bare = decodeTrunkFrame(JSON.stringify({ t: "OPEN", chan: 1, query: "" }));
+  assert.equal(bare.t, "OPEN");
+  const fromMachine = decodeTrunkFrame(JSON.stringify(
+    { t: "OPEN", chan: 1, query: "", origin: { world: 1, slot: "WOPR" } }));
+  assert.equal(fromMachine.t, "OPEN");
+  const fromSeat = decodeTrunkFrame(JSON.stringify(
+    { t: "OPEN", chan: 1, query: "", origin: { seat: "abc" } }));
+  assert.equal(fromSeat.t, "OPEN");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify(
+    { t: "OPEN", chan: 1, query: "", origin: { slot: "NOPE" } })), /origin|slot/);
+});

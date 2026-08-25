@@ -2,11 +2,32 @@
 // a switchboard: it assigns exchange codes, relays call channels and an
 // allowlisted REST subset down each trunk, and never inspects relayed payloads.
 
+/** Where a relayed call came from. A machine caller is a world-local slot; a
+ *  person is an opaque seat handle (worlds phase 2 piece B). Its PRESENCE is
+ *  how a bridge tells a machine call from a visitor call — that is the whole
+ *  mechanism, not a hint. */
+export type CallOrigin = { world: number; slot: string } | { seat: string };
+
+/** Who a PLACE is addressed to. The seat shape is accepted by the wire now so
+ *  piece B is a switchboard change, not a second protocol change. */
+export type CallTarget = { world?: number; slot: string } | { seat: string };
+
+/** Closed set. Each reason is distinct because a host operator has to tell
+ *  "nobody is in that slot" from "they are full" from "you may not relay". */
+export type RefusedReason =
+  | "offline" | "busy" | "seat-gone" | "depth" | "oversize" | "self";
+
+const REFUSED_REASONS = new Set<string>(
+  ["offline", "busy", "seat-gone", "depth", "oversize", "self"]);
+
 export type TrunkFrame =
   | { t: "REGISTER"; v: 1; name: string; region: string; joshua: "claude" | "period";
       operator?: string; slot?: string; world?: number | "NEW"; key?: string }
   | { t: "ASSIGNED"; exchange: string; world: number; slot: string }
-  | { t: "OPEN"; chan: number; query: string }
+  | { t: "OPEN"; chan: number; query: string; origin?: CallOrigin }
+  | { t: "PLACE"; call: number; on?: number; to: CallTarget }
+  | { t: "PLACED"; call: number; chan: number }
+  | { t: "REFUSED"; call: number; reason: RefusedReason }
   | { t: "FRAME"; chan: number; data: string }
   | { t: "CLOSE"; chan: number; reason?: string }
   | { t: "REQUEST"; rid: number; method: string; path: string; body?: string }
@@ -30,7 +51,33 @@ export const NAMED_SLOTS = ["WOPR", "SCHOOL", "PANAM", "PROTOVISION", "PACTEL", 
 export const WILDCARD_SLOTS = ["OTHER-1", "OTHER-2"] as const;
 export const ALL_SLOTS: readonly string[] = [...NAMED_SLOTS, ...WILDCARD_SLOTS];
 
-const FRAME_TYPES = new Set(["REGISTER", "ASSIGNED", "OPEN", "FRAME", "CLOSE", "REQUEST", "RESPONSE", "PING", "PONG"]);
+const FRAME_TYPES = new Set(["REGISTER", "ASSIGNED", "OPEN", "FRAME", "CLOSE",
+                             "REQUEST", "RESPONSE", "PING", "PONG",
+                             "PLACE", "PLACED", "REFUSED"]);
+
+function checkTarget(to: unknown): void {
+  if (!to || typeof to !== "object") throw new Error("bad target");
+  const t = to as { world?: unknown; slot?: unknown; seat?: unknown };
+  if (typeof t.seat === "string") {
+    if (t.seat.length < 1 || t.seat.length > 64) throw new Error("bad seat");
+    return;
+  }
+  if (typeof t.slot !== "string" || !ALL_SLOTS.includes(t.slot)) throw new Error("bad slot");
+  if (t.world !== undefined && (!Number.isInteger(t.world) || (t.world as number) < 1)) {
+    throw new Error("bad world");
+  }
+}
+
+function checkOrigin(o: unknown): void {
+  if (!o || typeof o !== "object") throw new Error("bad origin");
+  const g = o as { world?: unknown; slot?: unknown; seat?: unknown };
+  if (typeof g.seat === "string") {
+    if (g.seat.length < 1 || g.seat.length > 64) throw new Error("bad origin seat");
+    return;
+  }
+  if (!Number.isInteger(g.world) || (g.world as number) < 1) throw new Error("bad origin world");
+  if (typeof g.slot !== "string" || !ALL_SLOTS.includes(g.slot)) throw new Error("bad origin slot");
+}
 
 export function decodeTrunkFrame(raw: string): TrunkFrame {
   if (Buffer.byteLength(raw) > TRUNK_MAX_FRAME_BYTES) throw new Error("oversize frame");
@@ -58,6 +105,19 @@ export function decodeTrunkFrame(raw: string): TrunkFrame {
   } else if (f.t === "OPEN") {
     if (!Number.isInteger(f.chan)) throw new Error("bad chan");
     if (typeof f.query !== "string") throw new Error("bad query");
+    if (f.origin !== undefined) checkOrigin(f.origin);
+  } else if (f.t === "PLACE") {
+    if (!Number.isInteger(f.call)) throw new Error("bad call");
+    if (f.on !== undefined && !Number.isInteger(f.on)) throw new Error("bad on");
+    checkTarget(f.to);
+  } else if (f.t === "PLACED") {
+    if (!Number.isInteger(f.call)) throw new Error("bad call");
+    if (!Number.isInteger(f.chan)) throw new Error("bad chan");
+  } else if (f.t === "REFUSED") {
+    if (!Number.isInteger(f.call)) throw new Error("bad call");
+    if (typeof f.reason !== "string" || !REFUSED_REASONS.has(f.reason)) {
+      throw new Error("bad reason");
+    }
   } else if (f.t === "FRAME") {
     if (!Number.isInteger(f.chan)) throw new Error("bad chan");
     if (typeof f.data !== "string") throw new Error("bad data");
