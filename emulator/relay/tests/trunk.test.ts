@@ -527,6 +527,23 @@ test("codec: PLACE rejects a malformed target", () => {
   }
 });
 
+test("codec: PLACE refuses a target that is both shapes at once, or a non-string seat", () => {
+  // These two shapes are the ones the codec and the switchboard used to read
+  // differently. checkTarget discriminated on `typeof t.seat === "string"`, so
+  // a non-string seat fell through and `{ seat: 7, slot: "PANAM" }` decoded as
+  // a healthy SLOT call — which placeCall, discriminating on `"seat" in to`,
+  // then refused "seat-gone". One frame, two meanings. Refused at the wire now.
+  assert.throws(() => decodeTrunkFrame(JSON.stringify(
+    { t: "PLACE", call: 1, to: { seat: 7, slot: "PANAM" } })), /seat/,
+    "a target carrying BOTH keys must not decode as a slot call");
+  assert.throws(() => decodeTrunkFrame(JSON.stringify(
+    { t: "PLACE", call: 1, to: { seat: "abc", slot: "PANAM" } })), /seat/,
+    "even with a well-formed seat, both keys at once is ambiguous");
+  // And a bad seat is named as a bad seat, not reported as a bad slot.
+  assert.throws(() => decodeTrunkFrame(JSON.stringify(
+    { t: "PLACE", call: 1, to: { seat: 7 } })), /seat/);
+});
+
 test("codec: PLACED and REFUSED round-trip, and REFUSED's reason is closed", () => {
   const placed = decodeTrunkFrame(JSON.stringify({ t: "PLACED", call: 3, chan: 9 }));
   assert.equal(placed.t, "PLACED");
@@ -561,25 +578,36 @@ test("placeCall: bridges two exchanges and tells the callee who called", () => {
   assert.notEqual(typeof placedA, "string");
   assert.notEqual(typeof placedB, "string");
   const codeA = (placedA as { code: string }).code;
+  const codeB = (placedB as { code: string }).code;
+
+  // Two visitor calls on B first, so the two legs of the bridged call carry
+  // DIFFERENT channel numbers (caller 1, callee 3). Without that the chan
+  // assertions below would both read 1 and pin nothing.
+  sb.openChannel(codeB, fakePort(), "");
+  sb.openChannel(codeB, fakePort(), "");
 
   const r = sb.placeCall(codeA, { world: 1, slot: "PANAM" });
   assert.equal(typeof r, "object", `expected a channel, got ${JSON.stringify(r)}`);
   const { chan } = r as { chan: number };
 
   // The callee sees an OPEN carrying the CALLER's world and slot.
-  const openB = b.sent.map((s) => JSON.parse(s)).find((f) => f.t === "OPEN");
+  const openB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "OPEN").pop();
   assert.ok(openB, "the callee never received an OPEN");
   assert.deepEqual(openB.origin, { world: 1, slot: "WOPR" });
+  assert.notEqual(openB.chan, chan, "the two legs must be numbered independently");
 
   // Frames cross both ways, through the ordinary relay path.
   sb.handleHostFrame(codeA, { t: "FRAME", chan, data: "HELLO" });
   const toB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "FRAME");
   assert.deepEqual(toB.map((f) => f.data), ["HELLO"]);
+  assert.deepEqual(toB.map((f) => f.chan), [openB.chan],
+    "a relayed frame must arrive on the CALLEE's channel number");
 
-  const codeB = (placedB as { code: string }).code;
   sb.handleHostFrame(codeB, { t: "FRAME", chan: openB.chan, data: "HI BACK" });
   const toA = a.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "FRAME");
   assert.deepEqual(toA.map((f) => f.data), ["HI BACK"]);
+  assert.deepEqual(toA.map((f) => f.chan), [chan],
+    "and come back on the CALLER's own channel number");
 });
 
 test("placeCall: a closed leg closes its peer", () => {
@@ -597,6 +625,64 @@ test("placeCall: a closed leg closes its peer", () => {
   const closeB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "CLOSE");
   assert.equal(closeB.length, 1, "the callee's leg was left open");
   assert.equal(closeB[0].chan, openB.chan);
+});
+
+test("placeCall: an oversize relayed frame hangs up the call, never the trunk", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = fakePort(), b = fakePort();
+  const pa = sb.register(a, { t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "WOPR" });
+  const pb = sb.register(b, { t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                              joshua: "period", world: 1, slot: "PANAM" });
+  const codeA = (pa as { code: string }).code, codeB = (pb as { code: string }).code;
+  // Nine visitor calls on B, so the bridged call is numbered 10 there and 1 on
+  // A. That one extra digit is the whole amplification: relaying renumbers
+  // `chan`, and nothing else about the frame changes.
+  for (let i = 0; i < 9; i++) {
+    assert.equal(typeof sb.openChannel(codeB, fakePort(), ""), "number");
+  }
+  const { chan } = sb.placeCall(codeA, { world: 1, slot: "PANAM" }) as { chan: number };
+  const openB = b.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "OPEN").pop();
+  assert.equal(chan, 1);
+  assert.equal(openB.chan, 10, "the callee's leg must be the two-digit one");
+
+  // A payload sized so the frame A sends is EXACTLY at the cap — a frame the
+  // wire genuinely accepts, proven by decoding it — and one byte over once
+  // re-wrapped for the callee's channel number.
+  const overhead = Buffer.byteLength(JSON.stringify({ t: "FRAME", chan, data: "" }));
+  const data = "A".repeat(TRUNK_MAX_FRAME_BYTES - overhead);
+  const inbound = JSON.stringify({ t: "FRAME", chan, data });
+  assert.equal(Buffer.byteLength(inbound), TRUNK_MAX_FRAME_BYTES);
+  assert.equal(decodeTrunkFrame(inbound).t, "FRAME", "the inbound frame is legal at the wire");
+  assert.ok(Buffer.byteLength(JSON.stringify({ t: "FRAME", chan: openB.chan, data }))
+              > TRUNK_MAX_FRAME_BYTES, "and illegal once renumbered for the peer");
+
+  const bBefore = b.sent.length;
+  sb.handleHostFrame(codeA, { t: "FRAME", chan, data });
+
+  const toB = b.sent.slice(bBefore).map((s) => JSON.parse(s));
+  assert.ok(!toB.some((f) => f.t === "FRAME"),
+    "the oversize frame must not reach the peer — its decoder would drop the whole trunk");
+  const closeB = toB.find((f) => f.t === "CLOSE");
+  assert.ok(closeB, "the callee must be told its leg is gone (no half-open slot)");
+  assert.equal(closeB.chan, openB.chan);
+  assert.ok(closeB.reason && closeB.reason.length > 0, "the close must say why");
+  const closeA = a.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "CLOSE");
+  assert.equal(closeA.length, 1, "the sender's own leg must be hung up too");
+  assert.equal(closeA[0].chan, chan);
+  assert.ok(closeA[0].reason && closeA[0].reason.length > 0);
+
+  // One call, not the trunk: both exchange sockets are still up...
+  assert.equal(a.closed, false, "the caller's trunk must survive");
+  assert.equal(b.closed, false, "the callee's trunk must survive");
+  // ...and both legs are freed, so a later frame on either is a silent no-op.
+  const aLen = a.sent.length, bLen = b.sent.length;
+  sb.handleHostFrame(codeA, { t: "FRAME", chan, data: "HELLO" });
+  sb.handleHostFrame(codeB, { t: "FRAME", chan: openB.chan, data: "HELLO" });
+  assert.equal(a.sent.length, aLen);
+  assert.equal(b.sent.length, bLen);
+  // B's nine visitor calls are untouched: this hung up one call.
+  assert.equal(b.sent.filter((s) => JSON.parse(s).t === "CLOSE").length, 1);
 });
 
 test("placeCall: every refusal reason is reachable and distinct", () => {

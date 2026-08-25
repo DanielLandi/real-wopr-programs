@@ -58,7 +58,16 @@ const FRAME_TYPES = new Set(["REGISTER", "ASSIGNED", "OPEN", "FRAME", "CLOSE",
 function checkTarget(to: unknown): void {
   if (!to || typeof to !== "object") throw new Error("bad target");
   const t = to as { world?: unknown; slot?: unknown; seat?: unknown };
-  if (typeof t.seat === "string") {
+  // A target is one shape or the other, never both, and the SEAT KEY is what
+  // picks the shape — because that is what the switchboard reads (`"seat" in
+  // to`, placeCall). Discriminating here on `typeof t.seat === "string"`
+  // instead let `{ seat: 7, slot: "PANAM" }` decode as a healthy slot call and
+  // then be refused "seat-gone": two readers disagreeing about what one frame
+  // means. Refuse the ambiguity at the wire, and name a bad seat as a bad seat
+  // rather than letting it fall through to the slot branch.
+  if ("seat" in t && "slot" in t) throw new Error("bad target: seat and slot");
+  if ("seat" in t) {
+    if (typeof t.seat !== "string") throw new Error("bad seat");
     if (t.seat.length < 1 || t.seat.length > 64) throw new Error("bad seat");
     return;
   }
@@ -499,17 +508,47 @@ export class Switchboard {
   /** A ChannelPort that writes onto ANOTHER exchange's trunk socket. This is
    *  what makes a machine call reuse the visitor relay path unchanged:
    *  handleHostFrame already does `ex.channels.get(chan)?.send(data)`, so if
-   *  that port is one of these, the frame lands on the peer as a FRAME. */
-  private peerPort(peer: Exchange, peerChan: number): ChannelPort {
+   *  that port is one of these, the frame lands on the peer as a FRAME.
+   *
+   *  `self`/`selfChan` name the leg this port is filed under. A port needs
+   *  that only to hang ITSELF up: every ordinary close path deletes the local
+   *  entry before calling in here, but the oversize guard below discovers the
+   *  problem mid-relay and has to end both legs on its own. */
+  private peerPort(peer: Exchange, peerChan: number,
+                   self: Exchange, selfChan: number): ChannelPort {
+    const hangUpPeer = (reason?: string) => {
+      if (!peer.channels.has(peerChan)) return;
+      peer.channels.delete(peerChan);
+      // Cleared WITH the channel, not left behind. When the caller hangs up
+      // first this is the only path that touches the callee's leg, so without
+      // this line a machine-originated chan number is retained for the life of
+      // the exchange. Inert (nextChan never reuses a number, so a stale entry
+      // can never wrongly match) but unbounded, on a hub that runs for weeks.
+      peer.originated.delete(peerChan);
+      peer.port.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
+    };
     return {
       send: (data: string) => {
-        peer.port.send(JSON.stringify({ t: "FRAME", chan: peerChan, data }));
+        const encoded = JSON.stringify({ t: "FRAME", chan: peerChan, data });
+        // The re-check clientFrame already does on the visitor leg, guarding a
+        // worse failure. An inbound host FRAME is capped at 8192 by decode, but
+        // relaying it renumbers `chan` for the peer, and the extra digits can
+        // push the re-wrapped frame past the cap. The peer's decoder would then
+        // throw and its server closes the socket 4400 — dropping the WHOLE
+        // TRUNK and every call on it, not this one call. So hang up this one
+        // call, explicitly, on both legs.
+        if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) {
+          if (self.channels.delete(selfChan)) {
+            self.originated.delete(selfChan);
+            self.port.send(JSON.stringify(
+              { t: "CLOSE", chan: selfChan, reason: "oversize frame" }));
+          }
+          hangUpPeer("oversize frame");
+          return;
+        }
+        peer.port.send(encoded);
       },
-      close: (_code?: number, reason?: string) => {
-        if (!peer.channels.has(peerChan)) return;
-        peer.channels.delete(peerChan);
-        peer.port.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
-      },
+      close: (_code?: number, reason?: string) => hangUpPeer(reason),
     };
   }
 
@@ -556,9 +595,9 @@ export class Switchboard {
 
     target.nextChan += 1;
     from.nextChan += 1;
-    target.channels.set(calleeChan, this.peerPort(from, callerChan));
+    target.channels.set(calleeChan, this.peerPort(from, callerChan, target, calleeChan));
     target.originated.add(calleeChan);
-    from.channels.set(callerChan, this.peerPort(target, calleeChan));
+    from.channels.set(callerChan, this.peerPort(target, calleeChan, from, callerChan));
     target.port.send(encoded);
     return { chan: callerChan };
   }
