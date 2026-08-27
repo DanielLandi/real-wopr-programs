@@ -337,6 +337,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         host.send(JSON.stringify({ t: "ASSIGNED", exchange: placed.code, world: placed.world, slot: placed.slot }));
         return;
       }
+      if (f.t === "PLACE") {
+        // A PLACE before REGISTER has no caller to bill it to. Ignore it
+        // rather than closing: the host is mid-handshake, not hostile.
+        if (code === null) return;
+        const r = switchboard.placeCall(code, f.to, f.on);
+        host.send(JSON.stringify(typeof r === "string"
+          ? { t: "REFUSED", call: f.call, reason: r }
+          : { t: "PLACED", call: f.call, chan: r.chan }));
+        return;
+      }
       if (code !== null) switchboard.handleHostFrame(code, f);
     });
     const drop = () => {

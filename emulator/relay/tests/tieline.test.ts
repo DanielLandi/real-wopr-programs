@@ -524,3 +524,70 @@ test("tieline CLI: HOME is refused before dialling, and is not offered as a choi
   // The list an operator is shown must not name the seat they cannot have.
   assert.equal(/\bHOME\b/.test(offered), false, `HOME is still offered: ${offered}`);
 });
+
+// ---- place() and inbound origin (Task 5) -----------------------------------
+
+test("tieline: place() resolves with the hub's PLACED, and rejects nothing", async () => {
+  const hub = new WebSocketServer({ port: 0 });
+  hub.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const f = JSON.parse(data.toString());
+      if (f.t === "REGISTER") {
+        ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 1, slot: "WOPR" }));
+      } else if (f.t === "PLACE" && f.to.slot === "PANAM") {
+        ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 5 }));
+      } else if (f.t === "PLACE") {
+        ws.send(JSON.stringify({ t: "REFUSED", call: f.call, reason: "offline" }));
+      }
+    });
+  });
+  await new Promise<void>((r) => hub.once("listening", () => r()));
+  const port = (hub.address() as { port: number }).port;
+
+  const seenOrigins: unknown[] = [];
+  const tie = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "LIVE EXCH", region: "SEATTLE US",
+    joshua: "period", localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    onOpen: (_chan: number, origin?: unknown) => { seenOrigins.push(origin); },
+  });
+  try {
+    const ok = await tie.place({ world: 1, slot: "PANAM" });
+    assert.deepEqual(ok, { chan: 5 });
+    const no = await tie.place({ world: 1, slot: "PACTEL" });
+    assert.equal(no, "offline");
+  } finally {
+    tie.stop();
+    await new Promise<void>((r) => hub.close(() => r()));
+  }
+});
+
+test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
+  const hub = new WebSocketServer({ port: 0 });
+  hub.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      if (JSON.parse(data.toString()).t !== "REGISTER") return;
+      ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 1, slot: "WOPR" }));
+      ws.send(JSON.stringify({ t: "OPEN", chan: 3, query: "",
+                               origin: { world: 1, slot: "PANAM" } }));
+    });
+  });
+  await new Promise<void>((r) => hub.once("listening", () => r()));
+  const port = (hub.address() as { port: number }).port;
+
+  const seen: unknown[] = [];
+  const tie = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "LIVE EXCH", region: "SEATTLE US",
+    joshua: "period", localComms: "ws://127.0.0.1:9", localBridge: "http://127.0.0.1:9",
+    onOpen: (_chan: number, origin?: unknown) => { seen.push(origin); },
+  });
+  try {
+    const deadline = Date.now() + 3000;
+    while (seen.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.deepEqual(seen[0], { world: 1, slot: "PANAM" });
+  } finally {
+    tie.stop();
+    await new Promise<void>((r) => hub.close(() => r()));
+  }
+});

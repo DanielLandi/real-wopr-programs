@@ -38,6 +38,12 @@ function nextClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
   });
 }
 
+async function waitFor(cond: () => boolean, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!cond() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(cond(), "condition never became true");
+}
+
 function httpJson(
   method: string,
   url: string,
@@ -749,5 +755,56 @@ test("trunk hub: an escape-amplified visitor frame closes the call explicitly, h
     host.close();
   } finally {
     await server.close();
+  }
+});
+
+test("trunk leg: PLACE gets PLACED, and a bad target gets REFUSED", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const a = new WebSocket(`ws://127.0.0.1:${server.port}/trunk`);
+  const b = new WebSocket(`ws://127.0.0.1:${server.port}/trunk`);
+  const seenA: any[] = [], seenB: any[] = [];
+  a.on("message", (d) => seenA.push(JSON.parse(d.toString())));
+  b.on("message", (d) => seenB.push(JSON.parse(d.toString())));
+  try {
+    await Promise.all([
+      new Promise((r) => a.once("open", r)), new Promise((r) => b.once("open", r)),
+    ]);
+    a.send(JSON.stringify({ t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US",
+                            joshua: "period", world: 1, slot: "WOPR" }));
+    b.send(JSON.stringify({ t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US",
+                            joshua: "period", world: 1, slot: "PANAM" }));
+    await waitFor(() => seenA.some((f) => f.t === "ASSIGNED") &&
+                        seenB.some((f) => f.t === "ASSIGNED"));
+
+    a.send(JSON.stringify({ t: "PLACE", call: 11, to: { world: 1, slot: "PANAM" } }));
+    await waitFor(() => seenA.some((f) => f.t === "PLACED"));
+    const placed = seenA.find((f) => f.t === "PLACED");
+    assert.equal(placed.call, 11, "the reply must carry the caller's own call id");
+    await waitFor(() => seenB.some((f) => f.t === "OPEN"));
+    assert.deepEqual(seenB.find((f) => f.t === "OPEN").origin, { world: 1, slot: "WOPR" });
+
+    a.send(JSON.stringify({ t: "PLACE", call: 12, to: { world: 9, slot: "PACTEL" } }));
+    await waitFor(() => seenA.some((f) => f.t === "REFUSED"));
+    const refused = seenA.find((f) => f.t === "REFUSED");
+    assert.equal(refused.call, 12);
+    assert.equal(refused.reason, "offline");
+  } finally {
+    a.close(); b.close(); await server.close();
+  }
+});
+
+test("trunk leg: a PLACE before REGISTER is ignored, not a crash", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const a = new WebSocket(`ws://127.0.0.1:${server.port}/trunk`);
+  const seen: any[] = [];
+  a.on("message", (d) => seen.push(JSON.parse(d.toString())));
+  try {
+    await new Promise((r) => a.once("open", r));
+    a.send(JSON.stringify({ t: "PLACE", call: 1, to: { world: 1, slot: "PANAM" } }));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(seen.length, 0, "an unregistered socket must get no reply");
+    assert.equal(a.readyState, WebSocket.OPEN, "and must not be closed for trying");
+  } finally {
+    a.close(); await server.close();
   }
 });

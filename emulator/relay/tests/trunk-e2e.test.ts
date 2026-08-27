@@ -366,3 +366,53 @@ test("two tielines share world 2 in different slots (world 1 is reserved); hangu
     await bridge.close();
   }
 });
+
+// One machine-originated call, end to end, over real sockets: two real host
+// exchanges register with a real hub, one calls the other's slot, and the
+// callee learns who called. onOpen's inbound-only asymmetry (spec §1) is
+// asserted directly: the placing side must never see its own placed call
+// echoed back as an inbound open.
+//
+// What this does NOT prove, because no host can: frames crossing both ways,
+// and a clean close. Those are pinned at HUB level only — tests/trunk.test.ts,
+// "placeCall: bridges two exchanges..." and "a closed leg closes its peer" —
+// because a tieline has no local endpoint for a machine call at either end,
+// so there is nothing here to send from or receive into. Issue #67; the
+// endpoints arrive with the piece that converses.
+test("e2e: one exchange places a call to another's slot, and the callee is told who called", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const hubUrl = `ws://127.0.0.1:${server.port}/trunk`;
+  const inboundA: Array<{ chan: number; origin?: unknown }> = [];
+  const inboundB: Array<{ chan: number; origin?: unknown }> = [];
+
+  const a = startTieline({ hubUrl, name: "A EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "WOPR", localComms: "ws://127.0.0.1:9",
+    localBridge: "http://127.0.0.1:9",
+    onOpen: (chan: number, origin?: unknown) => { inboundA.push({ chan, origin }); } });
+  const b = startTieline({ hubUrl, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "PANAM", localComms: "ws://127.0.0.1:9",
+    localBridge: "http://127.0.0.1:9",
+    onOpen: (chan: number, origin?: unknown) => { inboundB.push({ chan, origin }); } });
+
+  try {
+    // Both must be ASSIGNED before either can place.
+    const deadline = Date.now() + 5000;
+    while ((!a.assigned() || !b.assigned()) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(a.assigned() && b.assigned(), "both tielines must register first");
+
+    const placed = await a.place({ world: 1, slot: "PANAM" });
+    assert.equal(typeof placed, "object", `A could not call B: ${JSON.stringify(placed)}`);
+
+    while (inboundB.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(inboundB.length, 1, "B never saw the inbound call");
+    assert.deepEqual(inboundB[0].origin, { world: 1, slot: "WOPR" },
+      "B must be told which slot called it");
+    assert.equal(inboundA.length, 0, "A placed the call; it must not also receive one");
+  } finally {
+    a.stop(); b.stop(); await server.close();
+  }
+});
