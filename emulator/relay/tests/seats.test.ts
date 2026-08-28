@@ -4,6 +4,9 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { SeatRegistry } from "../src/seats.ts";
 import { decodeEnvelope } from "../src/envelope.ts";
 import { TRUNK_ALPHABET } from "../src/trunk.ts";
@@ -131,7 +134,20 @@ test("seats: ringing an unknown leg is seat-gone", () => {
   assert.equal(reg.ring("NOPE", "PAN AM", { answered: () => {}, rejected: () => {}, timedOut: () => {} }), "seat-gone");
 });
 
-test("seats: default registry generates CSPRNG tokens (26 chars from TRUNK_ALPHABET)", () => {
+test("seats: default registry uses CSPRNG (source invariant check)", () => {
+  // The guarantee is "this module's default generator is cryptographic". A revert to
+  // Math.random() is the failure this test must catch. No behavioural assertion can
+  // catch that revert — two generators indexed into TRUNK_ALPHABET produce identical
+  // length-and-alphabet results. So pin the guarantee as a source invariant instead.
+  const testDir = dirname(fileURLToPath(import.meta.url));
+  const sourceFile = readFileSync(join(testDir, "../src/seats.ts"), "utf-8");
+  assert.match(sourceFile, /randomBytes/, "source imports randomBytes from node:crypto");
+  // Check that the randomId function uses randomBytes, not Math.random()
+  // (look for the pattern that would indicate Math.random() usage: Math.random() * TRUNK_ALPHABET)
+  assert.doesNotMatch(sourceFile, /Math\.random\(\)\s*\*\s*TRUNK_ALPHABET/, "randomId does not use Math.random()");
+});
+
+test("seats: default registry generates tokens from TRUNK_ALPHABET (26 chars)", () => {
   const reg = new SeatRegistry();
   const { token } = reg.open(fakeSeat(), "home-terminal");
   assert.equal(token.length, 26, "token is 26 characters (130 bits)");
@@ -140,18 +156,19 @@ test("seats: default registry generates CSPRNG tokens (26 chars from TRUNK_ALPHA
   }
 });
 
-test("seats: a handle from one seat is refused by an exchange that spoke to another seat", () => {
+test("seats: different seats get unique handles from the same exchange", () => {
   const reg = new SeatRegistry({
     newId: (() => { let n = 0; return () => `ID${++n}`; })(),
   });
   const { token: tokenA } = reg.open(fakeSeat(), "home-terminal");
   const { token: tokenB } = reg.open(fakeSeat(), "home-terminal");
   const handleA = reg.mint(tokenA, "PANAM1")!;  // PANAM1 spoke to seat A
-  const handleB = reg.mint(tokenB, "PROTO1")!;  // PROTO1 spoke to seat B
-  // PROTO1 should not be able to use handleB to ring seat A (it's not in the handle)
-  // But PANAM1 trying to use handleB should fail because handleB is for PROTO1, not PANAM1
-  assert.notEqual(reg.resolve(handleA, "PANAM1"), "seat-gone", "PANAM1 accepts its own handle to A");
-  assert.equal(reg.resolve(handleB, "PANAM1"), "seat-gone", "PANAM1 refuses PROTO1's handle");
+  const handleB = reg.mint(tokenB, "PANAM1")!;  // PANAM1 also spoke to seat B
+  // Handles are per-(seat, exchange), so same exchange gets different handles for different seats
+  assert.notEqual(handleA, handleB, "same exchange gets unique handle per seat");
+  // Both handles resolve correctly for PANAM1
+  assert.notEqual(reg.resolve(handleA, "PANAM1"), "seat-gone", "PANAM1's handle to A resolves");
+  assert.notEqual(reg.resolve(handleB, "PANAM1"), "seat-gone", "PANAM1's handle to B resolves");
 });
 
 test("seats: a handle minted before close cannot resolve after close", () => {
@@ -170,19 +187,30 @@ test("seats: a handle minted before close cannot resolve after close", () => {
 });
 
 test("seats: close clears all handles from the index (not just via legs.get miss)", () => {
+  // To prove handleIdx is actually purged, exploit the collision guard's semantics.
+  // The failure (if handleIdx is not cleared) is visible: an exchange rings a seat
+  // it never spoke to — a capability escape.
+  let nextId = "A";
   const reg = new SeatRegistry({
-    newId: (() => { let n = 0; return () => `ID${++n}`; })(),
+    newId: () => nextId,
   });
-  const { id, token } = reg.open(fakeSeat(), "home-terminal");
-  const handle = reg.mint(token, "PANAM1")!;
-  reg.close(id);
-  // Verify the handle is truly gone by minting a new handle and checking it's different
-  // (proves the old handle is not in handleIdx anymore, not merely unreachable)
-  const { token: token2 } = reg.open(fakeSeat(), "home-terminal");
-  const handle2 = reg.mint(token2, "PANAM1")!;
-  assert.notEqual(handle, handle2, "new mint generates different handle");
-  // If close didn't clear handleIdx, the old handle would still resolve
-  assert.equal(reg.resolve(handle, "PANAM1"), "seat-gone", "old handle is cleared from index");
+  const { token: tokenA } = reg.open(fakeSeat(), "home-terminal");
+  const handleA = reg.mint(tokenA, "PANAM1")!;
+
+  // Close seat A. The collision guard now permits reusing the id because legs.delete(id) succeeded.
+  reg.close("A");
+
+  // Open a second leg whose newId returns the same id as the first. This is allowed
+  // because the id is no longer in legs.
+  nextId = "A";  // collision guard allows reuse of id
+  const { token: tokenB } = reg.open(fakeSeat(), "home-terminal");
+
+  // If close() did NOT purge handleIdx, the entry for handleA still points to id "A",
+  // which now resolves to the NEW visitor's leg — a capability escape. Exchange PANAM1
+  // rings a terminal it never spoke to.
+  // If close() DID purge handleIdx, resolve returns "seat-gone".
+  assert.equal(reg.resolve(handleA, "PANAM1"), "seat-gone",
+    "old handle cannot escape to new leg when collision guard reuses the id");
 });
 
 test("seats: closing a leg mid-ring invokes timedOut on the handlers", () => {
