@@ -8,13 +8,19 @@
 // A HANDLE is a capability, not an identifier. It is minted per (seat,
 // exchange) on the first call that seat places to that exchange, disclosed to
 // that exchange alone, and useless anywhere else — PAN AM and PROTOVISION hold
-// different handles for the same seat and neither can use the other's.
+// different handles for the same seat and neither can use the other's. Handles
+// travel to machines on the wire (as origin: { seat } in piece B), so handles
+// must be cryptographically unpredictable — a hostile federated peer that sees
+// a stream of handles must not be able to predict other seats' tokens and
+// handles and ring terminals it has never spoken to. Both tokens and handles
+// are generated from a CSPRNG and must never use Math.random().
 //
 // A TOKEN is not a handle. It is the visitor's own name for their own leg,
 // travels only to the terminal that owns it, resolves only inside this hub, and
 // is never disclosed to any machine. The hub needs one because a terminal mints
 // a fresh bridge session per dial, so nothing else correlates a dial to a seat.
 
+import { randomBytes } from "node:crypto";
 import { encodeEnvelope } from "./envelope.ts";
 import { TRUNK_ALPHABET } from "./trunk.ts";
 
@@ -30,8 +36,14 @@ interface Leg extends SeatLeg {
 }
 
 function randomId(): string {
+  const bytes = randomBytes(26);
   let s = "";
-  while (s.length < 22) s += TRUNK_ALPHABET[Math.floor(Math.random() * TRUNK_ALPHABET.length)];
+  for (let i = 0; i < 26; i++) {
+    // TRUNK_ALPHABET has 32 symbols; 256 % 32 === 0, so byte % TRUNK_ALPHABET.length
+    // is uniformly distributed with no bias. If the alphabet length ever changes,
+    // this must become rejection sampling or uniform bit slicing.
+    s += TRUNK_ALPHABET[bytes[i]! % TRUNK_ALPHABET.length];
+  }
   return s;
 }
 
