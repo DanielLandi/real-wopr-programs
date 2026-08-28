@@ -80,7 +80,18 @@ export class SeatRegistry {
     if (this.byTokenIdx.has(token)) throw new Error(`seat token collision: ${token}`);
     this.legs.set(id, { id, surface, port, onCall: false, token, handles: new Map() });
     this.byTokenIdx.set(token, id);
-    this.envelope(id, `SEAT ${token}`);
+    try {
+      this.envelope(id, `SEAT ${token}`);
+    } catch (err) {
+      // port.send() threw (a hostile or broken SeatPort). The leg and its
+      // token index entry were already registered above — leaving them in
+      // place would strand a leg whose id never reached the caller, with no
+      // way for anyone to close() it: a permanently held token and cap slot.
+      // Unregister before propagating.
+      this.legs.delete(id);
+      this.byTokenIdx.delete(token);
+      throw err;
+    }
     return { id, token };
   }
 

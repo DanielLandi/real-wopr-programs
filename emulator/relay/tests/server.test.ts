@@ -10,6 +10,7 @@ import { startServer, seededPort } from "../src/server.ts";
 import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 import type { TrunkFrame } from "../src/trunk.ts";
+import { SeatRegistry } from "../src/seats.ts";
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -24,6 +25,35 @@ function nextMessage(ws: WebSocket): Promise<string> {
     ws.once("message", (data) => resolve(data.toString()));
     ws.once("error", reject);
   });
+}
+
+// Sends the seat-leg control handshake: `SEAT?` is answered with `SEAT
+// <token>` only in reply, never on connect (see server.ts's seatWss comment)
+// — so every test that needs a token asks for one explicitly.
+function askSeat(ws: WebSocket): void {
+  ws.send(encodeEnvelope({
+    v: 1, session: "seat-client", seq: 0, kind: "control", link: "seat",
+    payload: "SEAT?", eom: true,
+  }));
+}
+
+function seatControl(ws: WebSocket, payload: string): void {
+  ws.send(encodeEnvelope({
+    v: 1, session: "seat-client", seq: 0, kind: "control", link: "seat",
+    payload, eom: true,
+  }));
+}
+
+/** Poll `check` until it is true or `timeoutMs` elapses. Used to observe an
+ *  effect of an already-sent WS frame without racing the server's processing
+ *  of it (no ack exists for ANSWER/REJECT — the caller learns of the effect
+ *  through a side channel, e.g. a RingHandlers callback). */
+async function waitFor(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("waitFor: timed out");
+    await new Promise((r) => setTimeout(r, 10));
+  }
 }
 
 function httpJson(method: string, url: string, body?: string,
@@ -642,13 +672,31 @@ test("trunk/place: an oversize body is rejected with 413, not buffered without b
 
 // ---- /seat: the endpoint a terminal holds for the life of its session ----
 
-test("seat: a leg is told its token on connect", async () => {
+test("seat: a leg is told its token in reply to SEAT?", async () => {
   const server = await startServer({ port: 0 });
   try {
     const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(ws);
     const e = decodeEnvelope(await nextMessage(ws));
     assert.equal(e.kind, "control");
     assert.match(e.payload, /^SEAT \S+$/);
+    ws.close();
+  } finally { await server.close(); }
+});
+
+test("seat: a repeated SEAT? is idempotent — same token, no second leg", async () => {
+  const registry = new SeatRegistry();
+  const server = await startServer({ port: 0, seats: { registry } });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(ws);
+    const first = decodeEnvelope(await nextMessage(ws)).payload;
+    assert.equal(registry.size, 1);
+
+    askSeat(ws);
+    const second = decodeEnvelope(await nextMessage(ws)).payload;
+    assert.equal(second, first, "a repeated SEAT? must return the SAME token");
+    assert.equal(registry.size, 1, "a repeated SEAT? must not mint a second leg");
     ws.close();
   } finally { await server.close(); }
 });
@@ -659,6 +707,92 @@ test("seat: an unknown surface is refused", async () => {
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/seat?surface=nope`);
     const code = await new Promise<number>((resolve) => ws.once("close", resolve));
     assert.equal(code, 4400);
+  } finally { await server.close(); }
+});
+
+test("seat: the cap refuses once every slot is taken", async () => {
+  const server = await startServer({ port: 0, seats: { maxSeats: 1 } });
+  try {
+    const first = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(first);
+    const e = decodeEnvelope(await nextMessage(first));
+    assert.match(e.payload, /^SEAT \S+$/, "the first seat must be granted");
+
+    const second = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(second);
+    const code = await new Promise<number>((resolve) => second.once("close", resolve));
+    assert.equal(code, 4429);
+    first.close();
+  } finally { await server.close(); }
+});
+
+test("seat: ANSWER reaches the registry", async () => {
+  const registry = new SeatRegistry();
+  const server = await startServer({ port: 0, seats: { registry } });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(ws);
+    const token = decodeEnvelope(await nextMessage(ws)).payload.split(" ")[1]!;
+    const leg = registry.byToken(token);
+    assert.ok(leg, "the leg must be registered under its token");
+
+    const events: string[] = [];
+    const result = registry.ring(leg!.id, "PAN AM", {
+      answered: () => events.push("answered"),
+      rejected: () => events.push("rejected"),
+      timedOut: () => events.push("timedOut"),
+    });
+    assert.equal(result, "ringing");
+    const ring = decodeEnvelope(await nextMessage(ws));
+    assert.equal(ring.payload, "RING PAN AM");
+
+    seatControl(ws, "ANSWER");
+    await waitFor(() => events.length > 0);
+    assert.deepEqual(events, ["answered"]);
+    ws.close();
+  } finally { await server.close(); }
+});
+
+test("seat: REJECT reaches the registry", async () => {
+  const registry = new SeatRegistry();
+  const server = await startServer({ port: 0, seats: { registry } });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(ws);
+    const token = decodeEnvelope(await nextMessage(ws)).payload.split(" ")[1]!;
+    const leg = registry.byToken(token);
+    assert.ok(leg, "the leg must be registered under its token");
+
+    const events: string[] = [];
+    const result = registry.ring(leg!.id, "PAN AM", {
+      answered: () => events.push("answered"),
+      rejected: () => events.push("rejected"),
+      timedOut: () => events.push("timedOut"),
+    });
+    assert.equal(result, "ringing");
+    await nextMessage(ws); // RING PAN AM
+
+    seatControl(ws, "REJECT");
+    await waitFor(() => events.length > 0);
+    assert.deepEqual(events, ["rejected"]);
+    ws.close();
+  } finally { await server.close(); }
+});
+
+test("seat: closing the socket tears down the leg", async () => {
+  const registry = new SeatRegistry();
+  const server = await startServer({ port: 0, seats: { registry } });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(ws);
+    const token = decodeEnvelope(await nextMessage(ws)).payload.split(" ")[1]!;
+    assert.equal(registry.size, 1);
+    assert.ok(registry.byToken(token), "the leg exists while the socket is open");
+
+    ws.close();
+    await waitFor(() => registry.size === 0);
+    assert.equal(registry.byToken(token), undefined,
+      "closing the socket must drop the leg and its token");
   } finally { await server.close(); }
 });
 
@@ -673,6 +807,7 @@ test("seat: the token never crosses the trunk", async () => {
     assert.equal(assigned.t, "ASSIGNED");
 
     const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
     const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
 
     const visitor = new WebSocket(

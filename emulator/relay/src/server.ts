@@ -43,6 +43,13 @@ export interface ServerOpts {
     ringTimeoutMs?: number;
     newId?: () => string;
     maxSeats?: number;
+    /** Test seam: use this exact registry instead of constructing one from
+     *  the options above. There is no public way (yet — that lands with the
+     *  Switchboard-side SeatBridge in a later task) to ring a seat end to end,
+     *  so a test that needs to observe `ring()`'s effect on `seatWss`'s
+     *  ANSWER/REJECT wiring, or on the leg's lifecycle, has to hold the same
+     *  registry instance the server uses internally. */
+    registry?: SeatRegistry;
   };
 }
 
@@ -226,7 +233,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // into the Switchboard's own options, so `seats` must exist before that
   // construction or the reference is a temporal-dead-zone ReferenceError at
   // startup.
-  const seats = new SeatRegistry({
+  const seats = opts.seats?.registry ?? new SeatRegistry({
     ringTimeoutMs: opts.seats?.ringTimeoutMs,
     newId: opts.seats?.newId,
   });
@@ -491,58 +498,81 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // the life of the session: while this socket is open the seat exists and can
   // be rung, and when it closes the seat is gone. Calls still run over /link
   // and /x/<CODE>/link — this leg carries rings, not conversations.
+  //
+  // The token is minted only in reply to an explicit client `SEAT?`, never on
+  // connect. Sending it unprompted races the client's own connection setup:
+  // over a fast (or same-process) link, the HTTP upgrade response and an
+  // immediate follow-on frame can land in one read on the client, and a client
+  // that attaches its `message` listener only after `open` resolves can lose
+  // the frame before it ever gets a chance to listen. Making the reply causal
+  // — it only exists once the client has asked for it — means the client
+  // controls the ordering: by the time it sends `SEAT?` it has necessarily
+  // already finished handling `open`, so its listener is already in place.
+  // `SEAT?` is idempotent: a repeat (the client's recovery path for a reply it
+  // never saw) gets the SAME token again rather than minting a second leg.
   seatWss.on("connection", (client, req) => {
     const url = new URL(req.url ?? "/seat", "http://comms.invalid");
     const surface = url.searchParams.get("surface") ?? "";
     // The surface decides the profile an answered ring is paced at, so a seat
     // without a resolvable one could be rung but never heard.
     if (!resolveLink(config, surface)) { client.close(4400, "unknown surface"); return; }
-    if (seats.size >= (opts.seats?.maxSeats ?? 512)) { client.close(4429, "too many seats"); return; }
 
     let id: string | undefined;
+    let token: string | undefined;
     let seatPing: ReturnType<typeof setInterval> | undefined;
     const drop = () => { if (seatPing) clearInterval(seatPing); if (id !== undefined) seats.close(id); };
     client.on("close", drop);
     client.on("error", drop);
+
     client.on("message", (data) => {
-      if (id === undefined) return;
       let e: Envelope;
       try { e = decodeEnvelope(data.toString()); } catch { return; }
       if (e.kind !== "control") return;
+
+      if (e.payload === "SEAT?") {
+        if (id !== undefined) {
+          // Already minted for this socket — resend the same token rather
+          // than opening a second leg. `token` is set in the same assignment
+          // as `id` below, so it is always defined here.
+          client.send(encodeEnvelope({
+            v: 1, session: id, seq: 0, kind: "control", link: "seat",
+            payload: `SEAT ${token}`, eom: true,
+          }));
+          return;
+        }
+        // Checked immediately before the mint it guards, in the same
+        // synchronous handler: a check made any earlier (e.g. at connect,
+        // before a deferred mint) would let every connection in the same
+        // burst see the same stale `size` and all pass before any of them
+        // actually registers.
+        if (seats.size >= (opts.seats?.maxSeats ?? 512)) {
+          client.close(4429, "too many seats");
+          return;
+        }
+        try {
+          ({ id, token } = seats.open(
+            { send: (d) => { if (client.readyState === WebSocket.OPEN) client.send(d); },
+              close: (code, reason) => client.close(code, reason) },
+            surface));
+        } catch (err) {
+          // seats.ts treats an id/token collision as a capability escape, not
+          // an ordinary failure — it must not vanish into a bare close. Log
+          // enough to identify which case this was.
+          console.error(`seat: open() failed for surface "${surface}":`,
+                        err instanceof Error ? err.message : err);
+          client.close(1011, "seat registry error");
+          return;
+        }
+        seatPing = setInterval(() => {
+          if (client.readyState === WebSocket.OPEN) client.ping();
+        }, opts.trunk?.relayPingMs ?? 30_000);
+        return;
+      }
+
+      if (id === undefined) return; // no leg minted yet: nothing else applies
       if (e.payload === "ANSWER") seats.answer(id);
       else if (e.payload === "REJECT") seats.reject(id);
     });
-
-    // Deferred past the current turn (setTimeout, not setImmediate — an
-    // immediate still runs within the same turn that accepted the upgrade):
-    // seats.open() sends the SEAT envelope synchronously, and a write made
-    // that early can land in the SAME read as the HTTP upgrade response on
-    // the client's side of the socket. A client that does the natural
-    // `await open, then listen for message` (every terminal here, and the
-    // seat tests) attaches its 'message' listener only after 'open' fires —
-    // if the ws receiver parses the upgrade and the SEAT frame out of one
-    // buffer in a single synchronous pass, that listener isn't there yet and
-    // the frame is lost for good. Pushing the send to a later turn gives the
-    // client's 'open' handling — and whatever it does next — room to run
-    // first. `id`/`seatPing` stay undefined until this fires, and the
-    // close/error/message handlers above already guard on that.
-    setTimeout(() => {
-      if (client.readyState !== WebSocket.OPEN) return; // gone before we got here
-      try {
-        ({ id } = seats.open(
-          { send: (d) => { if (client.readyState === WebSocket.OPEN) client.send(d); },
-            close: (code, reason) => client.close(code, reason) },
-          surface));
-      } catch {
-        // open() throws on an id/token collision (a capability escape, not a
-        // lost record) — let it kill this connection attempt, not the process.
-        client.close(1011, "seat registry error");
-        return;
-      }
-      seatPing = setInterval(() => {
-        if (client.readyState === WebSocket.OPEN) client.ping();
-      }, opts.trunk?.relayPingMs ?? 30_000);
-    }, 0);
   });
 
   relayWss.on("connection", (client, req) => {
