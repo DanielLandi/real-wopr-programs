@@ -841,3 +841,114 @@ test("depth: a machine a PERSON called may still call onward", () => {
     "person -> machine -> machine is the whole point of the one-hop cap");
   assert.ok(b);
 });
+
+// ---- ringing a seat (worlds phase 2, piece B) -----------------------------
+
+test("ring: a PLACE to a seat is refused when there is no seat bridge", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = codeOf(sb.register(fakePort(), { t: "REGISTER", v: 1, name: "A EXCH",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "WOPR" }));
+  assert.equal(sb.placeCall(a, { seat: "HDL1" }), "seat-gone");
+});
+
+test("ring: a PLACE to a live handle rings, and holds the caller's first words", () => {
+  const rung: string[] = [];
+  const toSeat: string[] = [];
+  let answer: (() => void) | undefined;
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: {
+      resolve: (handle, code) => (handle === "HDL1" && code !== "") ? { id: "SEAT1" } : "seat-gone",
+      ring: (id, callerName, wire) => {
+        rung.push(`${id}:${callerName}`);
+        let answered = false;
+        const held: string[] = [];
+        answer = () => { answered = true; toSeat.push(...held.splice(0)); };
+        void wire;
+        return {
+          send: (d: string) => { if (answered) toSeat.push(d); else held.push(d); },
+          close: () => {},
+        };
+      },
+    },
+  });
+  const a = codeOf(sb.register(fakePort(), { t: "REGISTER", v: 1, name: "PAN AM",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "PANAM" }));
+  const placed = sb.placeCall(a, { seat: "HDL1" });
+  assert.equal(typeof placed, "object");
+  assert.deepEqual(rung, ["SEAT1:PAN AM"]);
+
+  // The calling program greets the instant it connects — before anyone answers.
+  sb.handleHostFrame(a, { t: "FRAME", chan: (placed as { chan: number }).chan, data: "GREETINGS" });
+  assert.deepEqual(toSeat, [], "nothing crosses an unanswered line");
+  answer!();
+  assert.deepEqual(toSeat, ["GREETINGS"], "and the first words are not lost");
+});
+
+test("ring: a stolen handle is refused exactly as an unknown one", () => {
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: { resolve: () => "seat-gone", ring: () => "seat-gone" },
+  });
+  const a = codeOf(sb.register(fakePort(), { t: "REGISTER", v: 1, name: "A EXCH",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "WOPR" }));
+  assert.equal(sb.placeCall(a, { seat: "SOMEONE-ELSES" }), "seat-gone");
+});
+
+test("ring: a busy seat is busy", () => {
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: { resolve: () => ({ id: "SEAT1" }), ring: () => "busy" },
+  });
+  const a = codeOf(sb.register(fakePort(), { t: "REGISTER", v: 1, name: "A EXCH",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "WOPR" }));
+  assert.equal(sb.placeCall(a, { seat: "HDL1" }), "busy");
+});
+
+// The caller hanging up is one of the three paths that must end the seat's
+// side of the call (and, in the server's bridge, release its hold). The hub
+// learns of it as a host CLOSE, which must reach the bridge's port — with the
+// host's own stated reason, not a generic one.
+test("ring: a host CLOSE ends the seat's side of the call, with its reason", () => {
+  const closes: Array<string | undefined> = [];
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: {
+      resolve: () => ({ id: "SEAT1" }),
+      ring: () => ({ send: () => {}, close: (_c?: number, r?: string) => closes.push(r) }),
+    },
+  });
+  const port = fakePort();
+  const a = codeOf(sb.register(port, { t: "REGISTER", v: 1, name: "PAN AM",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "PANAM" }));
+  const placed = sb.placeCall(a, { seat: "HDL1" }) as { chan: number };
+  sb.handleHostFrame(a, { t: "CLOSE", chan: placed.chan, reason: "goodbye" });
+  assert.deepEqual(closes, ["goodbye"]);
+  // ...and the hub does not bounce the host's own CLOSE straight back at it.
+  assert.deepEqual(port.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "CLOSE"), []);
+});
+
+// The other direction: the seat's leg dying mid-call. The bridge tells the
+// switchboard through `wire.onEnd`, which must close the caller's channel once
+// — a second call (the seat-gone path racing the port's own close) must not
+// send a second CLOSE for a channel that is already gone.
+test("ring: onEnd closes the caller's channel exactly once, with the stated reason", () => {
+  let end: ((reason: string) => void) | undefined;
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: {
+      resolve: () => ({ id: "SEAT1" }),
+      ring: (_id, _name, wire) => { end = wire.onEnd; return { send: () => {}, close: () => {} }; },
+    },
+  });
+  const port = fakePort();
+  const a = codeOf(sb.register(port, { t: "REGISTER", v: 1, name: "PAN AM",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "PANAM" }));
+  const placed = sb.placeCall(a, { seat: "HDL1" }) as { chan: number };
+  end!("seat gone");
+  end!("seat gone");
+  assert.deepEqual(port.sent.map((s) => JSON.parse(s)).filter((f) => f.t === "CLOSE"),
+    [{ t: "CLOSE", chan: placed.chan, reason: "seat gone" }]);
+  // The channel slot is freed too, not merely reported closed.
+  assert.equal(typeof sb.placeCall(a, { seat: "HDL1" }), "object");
+});

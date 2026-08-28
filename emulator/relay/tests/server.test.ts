@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer, seededPort } from "../src/server.ts";
+import { startServer, seededPort, type RunningServer } from "../src/server.ts";
 import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 import type { TrunkFrame } from "../src/trunk.ts";
@@ -1039,4 +1039,205 @@ test("link: a direct dial carrying a token discloses its origin as an ORIGIN con
     await server.close();
     bridge.close();
   }
+});
+// ---- ringing a seat, end to end (worlds phase 2, piece B) -----------------
+//
+// Fast mode throughout: it collapses the handshake to an instant CONNECTED and
+// stops the shaper pacing, so these tests do not sit through a 1200-baud
+// playout of every frame. Each holds the registry seam so it can wait on the
+// seat's actual state — the hold the handle-minting dial took, the hold an
+// answered ring takes — instead of guessing with a wall-clock sleep.
+
+/** A running transcript of everything a socket has said. `nextMessage`'s
+ *  one-shot listener cannot be used on the seat leg here: a RING is emitted
+ *  the instant the PLACE is processed, which is BEFORE a test that first
+ *  awaited the PLACED on the host socket gets to attach a listener — and a ws
+ *  message with no listener is gone, not queued. A listener attached once, up
+ *  front, misses nothing. */
+function transcript(ws: WebSocket) {
+  const msgs: string[] = [];
+  ws.on("message", (d) => msgs.push(d.toString()));
+  return {
+    get length() { return msgs.length; },
+    /** The n-th thing this socket said (1-based), waited for and decoded. */
+    async at(n: number): Promise<Envelope> {
+      await waitFor(() => msgs.length >= n);
+      return decodeEnvelope(msgs[n - 1]!);
+    },
+  };
+}
+
+function ringServer(registry: SeatRegistry): Promise<RunningServer> {
+  return startServer({ port: 0, config: { ...DEFAULT_CONFIG, mode: "fast" },
+                       trunk: { reservedWorlds: [] }, seats: { registry } });
+}
+
+function registerPanAm(host: WebSocket): void {
+  host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
+    region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+}
+
+function machineSays(chan: number, payload: string): string {
+  return JSON.stringify({ t: "FRAME", chan,
+    data: encodeEnvelope({ v: 1, session: "x", seq: 0, kind: "output",
+      link: "trunk-caller", payload, eom: true }) });
+}
+
+/** Open a seat, let it dial PAN AM once — which is how PAN AM earns a handle
+ *  for it — and hang that dial up again. Returns the handle PAN AM now holds,
+ *  the seat socket, its leg id, and the seat's transcript. */
+async function seatThatCalled(server: RunningServer, host: WebSocket, registry: SeatRegistry) {
+  const assigned = JSON.parse(await nextMessage(host));
+  const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+  askSeat(seat);
+  const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1]!;
+  const id = registry.byToken(token)!.id;
+  const said = transcript(seat);
+
+  const dial = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
+  const open = await nextFrame(host, (f) => f.t === "OPEN");
+  const handle: string = open.origin.seat;
+  dial.close();
+  // The dial held the seat for as long as it was up. Wait for that hold to be
+  // released rather than sleeping on it: until it is, the seat is busy for a
+  // legitimate reason and the ring under test would be refused.
+  await waitFor(() => registry.leg(id)?.onCall === false);
+  return { handle, seat, id, said };
+}
+
+test("ring: a machine rings a seat that called it, and the seat answers", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, said } = await seatThatCalled(server, host, registry);
+
+    // Now PAN AM calls back.
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
+    assert.equal(placed.t, "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // The calling program greets the moment it connects — before anyone has
+    // answered. The PLACE that follows is a barrier: frames on one socket are
+    // processed in order, so a REFUSED for it proves the hub has already
+    // handled the greeting, and the seat still has not seen it.
+    host.send(machineSays(placed.chan, "GREETINGS PROFESSOR FALKEN"));
+    host.send(JSON.stringify({ t: "PLACE", call: 2, to: { seat: "NOT-A-HANDLE" } }));
+    const refused = await nextFrame(host, (f) => f.t === "REFUSED");
+    assert.equal(refused.reason, "seat-gone");
+    assert.equal(said.length, 1, "nothing crosses an unanswered line");
+
+    seatControl(seat, "ANSWER");
+    assert.equal((await said.at(2)).payload, "GREETINGS PROFESSOR FALKEN",
+      "and the first words are not lost");
+
+    // ...and the seat can talk back, up the same channel.
+    seat.send(encodeEnvelope({ v: 1, session: "x", seq: 0, kind: "input",
+      link: "seat", payload: "HELLO", eom: true }));
+    const back = await nextFrame(host, (f) => f.t === "FRAME");
+    assert.equal(back.chan, placed.chan);
+    assert.equal(decodeEnvelope(back.data).payload, "HELLO");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+test("ring: a rejected ring closes the caller's channel", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
+    assert.equal(placed.t, "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "REJECT");
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.chan, placed.chan);
+    assert.equal(closed.reason, "rejected");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// An answered ring takes a hold on the seat, and nothing but the bridge ever
+// releases it: without that release a seat that answers one call is busy for
+// the rest of its life and can never be rung again.
+test("ring: an answered call that ends frees the seat to be rung again", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const first = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
+    assert.equal(first.t, "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "ANSWER");
+    await waitFor(() => registry.leg(id)?.onCall === true);
+
+    // PAN AM hangs up. The seat's hold must end with the call.
+    host.send(JSON.stringify({ t: "CLOSE", chan: first.chan, reason: "goodbye" }));
+    await waitFor(() => registry.leg(id)?.onCall === false);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 2, to: { seat: handle } }));
+    const second = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
+    assert.equal(second.t, "PLACED", "a seat that answered once must be ringable again");
+    assert.equal((await said.at(2)).payload, "RING PAN AM");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// The same hold, released through the other door: the machine's own trunk
+// going away ends the call just as surely as it hanging up politely.
+test("ring: a dropped trunk frees the seat it was talking to", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  let seat: WebSocket | undefined;
+  try {
+    registerPanAm(host);
+    const called = await seatThatCalled(server, host, registry);
+    seat = called.seat;
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: called.handle } }));
+    await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await called.said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "ANSWER");
+    await waitFor(() => registry.leg(called.id)?.onCall === true);
+
+    host.close();
+    await waitFor(() => registry.leg(called.id)?.onCall === false);
+  } finally { seat?.close(); host.close(); await server.close(); }
+});
+
+// The third door, and the one nothing else watches: `seats.close()` notifies a
+// PENDING ring (it fires timedOut), but an ANSWERED call has no such
+// notification. Without the bridge ending the wire itself, the machine would
+// hold a channel to a departed seat until its own timeout.
+test("ring: a seat leaving mid-call closes the machine's channel", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "ANSWER");
+    await waitFor(() => registry.leg(id)?.onCall === true);
+
+    seat.close();
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.chan, placed.chan);
+    assert.equal(closed.reason, "seat gone");
+  } finally { host.close(); await server.close(); }
 });

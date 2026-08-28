@@ -33,6 +33,12 @@ interface Leg extends SeatLeg {
   /** exchange code -> the handle that exchange holds for this seat. */
   handles: Map<string, string>;
   ring?: { h: RingHandlers; cancel: () => void };
+  /** Where this seat's non-control envelopes go while it is on an answered
+   *  ring: into the machine that rang it. Set by `attach` when the ring is
+   *  answered, cleared by `detach` when that call ends — so a seat that is on
+   *  no machine call has nowhere to send, and what it types is dropped rather
+   *  than delivered to whoever it happened to speak to last. */
+  inbound?: (data: string) => void;
   /** How many independent holders currently keep this seat busy. An answered
    *  ring holds one; a leg that seat has dialled out on holds another — both
    *  can be true at once (a visitor mid-conversation dials a second machine
@@ -224,6 +230,22 @@ export class SeatRegistry {
     if (!leg) return;
     leg.holds = Math.max(0, leg.holds - 1);
     leg.onCall = leg.holds > 0;
+  }
+
+  /** Route this seat's non-control envelopes to the machine it is talking to.
+   *  The registry never looks at what crosses — it only knows which way. */
+  attach(id: string, toMachine: (data: string) => void): void {
+    const leg = this.legs.get(id);
+    if (leg) leg.inbound = toMachine;
+  }
+
+  detach(id: string): void {
+    const leg = this.legs.get(id);
+    if (leg) leg.inbound = undefined;
+  }
+
+  inboundOf(id: string): ((data: string) => void) | undefined {
+    return this.legs.get(id)?.inbound;
   }
 
   private envelope(id: string, payload: string): void {

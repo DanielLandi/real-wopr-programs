@@ -14,7 +14,8 @@ import { decodeEnvelope, encodeEnvelope, type Envelope } from "./envelope.ts";
 import { LinkShaper } from "./shaper.ts";
 import { runHandshake, type HandshakeOpts } from "./handshake.ts";
 import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
-         type CallTarget, type LocalSlot, type TrunkFrame, type TrunkPort } from "./trunk.ts";
+         type CallTarget, type LocalSlot, type SeatBridge, type TrunkFrame,
+         type TrunkPort } from "./trunk.ts";
 import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 import { SeatRegistry } from "./seats.ts";
 
@@ -62,12 +63,14 @@ export interface ServerOpts {
     homeSlot?: string;
     /** @internal Test seam only — NOT a supported extension point into a
      *  security-critical registry. Use this exact registry instead of
-     *  constructing one from the options above. There is no public way (yet
-     *  — that lands with the Switchboard-side SeatBridge in a later task) to
-     *  ring a seat end to end, so a test that needs to observe `ring()`'s
-     *  effect on `seatWss`'s ANSWER/REJECT wiring, or on the leg's lifecycle,
-     *  has to hold the same registry instance the server uses internally.
-     *  Remove this field once `SeatBridge` lands and provides a real path. */
+     *  constructing one from the options above.
+     *
+     *  A seat can now be rung end to end over the wire (`SeatBridge`, below),
+     *  so this is no longer the only way to reach `ring()`. What it is still
+     *  needed for is OBSERVING a leg's state — whether a hold is outstanding,
+     *  whether the leg is gone — which nothing on the wire reports. A test
+     *  that must wait for a hold to be released, rather than sleep and hope,
+     *  has to hold the same registry instance the server uses internally. */
     registry?: SeatRegistry;
   };
 }
@@ -256,8 +259,90 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     ringTimeoutMs: opts.seats?.ringTimeoutMs,
     newId: opts.seats?.newId,
   });
+
+  // The seat's side of a ring. The hub paces it, because the ANSWERING end
+  // paces: the shaper below runs at the profile the seat declared when it
+  // opened `/seat`. A machine's own leg does not shape (its surface is
+  // trunk-caller, baud 0), so this is the ONE shaper in a machine -> seat
+  // call, and the seat -> machine direction crosses unpaced.
+  //
+  // `seatCalls` holds the ender for whatever ring or call a seat is currently
+  // on, so it can be ended from outside — specifically by the seat's own
+  // socket going away, which the registry cannot report for an ANSWERED call
+  // (it fires `timedOut()` for a PENDING ring, and has no notification for a
+  // call already in progress). At most one entry per seat: `seats.ring`
+  // refuses a second ring "busy" while one is live.
+  const seatCalls = new Map<string, (reason: string) => void>();
+  /** End the ring or call a seat is on, from outside the bridge. A no-op if it
+   *  has already ended by any other door. */
+  const endSeatCall = (id: string, reason: string): void => {
+    seatCalls.get(id)?.(reason);
+  };
+
+  const seatBridge: SeatBridge = {
+    resolve: (handle, code) => {
+      const leg = seats.resolve(handle, code);
+      return leg === "seat-gone" ? "seat-gone" : { id: leg.id };
+    },
+    ring: (id, callerName, wire) => {
+      const leg = seats.leg(id);
+      if (!leg) return "seat-gone";
+      // A seat is refused `/seat` unless its surface resolves, so this is
+      // belt-and-braces — but a seat that could be rung and never heard is
+      // worse than one that is simply not there.
+      const link = resolveLink(config, leg.surface);
+      if (!link) return "seat-gone";
+      const down = new LinkShaper(link.profile, link.name, id,
+        (e: Envelope) => leg.port.send(encodeEnvelope(e)));
+      const held: string[] = [];
+      let answered = false;
+      let ended = false;
+      const push = (raw: string) => {
+        let e: Envelope;
+        // Not an envelope: the hub never inspects a payload further than the
+        // frame it must re-time, so there is nothing to do but drop it.
+        try { e = decodeEnvelope(raw); } catch { return; }
+        down.send({ kind: e.kind, payload: e.payload, eom: e.eom });
+      };
+      /** Every door out of this call leads here, once. */
+      const end = (reason: string) => {
+        if (ended) return;
+        ended = true;
+        seatCalls.delete(id);
+        down.close();
+        seats.detach(id);
+        // ONLY an answered ring took a hold — `answer()` takes it. Releasing
+        // after a rejected or unanswered ring would decrement a hold some
+        // other holder is still relying on (a leg this seat dialled out on),
+        // and free a seat that is genuinely mid-conversation.
+        if (answered) seats.release(id);
+        wire.onEnd(reason);
+      };
+      const outcome = seats.ring(id, callerName, {
+        answered: () => {
+          answered = true;
+          seats.attach(id, wire.toMachine);
+          // The caller greeted the moment it connected, before anyone had
+          // picked up. Those are its first words, and this is where they go.
+          for (const d of held.splice(0)) push(d);
+        },
+        rejected: () => end("rejected"),
+        timedOut: () => end("no answer"),
+      });
+      if (outcome !== "ringing") return outcome;
+      // Filed only if the ring is still live: an injected timer that fires
+      // synchronously inside ring() would already have ended it.
+      if (!ended) seatCalls.set(id, end);
+      return {
+        send: (data: string) => { if (answered) push(data); else held.push(data); },
+        close: (_code?: number, reason?: string) => end(reason ?? "call ended"),
+      };
+    },
+  };
+
   const switchboard = new Switchboard({
     ...opts.trunk,
+    seats: seatBridge,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
     reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
     localWorld: trunkLocalWorld,
@@ -602,7 +687,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       clearTimeout(handshakeTimer);
       releasePending();
       if (seatPing) clearInterval(seatPing);
-      if (id !== undefined) seats.close(id);
+      if (id !== undefined) {
+        // Two notifications, because the registry only owns one of them.
+        // `close()` tells a PENDING ring its seat is gone (it fires
+        // `timedOut`); an ANSWERED call has no such notification, and the
+        // machine on the other end would otherwise hold a channel to a
+        // departed seat until its own timeout. The bridge owns that wire, so
+        // it ends it — a no-op if the ring above already did.
+        seats.close(id);
+        endSeatCall(id, "seat gone");
+      }
     };
     client.on("close", drop);
     client.on("error", drop);
@@ -610,9 +704,8 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     client.on("message", (data) => {
       let e: Envelope;
       try { e = decodeEnvelope(data.toString()); } catch { return; }
-      if (e.kind !== "control") return;
 
-      if (e.payload === "SEAT?") {
+      if (e.kind === "control" && e.payload === "SEAT?") {
         if (id !== undefined) {
           // Already minted for this socket — resend the same token rather
           // than opening a second leg. `token` is set in the same assignment
@@ -656,8 +749,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       }
 
       if (id === undefined) return; // no leg minted yet: nothing else applies
-      if (e.payload === "ANSWER") seats.answer(id);
-      else if (e.payload === "REJECT") seats.reject(id);
+      if (e.kind === "control" && e.payload === "ANSWER") { seats.answer(id); return; }
+      if (e.kind === "control" && e.payload === "REJECT") { seats.reject(id); return; }
+      // Everything else is conversation, not control of the leg: it goes to
+      // the machine this seat answered, byte for byte — the hub never inspects
+      // a payload. A seat on no machine call has nowhere to send, and what it
+      // types here goes nowhere rather than to whoever it last spoke to.
+      seats.inboundOf(id)?.(data.toString());
     });
   });
 
