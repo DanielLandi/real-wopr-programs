@@ -73,7 +73,11 @@ async function startStubComms(): Promise<{
 // with real success bodies. Everything else — including any disallowed path
 // a misbehaving tieline might forward — answers 500, so a host-side allowlist
 // leak would be visible as a 500 instead of the correct un-forwarded 404.
-async function startStubBridge(): Promise<{
+async function startStubBridge(opts?: {
+  // Delays the /api/session response — the hook a race test needs to hold a
+  // mint open long enough to fire a CLOSE while it is still in flight.
+  sessionDelayMs?: number;
+}): Promise<{
   port: number;
   requests: Array<{ method: string; path: string; body: string }>;
   close: () => Promise<void>;
@@ -86,8 +90,12 @@ async function startStubBridge(): Promise<{
       const body = Buffer.concat(chunks).toString();
       requests.push({ method: req.method ?? "", path: req.url ?? "", body });
       if (req.method === "POST" && req.url === "/api/session") {
-        res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ session_id: "s" }));
+        const respond = () => {
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ session_id: "s" }));
+        };
+        if (opts?.sessionDelayMs) setTimeout(respond, opts.sessionDelayMs);
+        else respond();
         return;
       }
       if (req.method === "GET" && req.url === "/api/games") {
@@ -663,6 +671,65 @@ test("tieline: an OPEN from a seat still pastes the hub's query", async () => {
     const mints = bridge.requests.filter((r) => r.path === "/api/session");
     assert.equal(mints.length, 0, "a visitor already has a session");
     assert.match(dialled.at(-1) ?? "", /session=S9/);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a hub CLOSE that arrives while a machine call's mint is in flight does not leak the leg", async () => {
+  // openMachineChannel mints a session (a real async POST) before it has
+  // anything to register under `legs`. If the hub hangs up on that chan
+  // during the mint, the CLOSE handler finds nothing yet — and the naive fix
+  // is for the mint to just register the leg anyway once it resolves. That
+  // resurrects a channel the hub has already forgotten: no second CLOSE is
+  // ever coming, so the local session and socket leak for good. The delayed
+  // stub bridge is what makes the mint slow enough to land the CLOSE inside
+  // that window deterministically instead of by luck.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ sessionDelayMs: 200 });
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  const fromTieline: Array<{ t: string; chan?: number }> = [];
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (data) => { fromTieline.push(JSON.parse(data.toString())); });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 7, query: "", origin: { world: 1, slot: "PANAM" } }));
+    // Well inside the 200ms mint delay: the session POST has not resolved yet.
+    await new Promise((r) => setTimeout(r, 50));
+    hostSocket!.send(JSON.stringify({ t: "CLOSE", chan: 7 }));
+    // Past the mint delay: the leg has now resolved, found itself abandoned,
+    // and must have closed rather than registering under chan 7.
+    await new Promise((r) => setTimeout(r, 400));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the mint to actually complete");
+    // Only the hub's own CLOSE must have produced an onClose — the abandoned
+    // leg's own eventual self-close must not fire a second one, which is
+    // what a leaked-but-later-noticed leg would do.
+    assert.deepEqual(closed, [{ chan: 7, reason: undefined }]);
+    // A live (leaked) leg would deliver this to the echoing stub comms and
+    // relay the echo back as a FRAME the hub receives. An abandoned leg has
+    // nothing registered under chan 7 to deliver to.
+    hostSocket!.send(JSON.stringify({ t: "FRAME", chan: 7, data: "PING" }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(
+      fromTieline.some((f) => f.t === "FRAME" && f.chan === 7),
+      false,
+      "an abandoned machine leg must not still be attached to its channel",
+    );
   } finally {
     t.stop(); hub.close(); await comms.close(); await bridge.close();
   }

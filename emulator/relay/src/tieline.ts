@@ -46,6 +46,13 @@ export function startTieline(opts: TielineOpts): {
   // channel is in exactly one of the two maps: a visitor's dial or a machine's
   // local leg.
   const legs = new Map<number, LocalLeg>();
+  // A machine call's leg is minted asynchronously (a session POST, then a
+  // dial) — the hub's CLOSE for that chan can arrive before either finishes,
+  // and `legs` has no entry yet for the CLOSE handler to find. This registry
+  // is how that race gets remembered: a canceller per in-flight mint, so the
+  // leg that eventually resolves finds out it was abandoned instead of
+  // silently resurrecting a channel the hub has already forgotten.
+  const pendingLegs = new Map<number, () => void>();
   const placing = new Map<number, (r: { chan: number } | RefusedReason) => void>();
   let nextCall = 1;
 
@@ -100,6 +107,8 @@ export function startTieline(opts: TielineOpts): {
     // resolves — a caller learns of an inbound call the instant it arrives,
     // whether or not the local leg then attaches successfully.
     opts.onOpen?.(f.chan, f.origin);
+    let abandoned = false;
+    pendingLegs.set(f.chan, () => { abandoned = true; });
     const leg = await openLocalLeg({
       bridgeUrl: opts.localBridge,
       commsUrl: opts.localComms,
@@ -110,7 +119,12 @@ export function startTieline(opts: TielineOpts): {
         if (legs.delete(f.chan)) { send({ t: "CLOSE", chan: f.chan, reason }); opts.onClose?.(f.chan, reason); }
       },
     });
+    pendingLegs.delete(f.chan);
     if (leg === "refused") return;
+    // The hub already forgot this chan while the mint was in flight — close
+    // the leg that just arrived instead of resurrecting an entry nothing will
+    // ever send a second CLOSE for.
+    if (abandoned) { leg.close(); return; }
     legs.set(f.chan, leg);
   }
 
@@ -142,6 +156,7 @@ export function startTieline(opts: TielineOpts): {
         if (c.local.readyState === WebSocket.OPEN) c.local.send(f.data);
         else c.buffer.push(f.data);
       } else if (f.t === "CLOSE") {
+        pendingLegs.get(f.chan)?.(); pendingLegs.delete(f.chan);
         legs.get(f.chan)?.close(); legs.delete(f.chan);
         channels.get(f.chan)?.local.close(); channels.delete(f.chan);
         opts.onClose?.(f.chan, f.reason);
@@ -156,6 +171,10 @@ export function startTieline(opts: TielineOpts): {
       channels.clear();
       for (const leg of legs.values()) leg.close();
       legs.clear();
+      // Cancellers with no chan left to reference — the dropped hub
+      // connection means no CLOSE is coming for these either way, so there
+      // is nothing to abandon, only to forget.
+      pendingLegs.clear();
       // The hub is gone — every in-flight place() would otherwise hang
       // forever waiting for a PLACED/REFUSED that can no longer arrive.
       // Resolve (never reject) each one with "offline" and drop the map, so
