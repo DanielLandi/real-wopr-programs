@@ -710,13 +710,14 @@ export class Switchboard {
     const calleeChan = target.nextChan;
     const callerChan = from.nextChan;
     const encoded = JSON.stringify({
-      // Nothing resolves an empty query yet: the callee's tieline dials
-      // `${localComms}/link?` and server.ts refuses it outright for want of
-      // `surface` and `session`, closing the local socket 4400 before a byte
-      // moves. What session a machine call mints on the callee — whether it
-      // mints one at all — is the piece-that-converses question (piece D), so
-      // it is left open here rather than guessed into API D would have to
-      // undo. See issue #67.
+      // The query is empty on purpose, and the origin is what makes it safe:
+      // a machine call carries no visitor credentials to paste into a dial.
+      // The callee's tieline reads the origin's SHAPE (`slot` present = a
+      // machine called) and, instead of dialling this query, mints an
+      // ordinary session on its own bridge and dials its own /link with it
+      // (`openMachineChannel` -> `openLocalLeg`). So the callee's program
+      // answers a machine exactly as it answers a person, and nothing here
+      // has to know what a session on that host looks like.
       t: "OPEN", chan: calleeChan, query: "",
       origin: { world: from.world, slot: from.slot },
     });

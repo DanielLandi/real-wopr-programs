@@ -141,6 +141,15 @@ export function startTieline(opts: TielineOpts): {
     const hangUp = (reason?: string) => {
       legs.get(chan)?.close(); legs.delete(chan);
       send({ t: "CLOSE", chan, reason });
+      // Told here, not by the leg's own close callback: that callback is
+      // latched behind `if (legs.delete(chan))`, and the line above already
+      // took the entry, so it can never fire for a call this host hung up
+      // itself. Without this, a placer's own hangup is the ONE channel-ending
+      // path of four that notifies nobody — and a host tracking live channels
+      // through onClose would leak an entry for every call it closed. Exactly
+      // one onClose per ended channel still holds: the leg's callback finds
+      // the latch false, and the hub does not echo a host's own CLOSE back.
+      opts.onClose?.(chan, reason);
     };
     let abandoned = false;
     pendingLegs.set(chan, () => { abandoned = true; });
@@ -281,8 +290,8 @@ export function startTieline(opts: TielineOpts): {
      *
      *  The returned call attaches a local leg of its own: a session on this
      *  host's bridge, dialled over this host's /link, whose program is what
-     *  actually talks. Hang it up with close(); learn that the far end hung up
-     *  from opts.onClose. */
+     *  actually talks. Hang it up with close(); opts.onClose fires when the
+     *  channel ends, whichever end ended it. */
     place(to: CallTarget, on?: number): Promise<PlacedCall | RefusedReason> {
       // No socket, or one already on its way out: resolve rather than
       // reject, so a caller handles "could not place" in one branch instead
