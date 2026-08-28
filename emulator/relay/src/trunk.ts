@@ -431,14 +431,15 @@ export class Switchboard {
     for (const p of ex.pending.values()) { clearTimeout(p.timer); p.reject("dropped"); }
   }
 
-  openChannel(code: string, client: ChannelPort, query: string): number | "offline" | "busy" | "oversize" {
+  openChannel(code: string, client: ChannelPort, query: string,
+              origin?: CallOrigin): number | "offline" | "busy" | "oversize" {
     const ex = this.exchanges.get(code);
     if (!ex) return "offline";
     if (ex.channels.size >= this.maxChannels) return "busy";
     // A seeded slot with no port attached yet has nothing to send an OPEN to.
     if (!ex.port) return "offline";
     const chan = ex.nextChan;
-    const encoded = JSON.stringify({ t: "OPEN", chan, query });
+    const encoded = JSON.stringify({ t: "OPEN", chan, query, ...(origin ? { origin } : {}) });
     // JSON-escaping puts no upper bound on the wrapped query relative to the
     // raw URL: refuse an OPEN the trunk leg could never carry rather than
     // sending a frame the host-side decoder would drop (leaving this end's
@@ -446,6 +447,8 @@ export class Switchboard {
     if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) return "oversize";
     ex.nextChan += 1;
     ex.channels.set(chan, client);
+    // NOT `originated`. That set means "arrived from a machine" and gates the
+    // one-hop cap; a person's call must leave a machine free to call onward.
     ex.port.send(encoded);
     return chan;
   }

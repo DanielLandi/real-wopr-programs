@@ -871,3 +871,46 @@ test("seat: the token never crosses the trunk", async () => {
     visitor.close(); seat.close();
   } finally { host.close(); await server.close(); }
 });
+
+test("seat: a dial carrying a token discloses a handle to the exchange it called", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
+      region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+    const assigned = JSON.parse(await nextMessage(host));
+
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
+
+    const first = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
+    const open1 = JSON.parse(await nextMessage(host));
+    assert.ok(open1.origin && typeof open1.origin.seat === "string",
+      "a machine learns who called by being called");
+    first.close();
+
+    const second = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
+    const open2 = JSON.parse(await nextMessage(host));
+    assert.equal(open2.origin.seat, open1.origin.seat,
+      "one seat, one exchange, one handle — across calls");
+    second.close(); seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+test("seat: a dial without a token discloses nothing", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
+      region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+    const assigned = JSON.parse(await nextMessage(host));
+    const visitor = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S1&token=T1`);
+    const open = JSON.parse(await nextMessage(host));
+    assert.equal(open.origin, undefined, "a stale tab still gets to phone a machine");
+    visitor.close();
+  } finally { host.close(); await server.close(); }
+});

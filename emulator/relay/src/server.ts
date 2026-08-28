@@ -47,6 +47,15 @@ export interface ServerOpts {
      *  `4408`, mirroring `trunk.registerTimeoutMs`/`trunkWss`'s "no register"
      *  guard just below. Defaults to 20s, the same window that guard uses. */
     handshakeTimeoutMs?: number;
+    /** The seeded slot a direct `/link` dial mints its handle against. Every
+     *  seeded world-1 entry shares `link: <wsBase>/link`, and the slot a
+     *  direct dial actually reached rides in the *session* the terminal
+     *  minted with the bridge — which this hub leg never sees. So a direct
+     *  dial cannot mint a handle for whichever seeded program the terminal
+     *  meant to reach; it mints instead for the hub's own Joshua line, the
+     *  only seeded slot with a reason to ring anyone back (the film's
+     *  callback beat is Joshua's alone). Defaults to "WOPR". */
+    homeSlot?: string;
     /** @internal Test seam only — NOT a supported extension point into a
      *  security-critical registry. Use this exact registry instead of
      *  constructing one from the options above. There is no public way (yet
@@ -321,6 +330,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     // collapses its timing to an instant CONNECTED (§4).
     const handshakeKind = config.profiles[authenticName].handshake;
 
+    // A direct dial reaches the hub's own bridge, and which seeded slot it
+    // reached rides in the session the terminal minted — which this leg never
+    // sees. So the handle is minted for the hub's own Joshua line: the only
+    // seeded slot with a reason to ring anyone back.
+    const seatToken = url.searchParams.get("seat");
+    const homeCode = switchboard.seededCode(opts.seats?.homeSlot ?? "WOPR");
+    const seatLeg = seatToken ? seats.byToken(seatToken) : undefined;
+    const handle = seatToken && homeCode ? seats.mint(seatToken, homeCode) : undefined;
+    if (seatLeg) seats.hold(seatLeg.id);
+
     // One shaper per direction; seq is monotonic per direction (§5).
     const down = new LinkShaper(profile, linkName, session, (e: Envelope) => {
       if (client.readyState === WebSocket.OPEN) client.send(encodeEnvelope(e));
@@ -329,6 +348,12 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     let upstream: WebSocket | null = null;
     let up: LinkShaper | null = null;
     const upstreamBuffer: Envelope[] = [];
+    // Disclosed on the same uniform rule as every other path: pushed before
+    // dial() runs, so it is the first thing the bridge receives.
+    if (handle) {
+      upstreamBuffer.push({ v: 1, session, seq: 0, kind: "control",
+                            link: linkName, payload: `ORIGIN seat ${handle}`, eom: true });
+    }
     let closed = false;
 
     // Protocol-level keepalive (D3): a 300-baud reader can sit idle far past
@@ -342,6 +367,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       if (closed) return;
       closed = true;
       clearInterval(keepalive);
+      if (seatLeg) seats.release(seatLeg.id);
       down.close();
       up?.close();
       try { upstream?.close(); } catch { /* already closed */ }
@@ -627,7 +653,12 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     const params = new URLSearchParams(url.search);
     const seatToken = params.get("seat");
     params.delete("seat");
-    const chan = switchboard.openChannel(code, client, params.toString());
+    // An unknown or dead token is ignored, not fatal: the dial proceeds as an
+    // anonymous visitor, no handle is minted, and nothing is said about it — a
+    // stale browser tab must still be able to phone a machine.
+    const handle = seatToken === null ? undefined : seats.mint(seatToken, code);
+    const chan = switchboard.openChannel(code, client, params.toString(),
+                                         handle ? { seat: handle } : undefined);
     if (typeof chan !== "number") {
       // Distinct signals: an unknown/offline code is not the same call
       // experience as a live exchange with every channel in use.
@@ -643,8 +674,11 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     const relayPing = setInterval(() => {
       if (client.readyState === WebSocket.OPEN) client.ping();
     }, opts.trunk?.relayPingMs ?? 30_000);
+    const seatId = seatToken === null ? undefined : seats.byToken(seatToken)?.id;
+    if (seatId) seats.hold(seatId);
     const cleanup = () => {
       clearInterval(relayPing);
+      if (seatId) seats.release(seatId);
       switchboard.closeChannel(code, chan);
     };
     client.on("message", (data) => switchboard.clientFrame(code, chan, data.toString()));

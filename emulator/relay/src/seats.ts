@@ -126,6 +126,12 @@ export class SeatRegistry {
     return id === undefined ? undefined : this.legs.get(id);
   }
 
+  leg(id: string): SeatLeg | undefined { return this.legs.get(id); }
+
+  /** This seat is on a call — a dialled one, not only an answered ring — so it
+   *  is busy to anyone trying to ring it. */
+  hold(id: string): void { const leg = this.legs.get(id); if (leg) leg.onCall = true; }
+
   mint(token: string, code: string): string | undefined {
     const id = this.byTokenIdx.get(token);
     const leg = id === undefined ? undefined : this.legs.get(id);
