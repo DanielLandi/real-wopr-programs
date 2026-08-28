@@ -196,7 +196,14 @@ export interface ChannelPort extends TrunkPort {}
 
 interface Exchange {
   code: string; name: string; region: string; joshua: string; operator?: string;
-  port: TrunkPort;
+  /** null until a seeded slot is given a port. A registrant always has one.
+   *  Nullable rather than flagged so the compiler names every send site. */
+  port: TrunkPort | null;
+  /** A world-1 slot the hub seeds from its manifest rather than one a host
+   *  registered. It is a real exchange — callable, and able to place — but it
+   *  has no socket, is never swept, and prints its own directory shape. */
+  seeded?: true;
+  system?: string;
   world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
@@ -308,6 +315,36 @@ export class Switchboard {
     // flagship needs no trunk back to itself and its entries dial the public
     // base directly.
     this.localWorld = checkLocalWorld(opts.localWorld ?? []);
+    // Seeds are exchanges from construction: `directory()` must be able to
+    // print world 1 before the server has finished listening and can hand them
+    // a port. `place()`'s occupancy check therefore needs no special case for
+    // them, and neither does `register()`'s slot-taken rule.
+    for (const seed of this.localWorld) {
+      let code = newExchangeCode();
+      while (this.exchanges.has(code)) code = newExchangeCode();
+      this.exchanges.set(code, {
+        code, name: seed.name, region: seed.region,
+        joshua: seed.joshua ?? "period", operator: seed.operator,
+        port: null, seeded: true, system: seed.system,
+        world: 1, slot: seed.slot,
+        channels: new Map(), nextChan: 1, originated: new Set(),
+        pending: new Map(), nextRid: 1, missedPongs: 0,
+      });
+    }
+  }
+
+  /** The code the hub gave a seeded slot, for a caller that has only the name. */
+  seededCode(slot: string): string | undefined {
+    for (const ex of this.exchanges.values()) if (ex.seeded && ex.slot === slot) return ex.code;
+    return undefined;
+  }
+
+  /** Give a seeded slot the port that answers its calls. Called once, at
+   *  startup, when the server knows its own address. */
+  seedPort(slot: string, port: TrunkPort): string | undefined {
+    const code = this.seededCode(slot);
+    if (code) this.exchanges.get(code)!.port = port;
+    return code;
   }
 
   /** Where does a REGISTER land? Worlds are derived, not stored: a world is
@@ -329,14 +366,6 @@ export class Switchboard {
       let s = occ.get(ex.world);
       if (!s) occ.set(ex.world, (s = new Set()));
       s.add(ex.slot);
-    }
-    // A seeded slot is filled, even though nothing is registered in it: an
-    // unlocked keyed REGISTER for CHEYENNE MOUNTAIN's slot is "slot-taken",
-    // not a silent second occupant of world 1.
-    if (this.localWorld.length > 0) {
-      let s = occ.get(1);
-      if (!s) occ.set(1, (s = new Set()));
-      for (const seed of this.localWorld) s.add(seed.slot);
     }
     const open = (w: number): string | null =>
       req.slot !== undefined
@@ -375,7 +404,9 @@ export class Switchboard {
 
   register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>):
       { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" | "world-reserved" {
-    if (this.exchanges.size >= this.maxExchanges) return "full";
+    let registered = 0;
+    for (const ex of this.exchanges.values()) if (!ex.seeded) registered += 1;
+    if (registered >= this.maxExchanges) return "full";
     const placed = this.place({ slot: f.slot, world: f.world, key: f.key });
     if (typeof placed === "string") return placed;
     let code = newExchangeCode();
@@ -392,7 +423,7 @@ export class Switchboard {
 
   unregister(code: string): void {
     const ex = this.exchanges.get(code);
-    if (!ex) return;
+    if (!ex || ex.seeded) return;
     this.exchanges.delete(code);
     for (const client of ex.channels.values()) client.close(1001, "trunk dropped");
     // The exchange was live when it accepted these requests: reject them as a
@@ -404,6 +435,8 @@ export class Switchboard {
     const ex = this.exchanges.get(code);
     if (!ex) return "offline";
     if (ex.channels.size >= this.maxChannels) return "busy";
+    // A seeded slot with no port attached yet has nothing to send an OPEN to.
+    if (!ex.port) return "offline";
     const chan = ex.nextChan;
     const encoded = JSON.stringify({ t: "OPEN", chan, query });
     // JSON-escaping puts no upper bound on the wrapped query relative to the
@@ -422,7 +455,7 @@ export class Switchboard {
     if (!ex || !ex.channels.has(chan)) return;
     ex.channels.delete(chan);
     ex.originated.delete(chan);
-    ex.port.send(JSON.stringify({ t: "CLOSE", chan }));
+    ex.port?.send(JSON.stringify({ t: "CLOSE", chan }));
   }
 
   clientFrame(code: string, chan: number, data: string): void {
@@ -439,10 +472,10 @@ export class Switchboard {
       ex.channels.delete(chan);
       ex.originated.delete(chan);
       client.close(1009, "frame exceeds trunk capacity");
-      ex.port.send(JSON.stringify({ t: "CLOSE", chan, reason: "oversize frame" }));
+      ex.port?.send(JSON.stringify({ t: "CLOSE", chan, reason: "oversize frame" }));
       return;
     }
-    ex.port.send(encoded);
+    ex.port?.send(encoded);
   }
 
   handleHostFrame(code: string, f: TrunkFrame): void {
@@ -469,7 +502,7 @@ export class Switchboard {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { ex.pending.delete(rid); reject("timeout"); }, timeoutMs);
       ex.pending.set(rid, { resolve, reject, timer });
-      ex.port.send(JSON.stringify({ t: "REQUEST", rid, method, path, body }));
+      ex.port?.send(JSON.stringify({ t: "REQUEST", rid, method, path, body }));
     });
   }
 
@@ -481,28 +514,21 @@ export class Switchboard {
     const publicBase = rawPublicBase.replace(/\/+$/, "");
     const wsBase = publicBase.replace(/^http/, "ws");
     const byWorld = new Map<number, DirectoryEntry[]>([[1, []]]); // world 1 pinned
-    // The flagship's own slots, synthesized rather than registered. No
-    // `/x/<CODE>` hop: there is no trunk to hop over, so every seed points at
-    // the hub's public base and a period system carries the bridge `system` id
-    // that opens a session against it.
-    byWorld.set(1, this.localWorld.map((s) => ({
-      id: `local-${s.slot.toLowerCase()}`, name: s.name, region: s.region,
-      api: publicBase, link: `${wsBase}/link`,
-      joshua: s.joshua ?? "period", operator: s.operator, online: true as const,
-      world: 1, slot: s.slot,
-      // Spread, not an undefined value: an own `system` key with no value is a
-      // different document once a surface round-trips it.
-      ...(s.system ? { system: s.system } : {}),
-    })));
     for (const ex of this.exchanges.values()) {
       let list = byWorld.get(ex.world);
       if (!list) byWorld.set(ex.world, (list = []));
-      list.push({
-        id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
-        api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
-        joshua: ex.joshua, operator: ex.operator, online: true as const,
-        world: ex.world, slot: ex.slot,
-      });
+      list.push(ex.seeded
+        // No `/x/<CODE>` hop: there is no trunk to hop over, so a seed points
+        // at the hub's public base and carries the bridge `system` id that
+        // opens a session against it.
+        ? { id: `local-${ex.slot.toLowerCase()}`, name: ex.name, region: ex.region,
+            api: publicBase, link: `${wsBase}/link`,
+            joshua: ex.joshua, operator: ex.operator, online: true as const,
+            world: ex.world, slot: ex.slot, ...(ex.system ? { system: ex.system } : {}) }
+        : { id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
+            api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
+            joshua: ex.joshua, operator: ex.operator, online: true as const,
+            world: ex.world, slot: ex.slot });
     }
     return [...byWorld.entries()].sort((a, b) => a[0] - b[0]).map(([n, slots]) => ({
       n,
@@ -534,7 +560,7 @@ export class Switchboard {
       // the exchange. Inert (nextChan never reuses a number, so a stale entry
       // can never wrongly match) but unbounded, on a hub that runs for weeks.
       peer.originated.delete(peerChan);
-      peer.port.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
+      peer.port?.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
     };
     return {
       send: (data: string) => {
@@ -549,13 +575,13 @@ export class Switchboard {
         if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) {
           if (self.channels.delete(selfChan)) {
             self.originated.delete(selfChan);
-            self.port.send(JSON.stringify(
+            self.port?.send(JSON.stringify(
               { t: "CLOSE", chan: selfChan, reason: "oversize frame" }));
           }
           hangUpPeer("oversize frame");
           return;
         }
-        peer.port.send(encoded);
+        peer.port?.send(encoded);
       },
       close: (_code?: number, reason?: string) => hangUpPeer(reason),
     };
@@ -583,17 +609,18 @@ export class Switchboard {
     if ("seat" in to) return "seat-gone";
 
     const world = to.world ?? from.world;
-    // REGISTERED exchanges only. World 1's SEEDED slots (the `localWorld`
-    // manifest) have no trunk port to send an OPEN down, so a PLACE to the
-    // flagship's own WOPR answers "offline" while `GET /trunk/directory`
-    // lists that same slot online — the directory synthesizes those entries,
-    // this cannot. Piece D meets it head-on rather than at the margins: the
-    // film's beat is the FLAGSHIP's Joshua placing the call. See issue #67.
+    // Seeded slots are exchanges too (see the constructor), so a PLACE to the
+    // flagship's own WOPR can resolve here exactly like a registered one — it
+    // just has no port until seedPort() attaches one, which the guard below
+    // answers "offline" for, matching `GET /trunk/directory` honestly.
     let target: Exchange | undefined;
     for (const ex of this.exchanges.values()) {
       if (ex.world === world && ex.slot === to.slot) { target = ex; break; }
     }
     if (!target) return "offline";
+    // A seeded slot with no port attached yet, or a caller whose own socket
+    // has already dropped, has nothing to relay to.
+    if (!target.port || !from.port) return "offline";
     if (target.code === from.code) return "self";
     if (target.channels.size >= this.maxChannels) return "busy";
     if (from.channels.size >= this.maxChannels) return "busy";
@@ -627,9 +654,10 @@ export class Switchboard {
   sweepDead(): string[] {
     const dropped: string[] = [];
     for (const ex of this.exchanges.values()) {
+      if (ex.seeded) continue;
       ex.missedPongs += 1;
       if (ex.missedPongs >= 2) dropped.push(ex.code);
-      else ex.port.send(JSON.stringify({ t: "PING" }));
+      else ex.port?.send(JSON.stringify({ t: "PING" }));
     }
     for (const code of dropped) this.unregister(code);
     return dropped;

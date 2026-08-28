@@ -754,3 +754,90 @@ test("depth: a visitor-opened channel is not originated, so its callee may place
   // whole point: WOPR calls PANAM because a visitor asked it to.
   assert.equal(typeof sb.placeCall(codeA, { world: 1, slot: "PANAM" }, chan as number), "object");
 });
+
+// ---- seeded world-1 slots are exchanges ----------------------------------
+
+const SEEDS = [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+               { slot: "BANK", name: "UNION MARINE", region: "SEATTLE US", system: "umb" }];
+
+test("seeded: a seeded slot has a code, and no port until one is attached", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, reservedWorlds: [] });
+  const code = sb.seededCode("WOPR");
+  assert.equal(typeof code, "string");
+  const host = fakePort();
+  const caller = codeOf(sb.register(host, {
+    t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "PANAM" }));
+  // No port attached yet: the slot is in the book but nothing answers it.
+  assert.equal(sb.placeCall(caller, { world: 1, slot: "WOPR" }), "offline");
+});
+
+test("seeded: with a port attached, a seeded slot can be called", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, reservedWorlds: [] });
+  const seedHost = fakePort();
+  sb.seedPort("WOPR", seedHost);
+  const host = fakePort();
+  const caller = codeOf(sb.register(host, {
+    t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "PANAM" }));
+  const placed = sb.placeCall(caller, { world: 1, slot: "WOPR" });
+  assert.equal(typeof placed, "object");
+  const open = JSON.parse(seedHost.sent.at(-1)!);
+  assert.equal(open.t, "OPEN");
+  assert.deepEqual(open.origin, { world: 1, slot: "PANAM" });
+});
+
+test("seeded: a seeded slot can place a call of its own", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, reservedWorlds: [] });
+  sb.seedPort("WOPR", fakePort());
+  const host = fakePort();
+  codeOf(sb.register(host, {
+    t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "PANAM" }));
+  const placed = sb.placeCall(sb.seededCode("WOPR")!, { world: 1, slot: "PANAM" });
+  assert.equal(typeof placed, "object", "the flagship must be able to originate");
+  const open = JSON.parse(host.sent.at(-1)!);
+  assert.deepEqual(open.origin, { world: 1, slot: "WOPR" });
+});
+
+test("seeded: a seeded slot is still slot-taken for a keyed REGISTER", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, reserveKey: "K", reservedWorlds: [1] });
+  assert.equal(sb.register(fakePort(), {
+    t: "REGISTER", v: 1, name: "IMPOSTOR", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "WOPR", key: "K" }), "slot-taken");
+});
+
+test("seeded: maxExchanges counts registrants, not seeds", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, maxExchanges: 1, reservedWorlds: [] });
+  assert.equal(typeof sb.register(fakePort(), {
+    t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US", joshua: "period" }), "object");
+  assert.equal(sb.register(fakePort(), {
+    t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US", joshua: "period" }), "full");
+});
+
+test("seeded: a seeded slot survives a PING sweep", () => {
+  const sb = new Switchboard({ localWorld: SEEDS, reservedWorlds: [] });
+  sb.seedPort("WOPR", fakePort());
+  sb.sweepDead(); sb.sweepDead(); sb.sweepDead();
+  assert.equal(flatDir(sb, "https://hub").filter((e) => e.slot === "WOPR").length, 1,
+    "a seeded slot is not a socket and cannot die");
+});
+
+// ---- the depth cap's predicate is "from a machine", not "has an origin" ---
+
+test("depth: a machine a PERSON called may still call onward", () => {
+  const sb = new Switchboard({ reservedWorlds: [] });
+  const a = codeOf(sb.register(fakePort(), {
+    t: "REGISTER", v: 1, name: "A EXCH", region: "SEATTLE US", joshua: "period",
+    world: 2, slot: "WOPR" }));
+  const b = codeOf(sb.register(fakePort(), {
+    t: "REGISTER", v: 1, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 2, slot: "PANAM" }));
+  // A visitor dials A. openChannel is the ONLY way a visitor call arrives, and
+  // it must never mark the channel as machine-originated.
+  const visitorChan = sb.openChannel(a, fakePort(), "surface=home-terminal&session=S1");
+  assert.equal(typeof visitorChan, "number");
+  assert.equal(typeof sb.placeCall(a, { world: 2, slot: "PANAM" }, visitorChan as number), "object",
+    "person -> machine -> machine is the whole point of the one-hop cap");
+  assert.ok(b);
+});
