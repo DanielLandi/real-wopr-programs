@@ -125,7 +125,23 @@ export function startTieline(opts: TielineOpts): {
       },
     });
     pendingLegs.delete(f.chan);
-    if (leg === "refused") return;
+    if (leg === "refused") {
+      // openLocalLeg already invoked the `close` callback above for this
+      // failure — but `f.chan` had nothing registered under `legs` yet (the
+      // leg had not resolved), so that guard's `legs.delete(f.chan)` was a
+      // no-op and no CLOSE ever reached the hub. Without sending one here the
+      // hub's channel entry for this call is never freed: a host whose bridge
+      // is briefly down leaves a live entry in the hub's `channels` map for
+      // every inbound machine call, goes "busy" to every further caller, and
+      // leaves each of them on a connected-but-silent channel that was never
+      // refused. Same fix, same reason, as `seededPort`'s in server.ts.
+      //
+      // Skip only if the hub already forgot this chan on its own (an incoming
+      // CLOSE set `abandoned` first) — that CLOSE already freed the channel
+      // there, and the number may since have been reused.
+      if (!abandoned) send({ t: "CLOSE", chan: f.chan, reason: "no session" });
+      return;
+    }
     // The hub already forgot this chan while the mint was in flight — close
     // the leg that just arrived instead of resurrecting an entry nothing will
     // ever send a second CLOSE for.
@@ -164,13 +180,21 @@ export function startTieline(opts: TielineOpts): {
       },
     });
     pendingLegs.delete(chan);
-    if (leg !== "refused") {
+    if (leg === "refused") {
+      // Nothing was ever registered under `legs` for this chan, so the leg's
+      // own `close` callback above found its latch false and sent no CLOSE —
+      // leaving the hub holding a channel for a call that has no local end.
+      // Free it explicitly, exactly as `openMachineChannel` and `seededPort`
+      // do, or a placer with a sick bridge burns one of its channel budget
+      // per attempt until it reconnects. `abandoned` guards the same race:
+      // an incoming CLOSE already freed the channel there.
+      if (!abandoned) send({ t: "CLOSE", chan, reason: "no session" });
+    } else if (abandoned) {
       // The hub already forgot this chan while the mint was in flight — close
       // the leg that just arrived instead of resurrecting an entry nothing
       // will ever send a second CLOSE for.
-      if (abandoned) leg.close();
-      else legs.set(chan, leg);
-    }
+      leg.close();
+    } else legs.set(chan, leg);
     return { chan, close: hangUp };
   }
 

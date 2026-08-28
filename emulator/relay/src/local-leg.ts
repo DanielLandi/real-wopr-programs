@@ -11,6 +11,17 @@
 
 import { WebSocket } from "ws";
 import { encodeEnvelope, decodeEnvelope } from "./envelope.ts";
+import { TRUNK_MAX_FRAME_BYTES } from "./trunk.ts";
+
+/** How much the far end may say before this leg's own `/link` finishes
+ *  dialling. Same size, and the same reason, as the hub's cap on the frames
+ *  it holds for an unanswered ring (`SEAT_HELD_MAX_BYTES`, server.ts): this
+ *  is a mutual-untrust boundary, and the per-frame cap plus the channel cap
+ *  bound the COUNT of frames a peer can push, not the total bytes. The dial
+ *  is same-host and quick, so nothing legitimate comes near four frames'
+ *  worth — but "bounded in practice" is not bounded, and this buffer grows
+ *  with no consumer until it is. */
+const HELD_MAX_BYTES = TRUNK_MAX_FRAME_BYTES * 4;
 
 export interface LocalLegOpts {
   bridgeUrl: string;
@@ -57,6 +68,7 @@ export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refu
               `&token=${encodeURIComponent(minted.token)}`;
   const local = new WebSocket(url);
   const buffer: string[] = [];
+  let bufferedBytes = 0;
   let open = false;
 
   /** Only what a program should read. Anything that will not decode into a
@@ -77,11 +89,26 @@ export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refu
     // is exactly what a calling PROGRAM must never be handed as input. Filter
     // on the way IN, not only on the way out.
     if (opts.filterRitual && !forProgram(data)) return;
-    if (open) local.send(data); else buffer.push(data);
+    if (open) { local.send(data); return; }
+    // Holding what the far end said while the dial completes is the point;
+    // holding an unbounded stream of it is a hole. Hang the call up rather
+    // than grow — the reason travels, so the far end learns why.
+    bufferedBytes += Buffer.byteLength(data);
+    if (bufferedBytes > HELD_MAX_BYTES) {
+      buffer.length = 0;
+      // The specific reason first: closing the socket fires `drop`, whose
+      // own "local leg closed" would otherwise be the one the caller's
+      // once-only close guard latches.
+      opts.close("greeting exceeds hold capacity");
+      try { local.close(); } catch { /* still connecting, or already gone */ }
+      return;
+    }
+    buffer.push(data);
   };
 
   local.on("open", () => {
     open = true;
+    bufferedBytes = 0;
     // The origin goes first, ahead of anything the far end already said. The
     // /link leg forwards an unrecognized control envelope straight upstream,
     // and buffers it if the bridge socket is not up yet, so this cannot race.

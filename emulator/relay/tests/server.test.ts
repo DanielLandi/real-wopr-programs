@@ -1431,3 +1431,143 @@ test("ring: a caller that floods an unanswered line is hung up on", async () => 
     seat.close();
   } finally { host.close(); await server.close(); }
 });
+
+// ---- the home slot is one value, not three (fix wave) --------------------
+
+/** A bridge with BOTH faces on one port: the HTTP `POST /api/session` a
+ *  seeded slot's mint goes through, and the WS session socket a `/link` dial
+ *  connects upstream to. `fakeBridge` has only the second, `startStubBridge`
+ *  only the first — a test that drives a direct dial AND a seeded placement
+ *  needs both at the one `bridgeUrl` the server is given. */
+function fullBridge(): Promise<{
+  port: number; seen: string[]; sessions: string[]; close: () => Promise<void>;
+}> {
+  const seen: string[] = [];
+  const sessions: string[] = [];
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      if (req.method === "POST" && req.url === "/api/session") {
+        sessions.push(Buffer.concat(chunks).toString());
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({ session_id: `s${sessions.length}`, token: "t" }));
+        return;
+      }
+      res.writeHead(500);
+      res.end();
+    });
+  });
+  const wss = new WebSocketServer({ server });
+  wss.on("connection", (ws) => {
+    const buffer: Envelope[] = [];
+    ws.on("message", (data) => {
+      const e = decodeEnvelope(data.toString());
+      buffer.push(e);
+      if (e.eom) seen.push(reassemble(buffer.splice(0))[0]!);
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, () => resolve({
+      port: (server.address() as { port: number }).port,
+      seen,
+      sessions,
+      close: () => new Promise<void>((done) => {
+        for (const c of wss.clients) c.terminate();
+        server.close(() => done());
+      }),
+    }));
+  });
+}
+
+test("seats: a non-default homeSlot mints, places and attaches as the SAME exchange",
+     { timeout: 15_000 }, async () => {
+  // Three sites used to derive the home slot independently: the handle a
+  // direct /link dial mints (seededCode(homeSlot)), the exchange
+  // POST /trunk/place places as, and which seeded port keeps the attach()
+  // reference. Configure anything but the default and they disagreed —
+  // handles scoped to SCHOOL's exchange, every placement presenting WOPR's
+  // code — and because a handle another exchange holds is refused exactly
+  // like an unknown one, the operator saw nothing but `seat-gone` forever.
+  const registry = new SeatRegistry();
+  const bridge = await fullBridge();
+  const server = await startServer({
+    port: 0,
+    internalToken: "SECRET",
+    bridgeUrl: `ws://127.0.0.1:${bridge.port}`,
+    config: { ...DEFAULT_CONFIG, mode: "fast" },
+    handshake: { timeScale: 0.01, rng: () => 0.5, failRate: 0 },
+    // WOPR is seeded too, deliberately: the bug is not "the default slot is
+    // missing", it is that the default slot is used INSTEAD of the configured
+    // one. With WOPR present the unfixed code places successfully as WOPR and
+    // is refused by resolve() — the exact failure the operator sees.
+    trunk: { localWorld: [
+      { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+      { slot: "SCHOOL", name: "SEATTLE SCHOOL", region: "SEATTLE US" },
+    ] },
+    seats: { registry, homeSlot: "SCHOOL" },
+  });
+  try {
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1]!;
+    const id = registry.byToken(token)!.id;
+    const said = transcript(seat);
+
+    // A direct dial carrying the token is what mints the handle. Which
+    // exchange it is scoped to is the whole question.
+    const dial = new WebSocket(
+      `ws://127.0.0.1:${server.port}/link?surface=home-terminal` +
+      `&session=22222222-2222-2222-2222-222222222222&token=tk&seat=${token}`);
+    await waitFor(() => bridge.seen.some((m) => m.startsWith("ORIGIN seat ")));
+    const handle = bridge.seen.find((m) => m.startsWith("ORIGIN seat "))!.split(" ")[2]!;
+    dial.close();
+    // The dial held the seat while it was up; a ring would be refused "busy"
+    // until that hold is released, so wait for it rather than sleeping.
+    await waitFor(() => registry.leg(id)?.onCall === false);
+
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      JSON.stringify({ seat: handle }), { "x-wopr-internal-token": "SECRET" });
+    assert.equal(res.status, 201,
+      `the configured home slot must present the code its own handles were minted against: ${res.body}`);
+
+    // The seat is actually rung, by the exchange that placed.
+    const ring = await said.at(1);
+    assert.equal(ring.payload, "RING SEATTLE SCHOOL");
+
+    // ...and the placer's own end got a local leg, which only happens if the
+    // seeded port kept under `homePort` is the one that placed.
+    await waitFor(() => bridge.sessions.some(
+      (b) => (JSON.parse(b) as { surface: string }).surface === "trunk-caller"));
+
+    seat.close();
+  } finally {
+    await server.close();
+    await bridge.close();
+  }
+});
+
+test("ring: a seat leaving mid-RING ends the call as 'seat gone', through the no-playout door", async () => {
+  // `drop` used to call `seats.close(id)` first, which ends a PENDING ring via
+  // the registry's `timedOut()` — reporting "no answer" and draining a playout
+  // into a seat that has gone. `endSeatCall` first takes the door the bridge
+  // documents as reserved for exactly this case.
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // Nobody picks up; the terminal goes away instead.
+    seat.close();
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.chan, placed.chan);
+    assert.equal(closed.reason, "seat gone",
+      "a seat that left is not a caller who went unanswered");
+  } finally { host.close(); await server.close(); }
+});

@@ -265,6 +265,15 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     ringTimeoutMs: opts.seats?.ringTimeoutMs,
     newId: opts.seats?.newId,
   });
+  // Resolved ONCE, here, and read at all three places that care: the handle a
+  // direct `/link` dial mints (linkWss below), the exchange `POST /trunk/place`
+  // places as, and which seeded port keeps the `attach()` reference. Derived
+  // separately, they could disagree — and a `homeSlot` of anything but the
+  // default made them: handles scoped to that slot's exchange, every placement
+  // presenting WOPR's code. `resolve()` refuses a handle the presenting
+  // exchange did not earn identically to an unknown one, so the operator would
+  // see nothing but `seat-gone` and conclude visitors were hanging up.
+  const homeSlot = opts.seats?.homeSlot ?? "WOPR";
 
   // The seat's side of a ring. The hub paces it, because the ANSWERING end
   // paces: the shaper below runs at the profile the seat declared when it
@@ -488,10 +497,10 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     // seeded slot with a reason to ring anyone back. The ORIGIN envelope
     // below is still delivered to whichever program this session's bridge
     // actually connects to, which — because the leg can't see the session —
-    // may be a sibling seeded program, not Joshua: the handle names WOPR's
-    // exchange regardless of who ends up reading it.
+    // may be a sibling seeded program, not Joshua: the handle names the HOME
+    // slot's exchange regardless of who ends up reading it.
     const seatToken = url.searchParams.get("seat");
-    const homeCode = switchboard.seededCode(opts.seats?.homeSlot ?? "WOPR");
+    const homeCode = switchboard.seededCode(homeSlot);
     const seatLeg = seatToken ? seats.byToken(seatToken) : undefined;
     let handle: string | undefined;
     if (seatToken && homeCode) {
@@ -751,14 +760,23 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       releasePending();
       if (seatPing) clearInterval(seatPing);
       if (id !== undefined) {
-        // Two notifications, because the registry only owns one of them.
-        // `close()` tells a PENDING ring its seat is gone (it fires
-        // `timedOut`); an ANSWERED call has no such notification, and the
-        // machine on the other end would otherwise hold a channel to a
-        // departed seat until its own timeout. The bridge owns that wire, so
-        // it ends it — a no-op if the ring above already did.
-        seats.close(id);
+        // Two notifications, because the registry only owns one of them —
+        // and in THIS order, because the bridge owns the wire.
+        //
+        // `endSeatCall` first: it ends whatever the seat was on — a pending
+        // ring or an answered call — through the bridge's own
+        // `end(reason, playOut: false)`, the path documented as reserved for
+        // exactly this case, a seat that has gone with nobody left to hear a
+        // playout. Calling `seats.close(id)` first would end a PENDING ring
+        // via the registry's `timedOut()` instead, which reports "no answer"
+        // and drains a playout into a departed seat.
+        //
+        // `seats.close` still has to follow: it is what tears the leg, its
+        // token and its handles out of the registry. Its own ring
+        // notification is a no-op by then — `end` cleared the ring on the
+        // way past.
         endSeatCall(id, "seat gone");
+        seats.close(id);
       }
     };
     client.on("close", drop);
@@ -904,11 +922,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
                                 opts.trunk?.pingIntervalMs ?? 30_000);
 
   // Every seeded slot gets its port at startup, once the hub knows its own
-  // address — the WOPR reference is kept so POST /trunk/place can attach the
-  // placer's own local leg after a successful placeCall (Switchboard.placeCall
-  // sends an OPEN only to the target; the placer's end is an internal
-  // peerPort with nothing to talk to a program otherwise).
-  let woprPort: (TrunkPort & { attach(chan: number): void }) | undefined;
+  // address — the HOME slot's reference is kept so POST /trunk/place can
+  // attach the placer's own local leg after a successful placeCall
+  // (Switchboard.placeCall sends an OPEN only to the target; the placer's end
+  // is an internal peerPort with nothing to talk to a program otherwise).
+  // Which slot that is comes from `homeSlot` above — the same value the route
+  // places as, so the port attached is always the exchange that placed.
+  let homePort: (TrunkPort & { attach(chan: number): void }) | undefined;
 
   /** Body reader for the routes below — NOT the `/x/<code>` REST relay just
    *  above, which reads inline for a reason specific to it (relaying, not
@@ -1006,7 +1026,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "malformed body" })); return;
       }
-      const from = switchboard.seededCode("WOPR");
+      const from = switchboard.seededCode(homeSlot);
       if (!from) {
         res.writeHead(409, { "content-type": "application/json" });
         res.end(JSON.stringify({ refused: "offline" })); return;
@@ -1029,7 +1049,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         // is an internal peerPort with no program on the other side of it —
         // attach() is what gives the flagship's own line something to talk
         // with.
-        woprPort?.attach(r.chan);
+        homePort?.attach(r.chan);
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ chan: r.chan }));
       }
@@ -1056,7 +1076,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     const p = seededPort(seed, bridgeUrl, commsUrl, (f) => switchboard.handleHostFrame(code, f));
     switchboard.seedPort(seed.slot, p);
     seededPorts.push(p);
-    if (seed.slot === "WOPR") woprPort = p;
+    if (seed.slot === homeSlot) homePort = p;
   }
 
   return {

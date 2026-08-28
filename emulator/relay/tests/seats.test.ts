@@ -289,3 +289,52 @@ test("seats: a token collision's error message contains no id or token value", (
     },
   );
 });
+
+test("seats: a port that throws on RING refuses the call, arms nothing, and logs no token", () => {
+  // `ring` sends the RING envelope outside any try/catch, and the hub calls it
+  // from inside `trunkWss`'s message handler — a throwing SeatPort was an
+  // unhandled exception in the process that also serves production `/link`.
+  // Unreachable through the shipped port; this is the hardening.
+  const { reg, timers } = registry();
+  let hostile = false;
+  const port = {
+    // The message is attacker-chosen and shaped like the one thing that must
+    // never be logged: this seat's own token.
+    send: () => { if (hostile) throw new Error("token SECRETTOKEN"); },
+    close: () => {},
+  };
+  const { id } = reg.open(port, "home-terminal");
+  hostile = true;
+
+  const fired: string[] = [];
+  const handlers = {
+    answered: () => fired.push("answered"),
+    rejected: () => fired.push("rejected"),
+    timedOut: () => fired.push("timedOut"),
+  };
+  const logged: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
+  let outcome: string;
+  try {
+    outcome = reg.ring(id, "PAN AM", handlers);
+  } finally {
+    console.error = realError;
+  }
+
+  assert.equal(outcome, "seat-gone", "a seat whose port cannot be written to cannot be rung");
+  assert.deepEqual(timers.filter((t) => !t.cancelled), [],
+                   "a failed ring must leave no armed timer behind");
+  assert.deepEqual(fired, [], "no handler fires for a ring that never went out");
+  assert.equal(reg.leg(id)!.onCall, false, "and the seat is not left busy");
+  // Nothing half-registered: answer/reject find no ring to latch onto.
+  reg.answer(id); reg.reject(id);
+  assert.deepEqual(fired, []);
+  assert.ok(logged.length > 0, "the failure is still reported to the operator");
+  assert.ok(!logged.join(" ").includes("SECRETTOKEN"),
+            "the port's own error text must never reach a log line");
+
+  // And once the port works again the seat rings normally.
+  hostile = false;
+  assert.equal(reg.ring(id, "PAN AM", handlers), "ringing");
+});

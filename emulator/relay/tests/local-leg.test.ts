@@ -174,3 +174,44 @@ test("local-leg: a refused mint is a close with a reason, never a hang", async (
     assert.match(closes[0] ?? "", /session/i);
   } finally { await s.close(); }
 });
+
+test("local-leg: frames held before the dial completes are bounded, not unbounded", async () => {
+  // The dial is same-host and quick, so nothing legitimate comes near the cap
+  // — but "bounded in practice" is not bounded, and this is the same
+  // mutual-untrust boundary the hub's held-ring frames are capped at.
+  const s = await stubs();
+  const closes: Array<string | undefined> = [];
+  try {
+    const leg = await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
+      send: () => {}, close: (r) => closes.push(r),
+    });
+    if (leg === "refused") throw new Error("the mint should have succeeded");
+    // Synchronously, before the WebSocket has finished connecting: every one
+    // of these is held rather than sent.
+    const big = "x".repeat(8192);
+    for (let i = 0; i < 5; i++) leg.deliver(big);
+    assert.equal(closes[0], "greeting exceeds hold capacity",
+                 "past the cap the call is hung up, not grown");
+    await settle();
+    assert.deepEqual(s.received, [], "and nothing held past the cap is ever delivered");
+  } finally {
+    await s.close();
+  }
+});
+
+test("local-leg: frames under the cap are still held and flushed on connect", async () => {
+  const s = await stubs();
+  try {
+    const leg = await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
+      send: () => {}, close: () => {},
+    });
+    if (leg === "refused") throw new Error("the mint should have succeeded");
+    leg.deliver("x".repeat(8192));
+    await settle();
+    assert.equal(s.received.length, 1, "the cap must not cost the ordinary case its buffer");
+  } finally {
+    await s.close();
+  }
+});

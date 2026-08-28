@@ -196,7 +196,29 @@ export class SeatRegistry {
       leg.ring = undefined;
       h.timedOut();
     });
-    this.envelope(id, `RING ${name}`);
+    try {
+      this.envelope(id, `RING ${name}`);
+    } catch {
+      // port.send() threw (a hostile or broken SeatPort). This runs inside
+      // the hub's `message` handler for the caller's PLACE, so letting it
+      // escape is an unhandled exception in the process that also serves
+      // production `/link`. Unwind the ring completely instead — disarm the
+      // timer and clear `leg.ring` — so a seat whose port cannot even be
+      // rung is not left armed and "busy" for the whole ring window, and no
+      // half-registered ring survives for `answer`/`reject` to latch onto.
+      //
+      // "seat-gone" is the honest refusal and the safe one: a port that
+      // cannot be written to is a seat that cannot be reached, and the
+      // reason is already indistinguishable from an unknown handle.
+      //
+      // NOTHING from the error is logged. The thrower is the port, so its
+      // message is attacker-chosen text that could carry this leg's token —
+      // the one thing that must never reach a machine, a log line included.
+      record.cancel();
+      leg.ring = undefined;
+      console.error("seat: RING send failed; the seat's port is unusable");
+      return "seat-gone";
+    }
     return "ringing";
   }
 

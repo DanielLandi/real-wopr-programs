@@ -543,6 +543,12 @@ export class Switchboard {
           timeoutMs = 10_000): Promise<{ status: number; body: string }> {
     const ex = this.exchanges.get(code);
     if (!ex) return Promise.reject("offline");
+    // A seeded slot has no host socket, so `port?.send` below is a silent
+    // no-op and the RESPONSE that would settle this promise can never come:
+    // the caller sits out the full timeout for an answer nothing is composing.
+    // Fail fast with the same reason an unknown code gets — the server maps
+    // "offline" to 404 either way.
+    if (!ex.port) return Promise.reject("offline");
     const rid = ex.nextRid++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { ex.pending.delete(rid); reject("timeout"); }, timeoutMs);
@@ -694,7 +700,8 @@ export class Switchboard {
     // Seeded slots are exchanges too (see the constructor), so a PLACE to the
     // flagship's own WOPR can resolve here exactly like a registered one — it
     // just has no port until seedPort() attaches one, which the guard below
-    // answers "offline" for, matching `GET /trunk/directory` honestly.
+    // answers "offline" for. (`GET /trunk/directory` does NOT agree: it still
+    // prints a portless seed as `online: true`.)
     let target: Exchange | undefined;
     for (const ex of this.exchanges.values()) {
       if (ex.world === world && ex.slot === to.slot) { target = ex; break; }
