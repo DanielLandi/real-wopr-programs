@@ -171,9 +171,12 @@ export function startTieline(opts: TielineOpts): {
       channels.clear();
       for (const leg of legs.values()) leg.close();
       legs.clear();
-      // Cancellers with no chan left to reference — the dropped hub
-      // connection means no CLOSE is coming for these either way, so there
-      // is nothing to abandon, only to forget.
+      // Mark every in-flight mint abandoned before dropping the map — the
+      // dropped hub connection means no CLOSE is ever coming for these, and
+      // a reconnect reuses the same small chan numbers, so a stale mint
+      // resolving later must not resurrect (or worse, overwrite a genuinely
+      // new call's) entry in the post-reconnect `legs` map.
+      for (const cancel of pendingLegs.values()) cancel();
       pendingLegs.clear();
       // The hub is gone — every in-flight place() would otherwise hang
       // forever waiting for a PLACED/REFUSED that can no longer arrive.

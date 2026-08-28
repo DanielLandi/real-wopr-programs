@@ -734,3 +734,71 @@ test("tieline: a hub CLOSE that arrives while a machine call's mint is in flight
     t.stop(); hub.close(); await comms.close(); await bridge.close();
   }
 });
+
+test("tieline: a dropped hub connection cancels an in-flight machine mint before it can leak or misroute",
+     { timeout: 20_000 }, async () => {
+  // pendingLegs.clear() alone only removes the LOOKUP entry — it does not
+  // touch the closure's captured `abandoned` variable. If retry() (a dropped
+  // hub connection) does not also invoke every stored canceller, a mint that
+  // is still in flight never learns it was abandoned: when it resolves it
+  // falls through to the unconditional legs.set(), resurrecting an entry on
+  // the very same `legs` map the reconnect will keep using. Worse, channel
+  // numbering restarts after a reconnect, so that stale resolve can silently
+  // overwrite — or in this test, be reachable as — a chan number a genuinely
+  // new call reuses.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ sessionDelayMs: 300 });
+  const hub = new WebSocketServer({ port: 0 });
+  const connections: WebSocket[] = [];
+  const framesBySocket = new Map<WebSocket, Array<{ t: string; chan?: number }>>();
+  hub.on("connection", (ws) => {
+    connections.push(ws);
+    const seen: Array<{ t: string; chan?: number }> = [];
+    framesBySocket.set(ws, seen);
+    ws.on("message", (data) => { seen.push(JSON.parse(data.toString())); });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: true,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    const untilConnected = async (n: number) => {
+      const deadline = Date.now() + 9000;
+      while (connections.length < n && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      assert.ok(connections.length >= n, `expected ${n} connection(s), got ${connections.length}`);
+    };
+
+    await untilConnected(1);
+    // Place a machine call whose mint (300ms) will still be outstanding when
+    // this connection goes away.
+    connections[0].send(JSON.stringify({
+      t: "OPEN", chan: 9, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await new Promise((r) => setTimeout(r, 50));           // well inside the mint delay
+    connections[0].terminate();                            // the hub connection drops mid-mint
+
+    // Past both the mint delay and the fixed 5s reconnect backoff.
+    await untilConnected(2);
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the stale mint to actually complete");
+
+    // The stale mint is long resolved by now. If it leaked into the shared
+    // `legs` map (the bug this fixes), this FRAME — sent on the NEW
+    // connection, for the SAME reused chan number — is relayed to the zombie
+    // leg from the dropped call instead of being dropped as unrecognized,
+    // and its echo comes back out over the CURRENT hub connection.
+    connections[1].send(JSON.stringify({ t: "FRAME", chan: 9, data: "PING" }));
+    await new Promise((r) => setTimeout(r, 300));
+    const onSecond = framesBySocket.get(connections[1]) ?? [];
+    assert.equal(
+      onSecond.some((f) => f.t === "FRAME" && f.chan === 9),
+      false,
+      "a stale mint from a dropped connection must not resurrect or misroute chan 9 on the new one",
+    );
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
