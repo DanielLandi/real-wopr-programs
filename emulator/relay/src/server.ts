@@ -54,7 +54,11 @@ export interface ServerOpts {
      *  dial cannot mint a handle for whichever seeded program the terminal
      *  meant to reach; it mints instead for the hub's own Joshua line, the
      *  only seeded slot with a reason to ring anyone back (the film's
-     *  callback beat is Joshua's alone). Defaults to "WOPR". */
+     *  callback beat is Joshua's alone). The resulting ORIGIN envelope is
+     *  still delivered to whichever program the session actually reached —
+     *  which may be a sibling seeded program, not Joshua — so the handle it
+     *  carries names WOPR's exchange regardless of who ends up reading it.
+     *  Defaults to "WOPR". */
     homeSlot?: string;
     /** @internal Test seam only — NOT a supported extension point into a
      *  security-critical registry. Use this exact registry instead of
@@ -333,11 +337,27 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     // A direct dial reaches the hub's own bridge, and which seeded slot it
     // reached rides in the session the terminal minted — which this leg never
     // sees. So the handle is minted for the hub's own Joshua line: the only
-    // seeded slot with a reason to ring anyone back.
+    // seeded slot with a reason to ring anyone back. The ORIGIN envelope
+    // below is still delivered to whichever program this session's bridge
+    // actually connects to, which — because the leg can't see the session —
+    // may be a sibling seeded program, not Joshua: the handle names WOPR's
+    // exchange regardless of who ends up reading it.
     const seatToken = url.searchParams.get("seat");
     const homeCode = switchboard.seededCode(opts.seats?.homeSlot ?? "WOPR");
     const seatLeg = seatToken ? seats.byToken(seatToken) : undefined;
-    const handle = seatToken && homeCode ? seats.mint(seatToken, homeCode) : undefined;
+    let handle: string | undefined;
+    if (seatToken && homeCode) {
+      try {
+        handle = seats.mint(seatToken, homeCode);
+      } catch (err) {
+        // Same capability-escape handling as seatWss's open() and relayWss's
+        // mint() — see seats.ts.
+        console.error(`seat: mint() failed for surface "${surface}":`,
+                      err instanceof Error ? err.message : err);
+        client.close(1011, "seat registry error");
+        return;
+      }
+    }
     if (seatLeg) seats.hold(seatLeg.id);
 
     // One shaper per direction; seq is monotonic per direction (§5).
@@ -656,7 +676,32 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     // An unknown or dead token is ignored, not fatal: the dial proceeds as an
     // anonymous visitor, no handle is minted, and nothing is said about it — a
     // stale browser tab must still be able to phone a machine.
-    const handle = seatToken === null ? undefined : seats.mint(seatToken, code);
+    //
+    // Only mint against a code the switchboard actually holds live. `/x/
+    // [A-Z2-9]{6}/link` upgrades are not rate-limited, and mint() keys its
+    // per-seat handle map on `code` — minting ahead of openChannel, the way
+    // this used to work, let one seat token accumulate an unbounded number of
+    // handle entries for the life of the seat just by dialling distinct
+    // codes that were never going anywhere (openChannel would refuse every
+    // one of them "offline", after the handle already existed). Checking
+    // isLive first bounds that to the number of exchanges that actually
+    // exist. A live exchange can still refuse the OPEN itself (busy/oversize)
+    // after the mint — that residual case is bounded by the same live-
+    // exchange count, not by how many codes a caller can type.
+    let handle: string | undefined;
+    if (seatToken !== null && switchboard.isLive(code)) {
+      try {
+        handle = seats.mint(seatToken, code);
+      } catch (err) {
+        // mint() treats a handle collision as a capability escape, not an
+        // ordinary failure (see seats.ts) — it must not vanish into a bare
+        // close. Same shape as seatWss's open() catch just above.
+        console.error(`seat: mint() failed for exchange "${code}":`,
+                      err instanceof Error ? err.message : err);
+        client.close(1011, "seat registry error");
+        return;
+      }
+    }
     const chan = switchboard.openChannel(code, client, params.toString(),
                                          handle ? { seat: handle } : undefined);
     if (typeof chan !== "number") {

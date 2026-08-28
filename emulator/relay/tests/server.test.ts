@@ -27,6 +27,18 @@ function nextMessage(ws: WebSocket): Promise<string> {
   });
 }
 
+/** Reads JSON trunk frames off `ws` until one satisfies `pred`, discarding
+ *  any that do not. A test that just closed a channel and is now waiting on
+ *  the NEXT call's OPEN cannot assume that OPEN is the very next frame: the
+ *  CLOSE from the channel it just tore down is in flight on the same socket
+ *  and can land first. Taking `nextMessage` blind races that ordering. */
+async function nextFrame<T = any>(ws: WebSocket, pred: (f: any) => boolean): Promise<T> {
+  for (;;) {
+    const f = JSON.parse(await nextMessage(ws));
+    if (pred(f)) return f as T;
+  }
+}
+
 // Sends the seat-leg control handshake: `SEAT?` is answered with `SEAT
 // <token>` only in reply, never on connect (see server.ts's seatWss comment)
 // — so every test that needs a token asks for one explicitly.
@@ -886,18 +898,54 @@ test("seat: a dial carrying a token discloses a handle to the exchange it called
 
     const first = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
-    const open1 = JSON.parse(await nextMessage(host));
+    const open1 = await nextFrame(host, (f) => f.t === "OPEN");
     assert.ok(open1.origin && typeof open1.origin.seat === "string",
       "a machine learns who called by being called");
     first.close();
 
+    // first.close() -> cleanup -> closeChannel sends the host a CLOSE for
+    // chan 1, on the same socket the second call's OPEN is about to arrive
+    // on. Which lands first is a race this test must not assume the answer
+    // to — drain until the frame is actually an OPEN, discarding a stray
+    // CLOSE from the call just torn down.
     const second = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
-    const open2 = JSON.parse(await nextMessage(host));
+    const open2 = await nextFrame(host, (f) => f.t === "OPEN");
     assert.equal(open2.origin.seat, open1.origin.seat,
       "one seat, one exchange, one handle — across calls");
     second.close(); seat.close();
   } finally { host.close(); await server.close(); }
+});
+
+test("seat: a seat's handle for one exchange differs from its handle for another", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const hostA = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  const hostB = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    hostA.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
+      region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+    const panam = JSON.parse(await nextMessage(hostA));
+    hostB.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PROTOVISION",
+      region: "SUNNYVALE US", joshua: "period", world: 1, slot: "PROTOVISION" }));
+    const proto = JSON.parse(await nextMessage(hostB));
+
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
+
+    const toPanam = new WebSocket(`ws://127.0.0.1:${server.port}/x/${panam.exchange}/link` +
+      `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
+    const openPanam = await nextFrame(hostA, (f) => f.t === "OPEN");
+    toPanam.close();
+
+    const toProto = new WebSocket(`ws://127.0.0.1:${server.port}/x/${proto.exchange}/link` +
+      `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
+    const openProto = await nextFrame(hostB, (f) => f.t === "OPEN");
+    toProto.close(); seat.close();
+
+    assert.notEqual(openPanam.origin.seat, openProto.origin.seat,
+      "PAN AM and PROTOVISION must hold different handles for the same seat");
+  } finally { hostA.close(); hostB.close(); await server.close(); }
 });
 
 test("seat: a dial without a token discloses nothing", async () => {
@@ -913,4 +961,82 @@ test("seat: a dial without a token discloses nothing", async () => {
     assert.equal(open.origin, undefined, "a stale tab still gets to phone a machine");
     visitor.close();
   } finally { host.close(); await server.close(); }
+});
+
+test("seat: an unknown or dead token discloses nothing, and the dial still succeeds", async () => {
+  const registry = new SeatRegistry();
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] }, seats: { registry } });
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
+      region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+    const assigned = JSON.parse(await nextMessage(host));
+
+    // Unknown: a token this hub never minted at all — not merely absent.
+    const unknown = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S1&token=T1&seat=not-a-real-token`);
+    const openUnknown = await nextFrame(host, (f) => f.t === "OPEN");
+    assert.equal(openUnknown.origin, undefined, "an unknown token discloses nothing");
+    unknown.close();
+
+    // Dead: a token that WAS real, but whose seat leg has since closed.
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1]!;
+    seat.close();
+    await waitFor(() => registry.byToken(token) === undefined);
+
+    const dead = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
+    const openDead = await nextFrame(host, (f) => f.t === "OPEN");
+    assert.equal(openDead.origin, undefined,
+      "a dead token discloses nothing, and a stale tab can still phone a machine");
+    dead.close();
+  } finally { host.close(); await server.close(); }
+});
+
+test("link: a direct dial carrying a token discloses its origin as an ORIGIN control envelope", async () => {
+  // The homeSlot limitation (WOPR): a direct /link dial can only ever mint
+  // against the hub's own seeded Joshua line, so that seed must exist for
+  // this test to see a handle minted at all.
+  const bridge = await fakeBridge();
+  const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
+  config.mode = "fast";
+  const server = await startServer({
+    port: 0,
+    bridgeUrl: `ws://127.0.0.1:${bridge.port}`,
+    internalToken: "test-secret",
+    config,
+    handshake: { timeScale: 0.01, rng: () => 0.5, failRate: 0 },
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] },
+  });
+  try {
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(seat);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${server.port}/link?surface=home-terminal` +
+      `&session=22222222-2222-2222-2222-222222222222&token=tk&seat=${token}`,
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("no CONNECTED")), 5000);
+      ws.on("message", (data) => {
+        const e = decodeEnvelope(data.toString());
+        if (e.kind === "handshake" && e.eom && e.payload.startsWith("CONNECT")) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+      ws.on("error", reject);
+    });
+    await waitFor(() => bridge.seen.length > 0);
+    assert.match(bridge.seen[0]!, /^ORIGIN seat \S+$/,
+      "a direct dial carrying a token discloses its origin as the first thing the bridge receives");
+    ws.close();
+    seat.close();
+  } finally {
+    await server.close();
+    bridge.close();
+  }
 });

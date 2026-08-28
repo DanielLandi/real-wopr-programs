@@ -431,6 +431,16 @@ export class Switchboard {
     for (const p of ex.pending.values()) { clearTimeout(p.timer); p.reject("dropped"); }
   }
 
+  /** Whether `code` names an exchange that could actually take an OPEN right
+   *  now — registered (or seeded) AND ported. Mirrors openChannel's two
+   *  "offline" checks exactly, so a caller can decide whether an action tied
+   *  to `code` (minting a seat handle, say) is worth taking at all, before
+   *  finding out — after already taking it — that the code was never real. */
+  isLive(code: string): boolean {
+    const ex = this.exchanges.get(code);
+    return !!ex && !!ex.port;
+  }
+
   openChannel(code: string, client: ChannelPort, query: string,
               origin?: CallOrigin): number | "offline" | "busy" | "oversize" {
     const ex = this.exchanges.get(code);

@@ -33,6 +33,12 @@ interface Leg extends SeatLeg {
   /** exchange code -> the handle that exchange holds for this seat. */
   handles: Map<string, string>;
   ring?: { h: RingHandlers; cancel: () => void };
+  /** How many independent holders currently keep this seat busy. An answered
+   *  ring holds one; a leg that seat has dialled out on holds another — both
+   *  can be true at once (a visitor mid-conversation dials a second machine
+   *  from the same terminal), and the seat stays busy until every holder has
+   *  let go. `onCall` (the public, boolean face of this) is `holds > 0`. */
+  holds: number;
 }
 
 function randomId(): string {
@@ -85,7 +91,7 @@ export class SeatRegistry {
     // that must stay confidential.
     if (this.legs.has(id)) throw new Error("seat id collision");
     if (this.byTokenIdx.has(token)) throw new Error("seat token collision");
-    this.legs.set(id, { id, surface, port, onCall: false, token, handles: new Map() });
+    this.legs.set(id, { id, surface, port, onCall: false, token, handles: new Map(), holds: 0 });
     this.byTokenIdx.set(token, id);
     try {
       this.envelope(id, `SEAT ${token}`);
@@ -105,6 +111,9 @@ export class SeatRegistry {
   close(id: string): void {
     const leg = this.legs.get(id);
     if (!leg) return;
+    // No holds bookkeeping needed here regardless of how many holders were
+    // outstanding: the leg itself is deleted below, so there is no `onCall`
+    // left for a stray release() to observe, correctly or otherwise.
     if (leg.ring) {
       const ring = leg.ring;
       ring.cancel();
@@ -129,8 +138,13 @@ export class SeatRegistry {
   leg(id: string): SeatLeg | undefined { return this.legs.get(id); }
 
   /** This seat is on a call — a dialled one, not only an answered ring — so it
-   *  is busy to anyone trying to ring it. */
-  hold(id: string): void { const leg = this.legs.get(id); if (leg) leg.onCall = true; }
+   *  is busy to anyone trying to ring it. A COUNTER, not a flag: an answered
+   *  ring and a leg that seat has dialled out on can both hold the same seat
+   *  at once (a visitor mid-conversation dials a second machine from the same
+   *  terminal), and each call to `hold` must be matched by its own call to
+   *  `release` — one holder letting go must never clear a flag another holder
+   *  is still relying on. */
+  hold(id: string): void { const leg = this.legs.get(id); if (leg) { leg.holds += 1; leg.onCall = true; } }
 
   mint(token: string, code: string): string | undefined {
     const id = this.byTokenIdx.get(token);
@@ -139,6 +153,13 @@ export class SeatRegistry {
     const existing = leg.handles.get(code);
     if (existing !== undefined) return existing;
     const handle = this.newId();
+    // A collision would let a hostile newId() (injected from server options)
+    // silently overwrite an existing handleIdx entry — the SAME capability
+    // escape open() guards against for id/token: a handle that used to name
+    // one seat would start naming another, invisibly, while the old holder's
+    // handles map still claims it too. Throw before mutating anything, so a
+    // collision never leaves a half-updated (handles, handleIdx) pair behind.
+    if (this.handleIdx.has(handle)) throw new Error("seat handle collision");
     leg.handles.set(code, handle);
     this.handleIdx.set(handle, { id: leg.id, code });
     return handle;
@@ -179,6 +200,7 @@ export class SeatRegistry {
     if (!leg || !ring) return;
     ring.cancel();
     leg.ring = undefined;
+    leg.holds += 1;
     leg.onCall = true;
     ring.h.answered();
   }
@@ -192,10 +214,16 @@ export class SeatRegistry {
     ring.h.rejected();
   }
 
-  /** The call this seat was on has ended; it can be rung again. */
+  /** One holder's call has ended. The seat is ringable again only once every
+   *  holder has released — an answered ring and a leg it dialled out on both
+   *  hold it, and this must decrement, not clear, so releasing one leaves the
+   *  other's hold intact. Never goes negative: an extra release beyond the
+   *  legitimate holders is a caller bug, not a reason to make onCall lie. */
   release(id: string): void {
     const leg = this.legs.get(id);
-    if (leg) leg.onCall = false;
+    if (!leg) return;
+    leg.holds = Math.max(0, leg.holds - 1);
+    leg.onCall = leg.holds > 0;
   }
 
   private envelope(id: string, payload: string): void {

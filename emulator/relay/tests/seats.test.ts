@@ -134,6 +134,26 @@ test("seats: ringing an unknown leg is seat-gone", () => {
   assert.equal(reg.ring("NOPE", "PAN AM", { answered: () => {}, rejected: () => {}, timedOut: () => {} }), "seat-gone");
 });
 
+test("seats: hold/release is a counter — a dialled leg's release must not clear an answered ring's hold", () => {
+  // An answered ring and a leg that same seat dials out on (from the same
+  // terminal, mid-conversation) each hold the seat independently. If a
+  // holder is a flag rather than a count, the SECOND holder's release wipes
+  // whatever the first one set — the seat goes ringable in the middle of a
+  // live, answered call.
+  const { reg } = registry();
+  const { id } = reg.open(fakeSeat(), "home-terminal");
+  const noop = { answered: () => {}, rejected: () => {}, timedOut: () => {} };
+  reg.ring(id, "PAN AM", noop);
+  reg.answer(id);           // holder #1: the answered call
+  reg.hold(id);              // holder #2: a call this seat placed meanwhile
+  reg.release(id);           // holder #2 lets go — its own call ended
+  assert.equal(reg.ring(id, "PROTOVISION", noop), "busy",
+    "the answered call's hold must survive an unrelated holder's release");
+  reg.release(id);           // holder #1 lets go — the answered call ended
+  assert.equal(reg.ring(id, "PROTOVISION", noop), "ringing",
+    "once every holder has released, the seat is ringable again");
+});
+
 test("seats: default registry uses CSPRNG (source invariant check)", () => {
   // The guarantee is "this module's default generator is cryptographic". A revert to
   // Math.random() is the failure this test must catch. No behavioural assertion can
