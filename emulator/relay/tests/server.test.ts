@@ -6,9 +6,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer, seededPort } from "../src/server.ts";
 import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
+import type { TrunkFrame } from "../src/trunk.ts";
 
 function httpJson(method: string, url: string, body?: string,
                   headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
@@ -28,7 +29,12 @@ function httpJson(method: string, url: string, body?: string,
 // body — enough for openLocalLeg's mint to succeed. Everything else answers
 // 500, so a request that should never happen (a REST path leaking through)
 // is visible as a 500 instead of silently succeeding.
-function startStubBridge(): Promise<{
+//
+// `fail: true` makes every /api/session mint refuse (a 500), for testing
+// what happens when a mint never gets a session. `delayMs` holds the
+// response open for that long — the hook a race test needs to land a CLOSE
+// while a mint is still in flight, deterministically rather than by luck.
+function startStubBridge(opts?: { fail?: boolean; delayMs?: number }): Promise<{
   port: number;
   requests: Array<{ method: string; path: string; body: string }>;
   close: () => Promise<void>;
@@ -41,13 +47,17 @@ function startStubBridge(): Promise<{
       req.on("end", () => {
         const body = Buffer.concat(chunks).toString();
         requests.push({ method: req.method ?? "", path: req.url ?? "", body });
-        if (req.method === "POST" && req.url === "/api/session") {
-          res.writeHead(201, { "content-type": "application/json" });
-          res.end(JSON.stringify({ session_id: `s${requests.length}`, token: "t" }));
-          return;
-        }
-        res.writeHead(500);
-        res.end();
+        const respond = () => {
+          if (req.method === "POST" && req.url === "/api/session" && !opts?.fail) {
+            res.writeHead(201, { "content-type": "application/json" });
+            res.end(JSON.stringify({ session_id: `s${requests.length}`, token: "t" }));
+            return;
+          }
+          res.writeHead(500);
+          res.end();
+        };
+        if (opts?.delayMs) setTimeout(respond, opts.delayMs);
+        else respond();
       });
     });
     server.listen(0, () => {
@@ -55,6 +65,33 @@ function startStubBridge(): Promise<{
         port: (server.address() as { port: number }).port,
         requests,
         close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+}
+
+// Stub local comms: a bare WebSocketServer that echoes every text frame
+// straight back — enough for a local leg to have somewhere real to dial and
+// stay open, without pulling in the full /link ritual (handshake, shaper,
+// upstream bridge) that this file's other tests already cover end to end.
+function startStubComms(): Promise<{
+  port: number;
+  wss: WebSocketServer;
+  close: () => Promise<void>;
+}> {
+  return new Promise((resolve) => {
+    const wss = new WebSocketServer({ port: 0 });
+    wss.on("connection", (ws) => {
+      ws.on("message", (data) => ws.send(data.toString()));
+    });
+    wss.on("listening", () => {
+      resolve({
+        port: (wss.address() as { port: number }).port,
+        wss,
+        close: () => new Promise<void>((r) => {
+          for (const c of wss.clients) c.terminate();
+          wss.close(() => r());
+        }),
       });
     });
   });
@@ -406,4 +443,184 @@ test("trunk/place: a successful placement mints a session for the placer, not on
     await server.close();
     await bridge.close();
   }
+});
+
+// ---- seededPort unit coverage (fix round 1): PING/REQUEST, the double-fire
+// close guard, mid-mint CLOSE cancellation, and a refused mint's CLOSE ------
+//
+// seededPort is exported specifically so these can be tested directly,
+// the way local-leg.test.ts tests openLocalLeg directly — a seeded slot's
+// internal exchange code is never exposed on any public interface (the
+// directory deliberately omits it, see trunk.ts's `directory()`), so PING
+// and REQUEST in particular have no route in through startServer's HTTP/WS
+// surface at all.
+
+test("seededPort: PING answers PONG", () => {
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    "ws://127.0.0.1:1", "ws://127.0.0.1:1", (f) => up.push(f),
+  );
+  port.send(JSON.stringify({ t: "PING" }));
+  assert.deepEqual(up, [{ t: "PONG" }]);
+});
+
+test("seededPort: REQUEST answers 404 promptly, never Switchboard.request()'s timeout", () => {
+  // A seeded slot has no REST host behind it — the hub synthesizes its
+  // directory entry itself — so nothing should ever wait on one.
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    "ws://127.0.0.1:1", "ws://127.0.0.1:1", (f) => up.push(f),
+  );
+  port.send(JSON.stringify({ t: "REQUEST", rid: 42, method: "GET", path: "/api/games" }));
+  assert.deepEqual(up, [{ t: "RESPONSE", rid: 42, status: 404, body: "{}" }]);
+});
+
+test("seededPort: a refused mint frees the channel with an explicit CLOSE", async () => {
+  // openLocalLeg's own `close` callback fires before the mint even resolves
+  // ("no session"), with nothing yet registered under `legs` for the guard
+  // to find — so without an explicit CLOSE from the `.then()` branch here,
+  // Exchange.channels keeps this chan forever (sweepDead skips seeded
+  // exchanges; nothing else reaps them).
+  const bridge = await startStubBridge({ fail: true });
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    `ws://127.0.0.1:${bridge.port}`,
+    "ws://127.0.0.1:1", // never dialled: the mint fails before any /link attempt
+    (f) => up.push(f),
+  );
+  try {
+    port.send(JSON.stringify({ t: "OPEN", chan: 3, query: "", origin: { world: 1, slot: "PANAM" } }));
+    const deadline = Date.now() + 2000;
+    while (up.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(up, [{ t: "CLOSE", chan: 3, reason: "no session" }]);
+  } finally {
+    port.close();
+    await bridge.close();
+  }
+});
+
+test("seededPort: a CLOSE that arrives while a machine call's mint is in flight does not leak the leg", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ delayMs: 200 });
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    `ws://127.0.0.1:${bridge.port}`,
+    `ws://127.0.0.1:${comms.port}`,
+    (f) => up.push(f),
+  );
+  try {
+    port.send(JSON.stringify({ t: "OPEN", chan: 7, query: "", origin: { world: 1, slot: "PANAM" } }));
+    // Well inside the 200ms mint delay: the session POST has not resolved yet.
+    await new Promise((r) => setTimeout(r, 50));
+    port.send(JSON.stringify({ t: "CLOSE", chan: 7 }));
+    // Past the mint delay: the leg has now resolved, found itself abandoned,
+    // and must have closed rather than registering under chan 7 or sending
+    // anything else upstream.
+    await new Promise((r) => setTimeout(r, 350));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the mint to actually complete");
+    assert.deepEqual(up, [], "an abandoned mint must not send anything upstream");
+    // A live (leaked) leg would deliver this to the echoing stub comms and
+    // relay the echo back as an upstream FRAME. An abandoned leg has nothing
+    // registered under chan 7 to deliver to.
+    port.send(JSON.stringify({ t: "FRAME", chan: 7, data: "PING" }));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(up, []);
+  } finally {
+    port.close();
+    await comms.close();
+    await bridge.close();
+  }
+});
+
+test("seededPort: a leg that errors as well as closes still sends exactly one CLOSE upstream", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    `ws://127.0.0.1:${bridge.port}`,
+    `ws://127.0.0.1:${comms.port}`,
+    (f) => up.push(f),
+  );
+  // Break the underlying connection with an invalid WS frame once it opens:
+  // openLocalLeg binds the SAME `close` callback to both the socket's
+  // "close" and "error" events, so a real protocol failure fires it twice
+  // for one call — the guard this test exists for.
+  comms.wss.on("connection", (ws) => {
+    setTimeout(() => {
+      (ws as unknown as { _socket: { write(b: Buffer): void } })._socket.write(Buffer.from([0x8f, 0x00]));
+    }, 100);
+  });
+  try {
+    port.send(JSON.stringify({ t: "OPEN", chan: 9, query: "", origin: { world: 1, slot: "PANAM" } }));
+    const deadline = Date.now() + 3000;
+    while (!up.some((f) => f.t === "CLOSE") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    // Give a would-be second CLOSE from the same double-fire every chance to
+    // also land before asserting there is only one.
+    await new Promise((r) => setTimeout(r, 300));
+    const closes = up.filter((f) => f.t === "CLOSE" && f.chan === 9);
+    assert.equal(closes.length, 1, `expected exactly one CLOSE, got ${JSON.stringify(up)}`);
+  } finally {
+    port.close();
+    await comms.close();
+    await bridge.close();
+  }
+});
+
+// ---- POST /trunk/place: a null body must not kill the hub process --------
+
+test("trunk/place: a null body answers 400 instead of an unhandled rejection", async () => {
+  const server = await startServer({ port: 0, internalToken: "SECRET",
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] } });
+  const unhandled: unknown[] = [];
+  const onUnhandled = (err: unknown) => unhandled.push(err);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    // JSON.parse("null") succeeds — `want` would be `null`, and reading
+    // `want.seat` throws a TypeError OUTSIDE the parse's try/catch. handleHttp
+    // is fired as `void handleHttp(req, res)` (see server.ts), so an escaping
+    // throw here becomes an unhandled rejection and, unguarded, takes down
+    // the whole hub process — the one that also serves production /link.
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      "null", { "x-wopr-internal-token": "SECRET" });
+    assert.equal(res.status, 400);
+    // Give any escaping rejection a chance to be reported before asserting.
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(unhandled, [], "a null body must not escape as an unhandled rejection");
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await server.close();
+  }
+});
+
+// ---- bonus coverage for Important 1 (fail-closed auth) and Important 2
+// (bounded body) — not in the required list, but cheap and directly tied to
+// the fixed code paths.
+
+test("trunk/place: with no internal token configured, the route is invisible (404)", async () => {
+  const server = await startServer({ port: 0,
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] } });
+  try {
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      JSON.stringify({ slot: "PANAM" }));
+    assert.equal(res.status, 404);
+  } finally { await server.close(); }
+});
+
+test("trunk/place: an oversize body is rejected with 413, not buffered without bound", async () => {
+  const server = await startServer({ port: 0, internalToken: "SECRET",
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] } });
+  try {
+    const big = JSON.stringify({ slot: "PANAM", junk: "x".repeat(5000) });
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      big, { "x-wopr-internal-token": "SECRET" });
+    assert.equal(res.status, 413);
+  } finally { await server.close(); }
 });
