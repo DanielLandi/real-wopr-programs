@@ -8,6 +8,7 @@ import {
   ALL_SLOTS, decodeTrunkFrame, restAllowed, type CallOrigin, type CallTarget,
   type RefusedReason, type TrunkFrame,
 } from "./trunk.ts";
+import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 
 export interface TielineOpts {
   hubUrl: string;          // wss://wopr.realwopr.ai/trunk
@@ -26,6 +27,9 @@ export interface TielineOpts {
   // target), so this never fires for a call place() caused. origin is
   // present when a machine called, absent when a visitor did.
   onOpen?: (chan: number, origin?: CallOrigin) => void;
+  /** Fires when any channel ends — one this host placed or one it answered.
+   *  A placer is otherwise never told the callee hung up. */
+  onClose?: (chan: number, reason?: string) => void;
 }
 
 export function startTieline(opts: TielineOpts): {
@@ -38,6 +42,10 @@ export function startTieline(opts: TielineOpts): {
   let backoffMs = 5_000;
   let everAssigned = false;
   const channels = new Map<number, { local: WebSocket; buffer: string[] }>();
+  // Machine-call ends, keyed by the same channel numbers `channels` uses. A
+  // channel is in exactly one of the two maps: a visitor's dial or a machine's
+  // local leg.
+  const legs = new Map<number, LocalLeg>();
   const placing = new Map<number, (r: { chan: number } | RefusedReason) => void>();
   let nextCall = 1;
 
@@ -61,16 +69,49 @@ export function startTieline(opts: TielineOpts): {
     }
   }
 
+  /** An inbound call. WHO called decides what it attaches to locally, and the
+   *  SHAPE of `origin` is what says who — never its presence. Once seats exist
+   *  every inbound OPEN carries an origin: a visitor's is `{ seat }`. Reading
+   *  the presence here would send every relayed visitor's call to an empty
+   *  local leg. */
   function openChannel(f: Extract<TrunkFrame, { t: "OPEN" }>): void {
+    const fromMachine = f.origin !== undefined && "slot" in f.origin;
+    if (fromMachine) { void openMachineChannel(f); return; }
+
     const local = new WebSocket(`${opts.localComms}/link?${f.query}`);
     const entry = { local, buffer: [] as string[] };
     channels.set(f.chan, entry);
     local.on("open", () => { for (const d of entry.buffer.splice(0)) local.send(d); });
     local.on("message", (data) => send({ t: "FRAME", chan: f.chan, data: data.toString() }));
-    const drop = () => { if (channels.delete(f.chan)) send({ t: "CLOSE", chan: f.chan }); };
+    const drop = () => {
+      if (channels.delete(f.chan)) { send({ t: "CLOSE", chan: f.chan }); opts.onClose?.(f.chan); }
+    };
     local.on("close", drop);
     local.on("error", drop);
     opts.onOpen?.(f.chan, f.origin);
+  }
+
+  /** A machine called. There is no visitor query to paste — this host mints an
+   *  ordinary session of its own and dials its own /link, so the program
+   *  answers a machine exactly as it answers a person. */
+  async function openMachineChannel(f: Extract<TrunkFrame, { t: "OPEN" }>): Promise<void> {
+    const o = f.origin as { world: number; slot: string };
+    // Fire onOpen synchronously with the visitor path, not after the mint
+    // resolves — a caller learns of an inbound call the instant it arrives,
+    // whether or not the local leg then attaches successfully.
+    opts.onOpen?.(f.chan, f.origin);
+    const leg = await openLocalLeg({
+      bridgeUrl: opts.localBridge,
+      commsUrl: opts.localComms,
+      surface: "trunk-call",
+      origin: `world ${o.world} slot ${o.slot}`,
+      send: (data) => send({ t: "FRAME", chan: f.chan, data }),
+      close: (reason) => {
+        if (legs.delete(f.chan)) { send({ t: "CLOSE", chan: f.chan, reason }); opts.onClose?.(f.chan, reason); }
+      },
+    });
+    if (leg === "refused") return;
+    legs.set(f.chan, leg);
   }
 
   function connect(): void {
@@ -94,11 +135,17 @@ export function startTieline(opts: TielineOpts): {
       if (f.t === "ASSIGNED") { everAssigned = true; opts.onAssigned?.(f.exchange, f.world, f.slot); }
       else if (f.t === "OPEN") openChannel(f);
       else if (f.t === "FRAME") {
+        const leg = legs.get(f.chan);
+        if (leg) { leg.deliver(f.data); return; }
         const c = channels.get(f.chan);
         if (!c) return;
         if (c.local.readyState === WebSocket.OPEN) c.local.send(f.data);
         else c.buffer.push(f.data);
-      } else if (f.t === "CLOSE") { channels.get(f.chan)?.local.close(); channels.delete(f.chan); }
+      } else if (f.t === "CLOSE") {
+        legs.get(f.chan)?.close(); legs.delete(f.chan);
+        channels.get(f.chan)?.local.close(); channels.delete(f.chan);
+        opts.onClose?.(f.chan, f.reason);
+      }
       else if (f.t === "REQUEST") void handleRequest(f);
       else if (f.t === "PING") send({ t: "PONG" });
       else if (f.t === "PLACED") { placing.get(f.call)?.({ chan: f.chan }); placing.delete(f.call); }
@@ -107,6 +154,8 @@ export function startTieline(opts: TielineOpts): {
     const retry = () => {
       for (const c of channels.values()) c.local.close();
       channels.clear();
+      for (const leg of legs.values()) leg.close();
+      legs.clear();
       // The hub is gone — every in-flight place() would otherwise hang
       // forever waiting for a PLACED/REFUSED that can no longer arrive.
       // Resolve (never reject) each one with "offline" and drop the map, so

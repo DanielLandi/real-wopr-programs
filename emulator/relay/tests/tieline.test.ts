@@ -48,17 +48,25 @@ function httpJson(
 // Stub local comms: echoes every text frame straight back, byte-identical —
 // enough to prove the tieline is bridging chan frames to a real local socket
 // rather than fabricating a response itself.
-async function startStubComms(): Promise<{ port: number; close: () => Promise<void> }> {
+async function startStubComms(): Promise<{
+  port: number; onDial?: (url: string) => void; close: () => Promise<void>;
+}> {
   const wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (ws) => {
+  const self = {
+    port: 0,
+    onDial: undefined as ((url: string) => void) | undefined,
+    close: () => new Promise<void>((resolve) => {
+      for (const c of wss.clients) c.terminate();
+      wss.close(() => resolve());
+    }),
+  };
+  wss.on("connection", (ws, req) => {
+    self.onDial?.(req.url ?? "");
     ws.on("message", (data) => ws.send(data.toString()));
   });
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const port = (wss.address() as { port: number }).port;
-  return {
-    port,
-    close: () => new Promise<void>((resolve) => wss.close(() => resolve())),
-  };
+  await new Promise<void>((r) => wss.once("listening", r));
+  self.port = (wss.address() as { port: number }).port;
+  return self;
 }
 
 // Stub local bridge: only answers the two allowlisted paths this test drives
@@ -589,5 +597,73 @@ test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
   } finally {
     tie.stop();
     await new Promise<void>((r) => hub.close(() => r()));
+  }
+});
+
+// ---- inbound OPEN: the origin's shape decides the local attachment (Task 2) -
+
+test("tieline: an OPEN from a machine opens a local leg, not a query dial", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  const dialled: string[] = [];
+  comms.onDial = (url: string) => dialled.push(url);
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", () => {});
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 1, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await new Promise((r) => setTimeout(r, 200));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "a machine call must mint its own session");
+    assert.match(dialled.at(-1) ?? "", /surface=trunk-call/);
+    assert.match(dialled.at(-1) ?? "", /session=/);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: an OPEN from a seat still pastes the hub's query", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  const dialled: string[] = [];
+  comms.onDial = (url: string) => dialled.push(url);
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", () => {});
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 2, query: "surface=home-terminal&session=S9&token=T9",
+      origin: { seat: "HDL1" } }));
+    await new Promise((r) => setTimeout(r, 200));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 0, "a visitor already has a session");
+    assert.match(dialled.at(-1) ?? "", /session=S9/);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
   }
 });
