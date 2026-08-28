@@ -4,10 +4,61 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { startServer } from "../src/server.ts";
 import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
+
+function httpJson(method: string, url: string, body?: string,
+                  headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(url, { method, headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
+// Stub local bridge: only answers POST /api/session, with a real success
+// body — enough for openLocalLeg's mint to succeed. Everything else answers
+// 500, so a request that should never happen (a REST path leaking through)
+// is visible as a 500 instead of silently succeeding.
+function startStubBridge(): Promise<{
+  port: number;
+  requests: Array<{ method: string; path: string; body: string }>;
+  close: () => Promise<void>;
+}> {
+  const requests: Array<{ method: string; path: string; body: string }> = [];
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const body = Buffer.concat(chunks).toString();
+        requests.push({ method: req.method ?? "", path: req.url ?? "", body });
+        if (req.method === "POST" && req.url === "/api/session") {
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ session_id: `s${requests.length}`, token: "t" }));
+          return;
+        }
+        res.writeHead(500);
+        res.end();
+      });
+    });
+    server.listen(0, () => {
+      resolve({
+        port: (server.address() as { port: number }).port,
+        requests,
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+}
 
 /** A minimal fake bridge implementing the WS side of api-contract.md: echoes
  *  every reassembled input back as one output frame. */
@@ -287,5 +338,72 @@ test("a system's parting words survive the close at 300 baud (issue #62)", async
     ws.close();
     await server.close();
     await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }
+});
+
+// ---- the hub's own seeded port, and POST /trunk/place (Task 5) -----------
+
+test("trunk/place: refuses without the internal token", async () => {
+  const server = await startServer({ port: 0, internalToken: "SECRET",
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] } });
+  try {
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      JSON.stringify({ slot: "PANAM" }));
+    assert.equal(res.status, 401);
+  } finally { await server.close(); }
+});
+
+test("trunk/place: answers the refusal reason rather than an error", async () => {
+  const server = await startServer({ port: 0, internalToken: "SECRET",
+    trunk: { localWorld: [{ slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" }] } });
+  try {
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      JSON.stringify({ slot: "PANAM" }), { "x-wopr-internal-token": "SECRET" });
+    assert.equal(res.status, 409);
+    assert.deepEqual(JSON.parse(res.body), { refused: "offline" });
+  } finally { await server.close(); }
+});
+
+test("trunk/place: a successful placement mints a session for the placer, not only the callee", async () => {
+  // Switchboard.placeCall sends an OPEN only to the target — the placer's own
+  // end is an internal peerPort with nothing to talk to a program. Without
+  // the route calling seededPort's attach() after a successful placeCall, the
+  // flagship could dial out and then have nothing to say on the line.
+  const bridge = await startStubBridge();
+  const server = await startServer({
+    port: 0, internalToken: "SECRET", bridgeUrl: `ws://127.0.0.1:${bridge.port}`,
+    trunk: { localWorld: [
+      { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+      { slot: "PANAM", name: "PAN AM", region: "NEW YORK US" },
+    ] },
+  });
+  try {
+    const res = await httpJson("POST", `http://127.0.0.1:${server.port}/trunk/place`,
+      JSON.stringify({ slot: "PANAM" }), { "x-wopr-internal-token": "SECRET" });
+    assert.equal(res.status, 201);
+    const parsed = JSON.parse(res.body) as { chan: number };
+    assert.equal(typeof parsed.chan, "number");
+
+    // Both mints fire off the same event-loop turn placeCall returns in —
+    // poll rather than a fixed sleep, since which of the two lands first on
+    // the stub bridge is not something this test should assume.
+    const deadline = Date.now() + 3000;
+    let mints: typeof bridge.requests = [];
+    while (Date.now() < deadline) {
+      mints = bridge.requests.filter((r) => r.path === "/api/session");
+      if (mints.length >= 2) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(mints.length, 2,
+      "both the callee (PANAM) and the placer (WOPR) must mint a session");
+    const surfaces = mints
+      .map((m) => (JSON.parse(m.body) as { surface: string }).surface)
+      .sort();
+    // The answering end paces (trunk-call); the placer must not (trunk-caller)
+    // — never a shaping profile on the end that placed the call.
+    assert.deepEqual(surfaces, ["trunk-call", "trunk-caller"]);
+  } finally {
+    await server.close();
+    await bridge.close();
   }
 });

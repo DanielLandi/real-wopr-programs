@@ -14,7 +14,8 @@ import { decodeEnvelope, encodeEnvelope, type Envelope } from "./envelope.ts";
 import { LinkShaper } from "./shaper.ts";
 import { runHandshake, type HandshakeOpts } from "./handshake.ts";
 import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
-         type LocalSlot } from "./trunk.ts";
+         type CallTarget, type LocalSlot, type TrunkFrame, type TrunkPort } from "./trunk.ts";
+import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 
 export interface ServerOpts {
   port?: number;
@@ -102,11 +103,12 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       console.error("trunk: ignoring malformed TRUNK_LOCAL_WORLD");
     }
   }
+  const trunkLocalWorld = opts.trunk?.localWorld ?? envLocalWorld ?? [];
   const switchboard = new Switchboard({
     ...opts.trunk,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
     reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
-    localWorld: opts.trunk?.localWorld ?? envLocalWorld,
+    localWorld: trunkLocalWorld,
     // `|| undefined` so an empty TRUNK_RESERVE_KEY does not shadow an
     // opts-supplied key. The invariant that an empty key unlocks nothing lives
     // in the Switchboard, which covers this path and the opts path alike.
@@ -388,6 +390,111 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   const trunkPing = setInterval(() => switchboard.sweepDead(),
                                 opts.trunk?.pingIntervalMs ?? 30_000);
 
+  /** A seeded world-1 slot's "host". It speaks the same TrunkFrame the
+   *  switchboard sends down a real trunk socket, but instead of a socket it
+   *  opens a local leg against the hub's own bridge. That is the whole trick:
+   *  the flagship becomes callable without a trunk back to itself.
+   *
+   *  `attach` is the placing half of the same trick: a call THIS seed places
+   *  (via POST /trunk/place) gets an internal `peerPort` from the switchboard,
+   *  not an OPEN — so nothing ever mints a local leg for the placer's end
+   *  unless something calls attach() for it. The route below does, right
+   *  after a successful placeCall. */
+  function seededPort(seed: LocalSlot, code: string, commsUrl: string):
+      TrunkPort & { attach(chan: number): void } {
+    const legs = new Map<number, LocalLeg>();
+    // A machine call's leg is minted asynchronously (a session POST, then a
+    // dial) — a CLOSE for that chan can arrive before the mint resolves, and
+    // `legs` has no entry yet for the CLOSE handler to find. This registry
+    // remembers a canceller per in-flight mint, mirroring tieline.ts's
+    // pendingLegs: the leg that eventually resolves finds out it was
+    // abandoned instead of silently resurrecting a channel nothing will ever
+    // close again.
+    const pendingLegs = new Map<number, () => void>();
+    const up = (f: TrunkFrame) => switchboard.handleHostFrame(code, f);
+    const mint = (chan: number, params: {
+      surface: "trunk-call" | "trunk-caller"; origin?: string; filterRitual?: boolean;
+    }) => {
+      let abandoned = false;
+      pendingLegs.set(chan, () => { abandoned = true; });
+      void openLocalLeg({
+        // ServerOpts.bridgeUrl is a WEBSOCKET url (`ws://bridge:8000`,
+        // server.ts:50) — it is what /link dials for /ws/session/<id>.
+        // openLocalLeg mints over HTTP against the same host.
+        bridgeUrl: bridgeUrl.replace(/^ws/, "http"),
+        commsUrl,
+        surface: params.surface,
+        system: seed.system,
+        origin: params.origin,
+        filterRitual: params.filterRitual,
+        send: (data) => up({ t: "FRAME", chan, data }),
+        // Guarded against double-fire: openLocalLeg binds this same handler
+        // to both the socket's "close" and "error" events, so one failure
+        // invokes it twice. Without the delete-returns-true guard that sends
+        // two CLOSE frames for one call, on a channel number that may since
+        // have been reused.
+        close: (reason) => { if (legs.delete(chan)) up({ t: "CLOSE", chan, reason }); },
+      }).then((leg) => {
+        pendingLegs.delete(chan);
+        if (leg === "refused") return;
+        // The hub already forgot this chan while the mint was in flight —
+        // close the leg that just arrived instead of resurrecting an entry
+        // nothing will ever send a second CLOSE for.
+        if (abandoned) { leg.close(); return; }
+        legs.set(chan, leg);
+      });
+    };
+    return {
+      send: (raw: string) => {
+        let f: TrunkFrame;
+        try { f = decodeTrunkFrame(raw); } catch { return; }
+        if (f.t === "OPEN") {
+          const o = f.origin;
+          mint(f.chan, {
+            surface: "trunk-call",
+            origin: o === undefined ? undefined
+              : "seat" in o ? `seat ${o.seat}` : `world ${o.world} slot ${o.slot}`,
+          });
+        } else if (f.t === "FRAME") legs.get(f.chan)?.deliver(f.data);
+        else if (f.t === "CLOSE") {
+          pendingLegs.get(f.chan)?.(); pendingLegs.delete(f.chan);
+          legs.get(f.chan)?.close(); legs.delete(f.chan);
+        }
+        else if (f.t === "PING") up({ t: "PONG" });
+        // The hub synthesizes a seed's directory entry itself, so nothing ever
+        // needs to ask a seeded slot for REST. Answer honestly rather than hang.
+        else if (f.t === "REQUEST") up({ t: "RESPONSE", rid: f.rid, status: 404, body: "{}" });
+      },
+      close: () => {
+        for (const cancel of pendingLegs.values()) cancel();
+        pendingLegs.clear();
+        for (const l of legs.values()) l.close();
+        legs.clear();
+      },
+      // The answering end paces (trunk-call, dialup-1200); the end that
+      // PLACED the call must not (trunk-caller, off) — two shapers in series
+      // would halve throughput for no fiction. filterRitual: true because a
+      // calling program must not be handed its own handshake/control frames.
+      attach: (chan: number) => mint(chan, { surface: "trunk-caller", filterRitual: true }),
+    };
+  }
+
+  // Every seeded slot gets its port at startup, once the hub knows its own
+  // address — the WOPR reference is kept so POST /trunk/place can attach the
+  // placer's own local leg after a successful placeCall (Switchboard.placeCall
+  // sends an OPEN only to the target; the placer's end is an internal
+  // peerPort with nothing to talk to a program otherwise).
+  let woprPort: (TrunkPort & { attach(chan: number): void }) | undefined;
+
+  function readBody(req: IncomingMessage): Promise<string> {
+    return new Promise((resolve) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c as Buffer));
+      req.on("end", () => resolve(Buffer.concat(chunks).toString()));
+      req.on("error", () => resolve(""));
+    });
+  }
+
   async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? "/", "http://comms.invalid");
     res.setHeader("access-control-allow-origin", "*");
@@ -429,6 +536,44 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       }
       return;
     }
+    // The seam between "a program wanted something" and "a call was placed".
+    // A seeded slot has no trunk socket to send a PLACE down, so piece D's
+    // node host reaches the switchboard through here instead.
+    if (req.method === "POST" && url.pathname === "/trunk/place") {
+      if (internalToken && req.headers["x-wopr-internal-token"] !== internalToken) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const body = await readBody(req);
+      let want: { slot?: string; world?: number; seat?: string; on?: number };
+      try { want = JSON.parse(body || "{}"); } catch {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "malformed body" })); return;
+      }
+      const from = switchboard.seededCode("WOPR");
+      if (!from) {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ refused: "offline" })); return;
+      }
+      const target = want.seat !== undefined
+        ? { seat: want.seat }
+        : { slot: want.slot ?? "", world: want.world };
+      const r = switchboard.placeCall(from, target as CallTarget, want.on);
+      if (typeof r === "string") {
+        res.writeHead(409, { "content-type": "application/json" });
+        res.end(JSON.stringify({ refused: r }));
+      } else {
+        // The target got its OPEN from placeCall itself; the placer's own end
+        // is an internal peerPort with no program on the other side of it —
+        // attach() is what gives the flagship's own line something to talk
+        // with.
+        woprPort?.attach(r.chan);
+        res.writeHead(201, { "content-type": "application/json" });
+        res.end(JSON.stringify({ chan: r.chan }));
+      }
+      return;
+    }
     res.writeHead(404);
     res.end();
   }
@@ -437,11 +582,32 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   const actualPort = (httpServer.address() as { port: number }).port;
   if (!publicBase) publicBase = `http://localhost:${actualPort}`;
 
+  // Every seeded world-1 slot becomes a real, callable exchange only once the
+  // hub knows the address it can dial itself back on — hence this runs after
+  // listen(), against actualPort rather than the pre-listen `port` (which is
+  // 0 whenever the caller asked for an ephemeral port, as every test here
+  // does).
+  const commsUrl = `ws://127.0.0.1:${actualPort}`;
+  const seededPorts: Array<TrunkPort & { attach(chan: number): void }> = [];
+  for (const seed of trunkLocalWorld) {
+    const code = switchboard.seededCode(seed.slot);
+    if (!code) continue;
+    const p = seededPort(seed, code, commsUrl);
+    switchboard.seedPort(seed.slot, p);
+    seededPorts.push(p);
+    if (seed.slot === "WOPR") woprPort = p;
+  }
+
   return {
     port: actualPort,
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(trunkPing);
+        // A seeded slot's local legs (and any in-flight mint) are this
+        // process's own bridge sessions — close them, or a test's next
+        // server start can race a lingering /link dial against a stub bridge
+        // that already went away.
+        for (const p of seededPorts) p.close();
         for (const s of [linkWss, trunkWss, relayWss]) for (const c of s.clients) c.terminate();
         httpServer.close(() => resolve());
       }),
