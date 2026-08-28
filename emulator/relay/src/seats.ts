@@ -38,7 +38,7 @@ interface Leg extends SeatLeg {
 function randomId(): string {
   const bytes = randomBytes(26);
   let s = "";
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < bytes.length; i++) {
     // TRUNK_ALPHABET has 32 symbols; 256 % 32 === 0, so byte % TRUNK_ALPHABET.length
     // is uniformly distributed with no bias. If the alphabet length ever changes,
     // this must become rejection sampling or uniform bit slicing.
@@ -72,6 +72,12 @@ export class SeatRegistry {
   open(port: SeatPort, surface: string): { id: string; token: string } {
     const id = this.newId();
     const token = this.newId();
+    // A collision would allow a hostile newId() (injected from server options) to clobber
+    // an existing leg while its handleIdx entries still point to it — a capability escape
+    // letting one exchange ring a terminal it never spoke to. Throw rather than silently
+    // orphaning a leg.
+    if (this.legs.has(id)) throw new Error(`seat id collision: ${id}`);
+    if (this.byTokenIdx.has(token)) throw new Error(`seat token collision: ${token}`);
     this.legs.set(id, { id, surface, port, onCall: false, token, handles: new Map() });
     this.byTokenIdx.set(token, id);
     this.envelope(id, `SEAT ${token}`);
@@ -81,7 +87,13 @@ export class SeatRegistry {
   close(id: string): void {
     const leg = this.legs.get(id);
     if (!leg) return;
-    leg.ring?.cancel();
+    if (leg.ring) {
+      const ring = leg.ring;
+      ring.cancel();
+      leg.ring = undefined;
+      // Notify the calling exchange that it got no answer — the seat is gone.
+      ring.h.timedOut();
+    }
     for (const handle of leg.handles.values()) this.handleIdx.delete(handle);
     this.byTokenIdx.delete(leg.token);
     this.legs.delete(id);
@@ -104,9 +116,10 @@ export class SeatRegistry {
     return handle;
   }
 
-  /** A handle presented by an exchange that did not earn it is refused exactly
-   *  as an unknown one is. A machine learns nothing about seats it has not
-   *  spoken to — not that they exist, not that they are online. */
+  /** A handle presented by an exchange that did not earn it is refused with
+   *  identical value, type, and shape as an unknown one. A machine learns
+   *  nothing about seats it has not spoken to — not that they exist, not that
+   *  they are online. */
   resolve(handle: string, code: string): SeatLeg | "seat-gone" {
     const entry = this.handleIdx.get(handle);
     if (!entry || entry.code !== code) return "seat-gone";
@@ -117,12 +130,17 @@ export class SeatRegistry {
     const leg = this.legs.get(id);
     if (!leg) return "seat-gone";
     if (leg.ring || leg.onCall) return "busy";
-    const cancel = this.setTimer(this.ringTimeoutMs, () => {
-      if (leg.ring?.h !== h) return;
+    // Create the ring record with a placeholder cancel, assign it immediately, then arm
+    // the timer. This guard against: (1) handler identity confusion when the same
+    // handlers object is reused across rings, and (2) race conditions if setTimer fires
+    // synchronously. The guard checks ring identity, not handler identity.
+    const record: { h: RingHandlers; cancel: () => void } = { h, cancel: () => {} };
+    leg.ring = record;
+    record.cancel = this.setTimer(this.ringTimeoutMs, () => {
+      if (leg.ring !== record) return;   // identity of the RING, not of its handlers
       leg.ring = undefined;
       h.timedOut();
     });
-    leg.ring = { h, cancel };
     this.envelope(id, `RING ${name}`);
     return "ringing";
   }
