@@ -99,6 +99,10 @@ export class SeatRegistry {
     this.legs.delete(id);
   }
 
+  /** Live seat legs. Callers use this to enforce a cap on concurrent seats —
+   *  each is a held-open socket, so unbounded growth is a resource exhaustion. */
+  get size(): number { return this.legs.size; }
+
   byToken(token: string): SeatLeg | undefined {
     const id = this.byTokenIdx.get(token);
     return id === undefined ? undefined : this.legs.get(id);

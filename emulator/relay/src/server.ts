@@ -16,6 +16,7 @@ import { runHandshake, type HandshakeOpts } from "./handshake.ts";
 import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
          type CallTarget, type LocalSlot, type TrunkFrame, type TrunkPort } from "./trunk.ts";
 import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
+import { SeatRegistry } from "./seats.ts";
 
 export interface ServerOpts {
   port?: number;
@@ -37,6 +38,11 @@ export interface ServerOpts {
     pingIntervalMs?: number;
     relayPingMs?: number;
     registerTimeoutMs?: number;
+  };
+  seats?: {
+    ringTimeoutMs?: number;
+    newId?: () => string;
+    maxSeats?: number;
   };
 }
 
@@ -215,6 +221,15 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     }
   }
   const trunkLocalWorld = opts.trunk?.localWorld ?? envLocalWorld ?? [];
+  // Constructed here, immediately before the Switchboard, rather than beside
+  // the WebSocketServers below: a SeatBridge closing over `seats` is threaded
+  // into the Switchboard's own options, so `seats` must exist before that
+  // construction or the reference is a temporal-dead-zone ReferenceError at
+  // startup.
+  const seats = new SeatRegistry({
+    ringTimeoutMs: opts.seats?.ringTimeoutMs,
+    newId: opts.seats?.newId,
+  });
   const switchboard = new Switchboard({
     ...opts.trunk,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
@@ -257,11 +272,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // over the raw cap is refused before the hub ever builds the envelope.
   const trunkWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES + 512 });
   const relayWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES });
+  const seatWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES });
 
   httpServer.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://comms.invalid").pathname;
     const target = path === "/link" ? linkWss
       : path === "/trunk" ? trunkWss
+      : path === "/seat" ? seatWss
       : /^\/x\/[A-Z2-9]{6}\/link$/.test(path) ? relayWss
       : null;
     if (!target) { socket.destroy(); return; }
@@ -470,10 +487,77 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     host.on("error", drop);
   });
 
+  // The second visitor leg. A terminal opens it when it starts and holds it for
+  // the life of the session: while this socket is open the seat exists and can
+  // be rung, and when it closes the seat is gone. Calls still run over /link
+  // and /x/<CODE>/link — this leg carries rings, not conversations.
+  seatWss.on("connection", (client, req) => {
+    const url = new URL(req.url ?? "/seat", "http://comms.invalid");
+    const surface = url.searchParams.get("surface") ?? "";
+    // The surface decides the profile an answered ring is paced at, so a seat
+    // without a resolvable one could be rung but never heard.
+    if (!resolveLink(config, surface)) { client.close(4400, "unknown surface"); return; }
+    if (seats.size >= (opts.seats?.maxSeats ?? 512)) { client.close(4429, "too many seats"); return; }
+
+    let id: string | undefined;
+    let seatPing: ReturnType<typeof setInterval> | undefined;
+    const drop = () => { if (seatPing) clearInterval(seatPing); if (id !== undefined) seats.close(id); };
+    client.on("close", drop);
+    client.on("error", drop);
+    client.on("message", (data) => {
+      if (id === undefined) return;
+      let e: Envelope;
+      try { e = decodeEnvelope(data.toString()); } catch { return; }
+      if (e.kind !== "control") return;
+      if (e.payload === "ANSWER") seats.answer(id);
+      else if (e.payload === "REJECT") seats.reject(id);
+    });
+
+    // Deferred past the current turn (setTimeout, not setImmediate — an
+    // immediate still runs within the same turn that accepted the upgrade):
+    // seats.open() sends the SEAT envelope synchronously, and a write made
+    // that early can land in the SAME read as the HTTP upgrade response on
+    // the client's side of the socket. A client that does the natural
+    // `await open, then listen for message` (every terminal here, and the
+    // seat tests) attaches its 'message' listener only after 'open' fires —
+    // if the ws receiver parses the upgrade and the SEAT frame out of one
+    // buffer in a single synchronous pass, that listener isn't there yet and
+    // the frame is lost for good. Pushing the send to a later turn gives the
+    // client's 'open' handling — and whatever it does next — room to run
+    // first. `id`/`seatPing` stay undefined until this fires, and the
+    // close/error/message handlers above already guard on that.
+    setTimeout(() => {
+      if (client.readyState !== WebSocket.OPEN) return; // gone before we got here
+      try {
+        ({ id } = seats.open(
+          { send: (d) => { if (client.readyState === WebSocket.OPEN) client.send(d); },
+            close: (code, reason) => client.close(code, reason) },
+          surface));
+      } catch {
+        // open() throws on an id/token collision (a capability escape, not a
+        // lost record) — let it kill this connection attempt, not the process.
+        client.close(1011, "seat registry error");
+        return;
+      }
+      seatPing = setInterval(() => {
+        if (client.readyState === WebSocket.OPEN) client.ping();
+      }, opts.trunk?.relayPingMs ?? 30_000);
+    }, 0);
+  });
+
   relayWss.on("connection", (client, req) => {
     const url = new URL(req.url ?? "/", "http://comms.invalid");
     const code = url.pathname.split("/")[2];
-    const chan = switchboard.openChannel(code, client, url.search.slice(1));
+    // The seat token names the visitor's own leg and resolves only inside this
+    // hub. It must NEVER reach a host: openChannel forwards this query verbatim
+    // in the OPEN, and the callee's tieline pastes it straight into its own
+    // /link. Left in, every foreign exchange would be handed the token of every
+    // visitor who dialled it — the one credential the whole handle design
+    // exists to keep away from machines.
+    const params = new URLSearchParams(url.search);
+    const seatToken = params.get("seat");
+    params.delete("seat");
+    const chan = switchboard.openChannel(code, client, params.toString());
     if (typeof chan !== "number") {
       // Distinct signals: an unknown/offline code is not the same call
       // experience as a live exchange with every channel in use.
@@ -667,7 +751,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         // server start can race a lingering /link dial against a stub bridge
         // that already went away.
         for (const p of seededPorts) p.close();
-        for (const s of [linkWss, trunkWss, relayWss]) for (const c of s.clients) c.terminate();
+        for (const s of [linkWss, trunkWss, relayWss, seatWss]) for (const c of s.clients) c.terminate();
         httpServer.close(() => resolve());
       }),
   };

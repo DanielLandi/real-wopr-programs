@@ -11,6 +11,21 @@ import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 import type { TrunkFrame } from "../src/trunk.ts";
 
+function connect(url: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    ws.once("open", () => resolve(ws));
+    ws.once("error", reject);
+  });
+}
+
+function nextMessage(ws: WebSocket): Promise<string> {
+  return new Promise((resolve, reject) => {
+    ws.once("message", (data) => resolve(data.toString()));
+    ws.once("error", reject);
+  });
+}
+
 function httpJson(method: string, url: string, body?: string,
                   headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -623,4 +638,51 @@ test("trunk/place: an oversize body is rejected with 413, not buffered without b
       big, { "x-wopr-internal-token": "SECRET" });
     assert.equal(res.status, 413);
   } finally { await server.close(); }
+});
+
+// ---- /seat: the endpoint a terminal holds for the life of its session ----
+
+test("seat: a leg is told its token on connect", async () => {
+  const server = await startServer({ port: 0 });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    const e = decodeEnvelope(await nextMessage(ws));
+    assert.equal(e.kind, "control");
+    assert.match(e.payload, /^SEAT \S+$/);
+    ws.close();
+  } finally { await server.close(); }
+});
+
+test("seat: an unknown surface is refused", async () => {
+  const server = await startServer({ port: 0 });
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/seat?surface=nope`);
+    const code = await new Promise<number>((resolve) => ws.once("close", resolve));
+    assert.equal(code, 4400);
+  } finally { await server.close(); }
+});
+
+test("seat: the token never crosses the trunk", async () => {
+  const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const hub = `ws://127.0.0.1:${server.port}/trunk`;
+  const host = await connect(hub);
+  try {
+    host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "A EXCH",
+      region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
+    const assigned = JSON.parse(await nextMessage(host));
+    assert.equal(assigned.t, "ASSIGNED");
+
+    const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
+
+    const visitor = new WebSocket(
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+      `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
+    const open = JSON.parse(await nextMessage(host));
+    assert.equal(open.t, "OPEN");
+    assert.doesNotMatch(open.query, /seat=/,
+      "the seat token is the one credential a foreign host must never see");
+    assert.ok(!JSON.stringify(open).includes(token), "nor anywhere else in the frame");
+    visitor.close(); seat.close();
+  } finally { host.close(); await server.close(); }
 });
