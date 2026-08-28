@@ -726,6 +726,56 @@ test("seat: the cap refuses once every slot is taken", async () => {
   } finally { await server.close(); }
 });
 
+test("seat: an un-minted socket is closed after the handshake timeout", async () => {
+  const server = await startServer({ port: 0, seats: { handshakeTimeoutMs: 50 } });
+  try {
+    const ws = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    // Deliberately never sends SEAT? — this socket must not be held open
+    // forever. Bounded against a plain timeout, not just the close event: if
+    // the guard regresses, the socket is simply never closed, which would
+    // otherwise hang this test instead of failing it.
+    const code = await Promise.race([
+      new Promise<number>((resolve) => ws.once("close", resolve)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("socket was never closed")), 2000)),
+    ]);
+    assert.equal(code, 4408);
+  } finally { await server.close(); }
+});
+
+test("seat: pending (un-minted) sockets count toward the cap", async () => {
+  const server = await startServer({ port: 0, seats: { maxSeats: 1 } });
+  try {
+    // Connects, but deliberately never sends SEAT? — held open, un-minted.
+    const pending = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+
+    const second = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(second);
+    // Race close against message rather than only awaiting close: if the cap
+    // wrongly ignores the pending socket, `second` gets granted a SEAT and
+    // is never closed, which would otherwise hang this test forever instead
+    // of failing it.
+    const outcome = await Promise.race([
+      new Promise<{ kind: "close"; code: number }>((resolve) =>
+        second.once("close", (code) => resolve({ kind: "close", code }))),
+      new Promise<{ kind: "message"; payload: string }>((resolve) =>
+        second.once("message", (data) =>
+          resolve({ kind: "message", payload: decodeEnvelope(data.toString()).payload }))),
+    ]);
+    assert.deepEqual(outcome, { kind: "close", code: 4429 },
+      "a pending, un-minted socket must count toward maxSeats, not only a minted one");
+
+    // Releasing the pending slot (by closing it) must free the cap for the next comer.
+    pending.close();
+    await new Promise((r) => setTimeout(r, 20));
+    const third = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
+    askSeat(third);
+    const e = decodeEnvelope(await nextMessage(third));
+    assert.match(e.payload, /^SEAT \S+$/, "closing the pending socket must release its slot");
+    third.close();
+  } finally { await server.close(); }
+});
+
 test("seat: ANSWER reaches the registry", async () => {
   const registry = new SeatRegistry();
   const server = await startServer({ port: 0, seats: { registry } });

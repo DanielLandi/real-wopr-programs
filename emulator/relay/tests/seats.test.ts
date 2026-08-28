@@ -227,3 +227,45 @@ test("seats: closing a leg mid-ring invokes timedOut on the handlers", () => {
   reg.close(id);
   assert.deepEqual(seen, ["timedOut"], "close invokes timedOut");
 });
+
+// ---- collision throws must never leak the colliding value (fix round 2) --
+
+test("seats: an id collision's error message contains no id or token value", () => {
+  // A newId that always returns the same value forces the FIRST check
+  // (legs.has(id)) to fire on the second open().
+  const reg = new SeatRegistry({ newId: () => "SAME" });
+  const port = fakeSeat();
+  reg.open(port, "home-terminal");
+  assert.throws(
+    () => reg.open(port, "home-terminal"),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.equal(err.message, "seat id collision",
+        "the message must name the case, and nothing else");
+      assert.doesNotMatch(err.message, /SAME/);
+      return true;
+    },
+  );
+});
+
+test("seats: a token collision's error message contains no id or token value", () => {
+  // Distinct ids (ID1/ID2), but the second open()'s token reuses the first's —
+  // forcing the SECOND check (byTokenIdx.has(token)) to fire.
+  const seq = ["ID1", "TOK1", "ID2", "TOK1"];
+  let i = 0;
+  const reg = new SeatRegistry({ newId: () => seq[i++]! });
+  const port = fakeSeat();
+  reg.open(port, "home-terminal");
+  assert.throws(
+    () => reg.open(port, "home-terminal"),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.equal(err.message, "seat token collision",
+        "the message must name the case, and nothing else");
+      assert.doesNotMatch(err.message, /TOK1/,
+        "a live token must never appear in an error message — it is the one " +
+        "credential this whole design exists to keep out of logs");
+      return true;
+    },
+  );
+});

@@ -76,8 +76,15 @@ export class SeatRegistry {
     // an existing leg while its handleIdx entries still point to it — a capability escape
     // letting one exchange ring a terminal it never spoke to. Throw rather than silently
     // orphaning a leg.
-    if (this.legs.has(id)) throw new Error(`seat id collision: ${id}`);
-    if (this.byTokenIdx.has(token)) throw new Error(`seat token collision: ${token}`);
+    // Neither message interpolates the id/token value itself: an id is sent
+    // to the client as the envelope's `session` field, so it is not this
+    // design's secret, but a token is — "never disclosed to any machine"
+    // includes never disclosed via a log line either. The collision KIND
+    // (this message) plus the caller's surface (logged by server.ts, which
+    // catches this) identify the case fully without ever printing a value
+    // that must stay confidential.
+    if (this.legs.has(id)) throw new Error("seat id collision");
+    if (this.byTokenIdx.has(token)) throw new Error("seat token collision");
     this.legs.set(id, { id, surface, port, onCall: false, token, handles: new Map() });
     this.byTokenIdx.set(token, id);
     try {

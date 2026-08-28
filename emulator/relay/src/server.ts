@@ -43,12 +43,18 @@ export interface ServerOpts {
     ringTimeoutMs?: number;
     newId?: () => string;
     maxSeats?: number;
-    /** Test seam: use this exact registry instead of constructing one from
-     *  the options above. There is no public way (yet — that lands with the
-     *  Switchboard-side SeatBridge in a later task) to ring a seat end to end,
-     *  so a test that needs to observe `ring()`'s effect on `seatWss`'s
-     *  ANSWER/REJECT wiring, or on the leg's lifecycle, has to hold the same
-     *  registry instance the server uses internally. */
+    /** How long a `/seat` socket gets to send `SEAT?` before it is closed
+     *  `4408`, mirroring `trunk.registerTimeoutMs`/`trunkWss`'s "no register"
+     *  guard just below. Defaults to 20s, the same window that guard uses. */
+    handshakeTimeoutMs?: number;
+    /** @internal Test seam only — NOT a supported extension point into a
+     *  security-critical registry. Use this exact registry instead of
+     *  constructing one from the options above. There is no public way (yet
+     *  — that lands with the Switchboard-side SeatBridge in a later task) to
+     *  ring a seat end to end, so a test that needs to observe `ring()`'s
+     *  effect on `seatWss`'s ANSWER/REJECT wiring, or on the leg's lifecycle,
+     *  has to hold the same registry instance the server uses internally.
+     *  Remove this field once `SeatBridge` lands and provides a real path. */
     registry?: SeatRegistry;
   };
 }
@@ -280,6 +286,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   const trunkWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES + 512 });
   const relayWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES });
   const seatWss = new WebSocketServer({ noServer: true, maxPayload: TRUNK_MAX_FRAME_BYTES });
+  // Sockets that have connected to /seat but not yet minted a leg (no SEAT?
+  // yet) still hold a slot: without counting them, maxSeats means nothing —
+  // an attacker just holds arbitrarily many un-minted sockets open, each
+  // invisible to `seats.size`. Incremented on connect, decremented the
+  // instant a socket either mints (folded into `seats.size` instead) or goes
+  // away for any other reason (see `releasePending` in seatWss's handler).
+  let pendingSeats = 0;
 
   httpServer.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://comms.invalid").pathname;
@@ -520,7 +533,31 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     let id: string | undefined;
     let token: string | undefined;
     let seatPing: ReturnType<typeof setInterval> | undefined;
-    const drop = () => { if (seatPing) clearInterval(seatPing); if (id !== undefined) seats.close(id); };
+
+    // Counted as pending from the moment the socket connects — see
+    // `pendingSeats` above — and released the instant it either mints (folded
+    // into `seats.size` instead) or goes away for any other reason.
+    // Idempotent so it is safe to call from both the mint path and `drop`.
+    pendingSeats += 1;
+    let pendingCounted = true;
+    const releasePending = () => { if (pendingCounted) { pendingSeats -= 1; pendingCounted = false; } };
+
+    // Mirrors trunkWss's "no register" guard just above: a socket that
+    // connects and never completes its handshake (here, SEAT?) would
+    // otherwise be held open forever — nothing else ever reaps an un-minted
+    // /seat socket. The `id === undefined` check inside the callback guards
+    // the same race that guard does: the timer firing essentially the same
+    // instant the handshake actually lands.
+    const handshakeTimer = setTimeout(() => {
+      if (id === undefined) client.close(4408, "no seat handshake");
+    }, opts.seats?.handshakeTimeoutMs ?? 20_000);
+
+    const drop = () => {
+      clearTimeout(handshakeTimer);
+      releasePending();
+      if (seatPing) clearInterval(seatPing);
+      if (id !== undefined) seats.close(id);
+    };
     client.on("close", drop);
     client.on("error", drop);
 
@@ -540,15 +577,17 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
           }));
           return;
         }
+        clearTimeout(handshakeTimer); // the handshake has arrived, one way or another
         // Checked immediately before the mint it guards, in the same
-        // synchronous handler: a check made any earlier (e.g. at connect,
-        // before a deferred mint) would let every connection in the same
-        // burst see the same stale `size` and all pass before any of them
-        // actually registers.
-        if (seats.size >= (opts.seats?.maxSeats ?? 512)) {
+        // synchronous handler, and against the PENDING count too — a socket
+        // that has connected but not yet minted still holds a slot, so a
+        // burst of un-minted connections cannot all read the same stale
+        // count and pass before any of them actually registers.
+        if (seats.size + pendingSeats > (opts.seats?.maxSeats ?? 512)) {
           client.close(4429, "too many seats");
           return;
         }
+        releasePending(); // about to become a real leg, counted via seats.size instead
         try {
           ({ id, token } = seats.open(
             { send: (d) => { if (client.readyState === WebSocket.OPEN) client.send(d); },
@@ -557,7 +596,8 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         } catch (err) {
           // seats.ts treats an id/token collision as a capability escape, not
           // an ordinary failure — it must not vanish into a bare close. Log
-          // enough to identify which case this was.
+          // enough to identify which case this was (the message itself never
+          // contains the colliding id or token value — see seats.ts).
           console.error(`seat: open() failed for surface "${surface}":`,
                         err instanceof Error ? err.message : err);
           client.close(1011, "seat registry error");
