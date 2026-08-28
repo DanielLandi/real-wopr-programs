@@ -24,7 +24,9 @@ export interface LocalLegOpts {
   /** Caller side. The answering end's handshake and control frames travel back
    *  over the trunk (that is how a visitor sees CARRIER DETECT), but a calling
    *  PROGRAM must not be handed them as input: no period program ever had to
-   *  answer its own modem. */
+   *  answer its own modem. Enforced on the INBOUND path (`deliver`), which is
+   *  the direction that carries them; the outbound path is filtered too, where
+   *  it keeps a program's own control traffic off the trunk. */
   filterRitual?: boolean;
   send: (data: string) => void;
   close: (reason?: string) => void;
@@ -57,7 +59,24 @@ export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refu
   const buffer: string[] = [];
   let open = false;
 
+  /** Only what a program should read. Anything that will not decode into a
+   *  kind we can classify is not handed to one either. */
+  const forProgram = (text: string): boolean => {
+    try {
+      const kind = decodeEnvelope(text).kind;
+      return kind === "output" || kind === "prompt";
+    } catch {
+      return false;
+    }
+  };
+
   const push = (data: string) => {
+    // INBOUND is where the ritual actually is. The far end's `/link` runs the
+    // dial FSM and its DIALING/RINGING/CARRIER DETECT frames travel back over
+    // the trunk to here — that is how a visitor sees a modem connect, and it
+    // is exactly what a calling PROGRAM must never be handed as input. Filter
+    // on the way IN, not only on the way out.
+    if (opts.filterRitual && !forProgram(data)) return;
     if (open) local.send(data); else buffer.push(data);
   };
 
@@ -77,14 +96,12 @@ export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refu
 
   local.on("message", (data) => {
     const text = data.toString();
-    if (opts.filterRitual) {
-      try {
-        const kind = decodeEnvelope(text).kind;
-        if (kind !== "output" && kind !== "prompt") return;
-      } catch {
-        return;   // not an envelope we can classify; do not feed it to a program
-      }
-    }
+    // OUTBOUND. The caller's own surface is `trunk-caller` -> profile `off` ->
+    // handshake "none", so this direction carries no ritual to drop; kept
+    // because it stops a calling program's own control traffic crossing the
+    // trunk. The guarantee the comment on `filterRitual` states lives in
+    // `push` above.
+    if (opts.filterRitual && !forProgram(text)) return;
     opts.send(text);
   });
 

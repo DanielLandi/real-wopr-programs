@@ -110,23 +110,55 @@ test("local-leg: buffers what arrives before the socket opens", async () => {
   } finally { await s.close(); }
 });
 
-test("local-leg: the caller side drops the ritual, the callee side keeps it", async () => {
+test("local-leg: the caller side drops the far end's ritual, the callee side keeps it", async () => {
+  // INBOUND is the direction under test. `deliver` is what the trunk pushes
+  // into, and the far end's dial ritual is what arrives on it — the callee's
+  // /link runs the FSM and its DIALING/RINGING/CARRIER DETECT frames travel
+  // back over the trunk to the caller.
+  //
+  // Driving the stub comms socket instead would exercise the OUTBOUND path,
+  // which on a `trunk-caller` surface (profile `off`, handshake "none") never
+  // carries a ritual frame at all — so it passed whether or not the guard
+  // existed, which is how the filter came to sit on the wrong side for nine
+  // reviews. Assert against what reaches the program: the comms socket.
+  const env = (kind: string, payload: string) => encodeEnvelope({
+    v: 1, session: "S1", seq: 0, kind: kind as never,
+    link: "trunk-caller", payload, eom: true,
+  });
+  const kindsOf = (frames: string[]) => frames.map((d) => decodeEnvelope(d).kind);
+
   const caller = await stubs();
+  const callee = await stubs();
   try {
-    const out: string[] = [];
-    await openLocalLeg({
+    const callerLeg = await openLocalLeg({
       bridgeUrl: caller.bridgeUrl, commsUrl: caller.commsUrl, surface: "trunk-caller",
-      filterRitual: true, send: (d) => out.push(d), close: () => {},
+      filterRitual: true, send: () => {}, close: () => {},
     });
+    const calleeLeg = await openLocalLeg({
+      bridgeUrl: callee.bridgeUrl, commsUrl: callee.commsUrl, surface: "trunk-call",
+      send: () => {}, close: () => {},
+    });
+    assert.notEqual(callerLeg, "refused");
+    assert.notEqual(calleeLeg, "refused");
     await settle();
-    caller.push("handshake", "CARRIER DETECT");
-    caller.push("control", "NO CARRIER");
-    caller.push("output", "GREETINGS");
+
+    for (const leg of [callerLeg, calleeLeg]) {
+      const d = (leg as { deliver: (data: string) => void }).deliver;
+      d(env("handshake", "CARRIER DETECT"));
+      d(env("control", "NO CARRIER"));
+      d(env("output", "GREETINGS"));
+    }
     await settle();
-    const kinds = out.map((d) => decodeEnvelope(d).kind);
-    assert.deepEqual(kinds, ["output"],
+
+    // The calling program is handed the answer, and nothing of the modem.
+    assert.deepEqual(kindsOf(caller.received), ["output"],
       "a calling program must not be handed the answering modem's ritual");
-  } finally { await caller.close(); }
+    assert.deepEqual(caller.received.map((d) => decodeEnvelope(d).payload), ["GREETINGS"]);
+    // The answering side is not filtered: its own surface runs the ritual, and
+    // a visitor relayed onto it must still see every frame of it.
+    assert.deepEqual(kindsOf(callee.received), ["handshake", "control", "output"],
+      "the callee side must keep everything");
+  } finally { await caller.close(); await callee.close(); }
 });
 
 test("local-leg: a refused mint is a close with a reason, never a hang", async () => {

@@ -496,6 +496,21 @@ test("e2e: a machine calls a machine, words cross both ways, and the line drops 
     }
     assert.match(heardByA(), /ECHO/, "B's answer must reach A's program");
 
+    // ...and only the answer. B answers on `trunk-call` (dialup-1200), so its
+    // /link runs the full dial FSM and every DIALING/RINGING/CARRIER DETECT
+    // frame travels back over the trunk — correct for a visitor, who is
+    // watching a modem connect, and wrong for a calling PROGRAM, which never
+    // had to answer its own modem. The caller's leg filters them on the way
+    // in; by now the ECHO has landed, so the whole ritual has had its chance
+    // to arrive ahead of it.
+    assert.deepEqual(
+      [...new Set(bridgeA.connections[0].received.map((r) => decodeEnvelope(r).kind))],
+      ["output"],
+      "a calling program must be handed the far end's output and nothing else",
+    );
+    assert.doesNotMatch(heardByA(), /DIALING|RINGING|CARRIER|HANDSHAKE|CONNECT/,
+      "the answering end's dial ritual must not reach the calling program");
+
     // And a clean close, seen at both ends.
     call.close("done");
     while (closesA.length === 0 && Date.now() < deadline) {
