@@ -952,3 +952,27 @@ test("ring: onEnd closes the caller's channel exactly once, with the stated reas
   // The channel slot is freed too, not merely reported closed.
   assert.equal(typeof sb.placeCall(a, { seat: "HDL1" }), "object");
 });
+
+// `unregister` reaches onEnd THROUGH the port it is closing, so the trunk
+// socket is already going when onEnd tries to report on it — and ws raises on
+// send-after-close. Throwing out of a close handler would abort the rest of
+// unregister's teardown, taking the other channels' ports with it.
+test("ring: onEnd survives a trunk socket that is already gone", () => {
+  let end: ((reason: string) => void) | undefined;
+  const sb = new Switchboard({
+    reservedWorlds: [],
+    seats: {
+      resolve: () => ({ id: "SEAT1" }),
+      ring: (_id, _name, wire) => { end = wire.onEnd; return { send: () => {}, close: () => {} }; },
+    },
+  });
+  const port = fakePort();
+  const a = codeOf(sb.register(port, { t: "REGISTER", v: 1, name: "PAN AM",
+    region: "SEATTLE US", joshua: "period", world: 2, slot: "PANAM" }));
+  assert.equal(typeof sb.placeCall(a, { seat: "HDL1" }), "object");
+  const dead = { send: () => { throw new Error("WebSocket is not open"); },
+                 close: () => {} };
+  (sb as unknown as { exchanges: Map<string, { port: unknown }> })
+    .exchanges.get(a)!.port = dead;
+  assert.doesNotThrow(() => end!("trunk dropped"));
+});

@@ -19,6 +19,12 @@ import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
 import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 import { SeatRegistry } from "./seats.ts";
 
+/** How much a caller may say into a line that is still ringing before the hub
+ *  hangs up on it. Four frames at the trunk's per-frame cap: enough for a
+ *  program's greeting, which is what the hold exists for, and far short of a
+ *  buffer worth filling on purpose. */
+const SEAT_HELD_MAX_BYTES = TRUNK_MAX_FRAME_BYTES * 4;
+
 export interface ServerOpts {
   port?: number;
   bridgeUrl?: string;
@@ -272,11 +278,14 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // (it fires `timedOut()` for a PENDING ring, and has no notification for a
   // call already in progress). At most one entry per seat: `seats.ring`
   // refuses a second ring "busy" while one is live.
-  const seatCalls = new Map<string, (reason: string) => void>();
+  const seatCalls = new Map<string, (reason: string, playOut: boolean) => void>();
   /** End the ring or call a seat is on, from outside the bridge. A no-op if it
-   *  has already ended by any other door. */
+   *  has already ended by any other door.
+   *
+   *  Never plays the line out: the only caller is the seat's own socket going
+   *  away, and there is nobody left to play it out to. */
   const endSeatCall = (id: string, reason: string): void => {
-    seatCalls.get(id)?.(reason);
+    seatCalls.get(id)?.(reason, false);
   };
 
   const seatBridge: SeatBridge = {
@@ -295,6 +304,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       const down = new LinkShaper(link.profile, link.name, id,
         (e: Envelope) => leg.port.send(encodeEnvelope(e)));
       const held: string[] = [];
+      let heldBytes = 0;
       let answered = false;
       let ended = false;
       const push = (raw: string) => {
@@ -304,27 +314,68 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         try { e = decodeEnvelope(raw); } catch { return; }
         down.send({ kind: e.kind, payload: e.payload, eom: e.eom });
       };
-      /** Every door out of this call leads here, once. */
-      const end = (reason: string) => {
+
+      /** Play the line out, THEN drop carrier — issue #62, the same order the
+       *  `/link` leg's `dropCarrier` uses and for the same reason. At 300 baud
+       *  the machine's last line is still trickling through `down` when it
+       *  hangs up, and `down.close()` discards the whole paced queue: closing
+       *  in front of the playout swallows a system's parting words. NO CARRIER
+       *  goes out via `sendImmediate` because it is a line-state transition,
+       *  not paced serial data (#88), and it is what tells the seat the call
+       *  is over — nothing else on this leg says so.
+       *
+       *  Not awaited by `end`: the MACHINE must learn the call ended at once,
+       *  and only the seat's ear is worth waiting for. */
+      const playOutAndDrop = async () => {
+        await down.drain(drainTimeoutMs);
+        down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
+        down.close();
+      };
+
+      /** Every door out of this call leads here, once.
+       *
+       *  `playOut` is false only when the seat itself has gone: there is
+       *  nobody left to hear the playout, and draining into a closed socket
+       *  would keep the shaper's timers alive for the whole drain window to
+       *  deliver nothing. */
+      const end = (reason: string, playOut = true) => {
         if (ended) return;
         ended = true;
         seatCalls.delete(id);
-        down.close();
-        seats.detach(id);
-        // ONLY an answered ring took a hold — `answer()` takes it. Releasing
-        // after a rejected or unanswered ring would decrement a hold some
-        // other holder is still relying on (a leg this seat dialled out on),
-        // and free a seat that is genuinely mid-conversation.
+        // Disarm a ring still pending in the registry. Without this, a caller
+        // that hangs up (or whose trunk drops) mid-ring leaves `leg.ring`
+        // armed: the seat goes on ringing for a caller that is gone, is
+        // "busy" to everyone else until the 30s timer, and — if the visitor
+        // presses ANSWER inside that window — takes a hold that this already
+        // latched `end` can never release. Safe re-entrantly: the registry
+        // clears `leg.ring` BEFORE invoking `rejected`, so the reject that
+        // arrives from the seat itself finds no ring on the way back in.
+        //
+        // The two branches are exclusive and both matter: ONLY an answered
+        // ring took a hold, so releasing after a rejected or unanswered one
+        // would decrement a hold some other holder is still relying on (a leg
+        // this seat dialled out on) and free a seat that is genuinely
+        // mid-conversation.
         if (answered) seats.release(id);
+        else seats.reject(id);
+        seats.detach(id);
         wire.onEnd(reason);
+        if (playOut) void playOutAndDrop();
+        else down.close();
       };
+
       const outcome = seats.ring(id, callerName, {
         answered: () => {
+          // The ring is disarmed by `end` before it latches, so this should be
+          // unreachable after an end. Belt and braces: answering a call that
+          // has already ended would take a hold nothing is left to release.
+          if (ended) return;
           answered = true;
           seats.attach(id, wire.toMachine);
           // The caller greeted the moment it connected, before anyone had
           // picked up. Those are its first words, and this is where they go.
           for (const d of held.splice(0)) push(d);
+          heldBytes = 0;
         },
         rejected: () => end("rejected"),
         timedOut: () => end("no answer"),
@@ -334,7 +385,19 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       // synchronously inside ring() would already have ended it.
       if (!ended) seatCalls.set(id, end);
       return {
-        send: (data: string) => { if (answered) push(data); else held.push(data); },
+        send: (data: string) => {
+          if (answered) { push(data); return; }
+          // Holding the caller's first words is the point; holding an
+          // unbounded stream of them is a hole. This is a mutual-untrust
+          // boundary — any exchange holding a handle can PLACE and then write
+          // frames at the per-frame cap for the whole ring window with no
+          // consumer, times every channel it can open. The per-frame cap and
+          // maxChannels bound the COUNT, not the total, so bound the total
+          // here and hang up rather than grow.
+          heldBytes += Buffer.byteLength(data);
+          if (heldBytes > SEAT_HELD_MAX_BYTES) { end("greeting exceeds hold capacity"); return; }
+          held.push(data);
+        },
         close: (_code?: number, reason?: string) => end(reason ?? "call ended"),
       };
     },
@@ -749,8 +812,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       }
 
       if (id === undefined) return; // no leg minted yet: nothing else applies
-      if (e.kind === "control" && e.payload === "ANSWER") { seats.answer(id); return; }
-      if (e.kind === "control" && e.payload === "REJECT") { seats.reject(id); return; }
+      if (e.kind === "control") {
+        if (e.payload === "ANSWER") seats.answer(id);
+        else if (e.payload === "REJECT") seats.reject(id);
+        // Every other control payload STOPS HERE. Control is this leg's own
+        // vocabulary — the words the hub and the terminal say to each other
+        // about the line itself — and forwarding it would let a visitor
+        // inject NO CARRIER, DIAL, or any other line-state word straight into
+        // a machine's stream.
+        return;
+      }
       // Everything else is conversation, not control of the leg: it goes to
       // the machine this seat answered, byte for byte — the hub never inspects
       // a payload. A seat on no machine call has nowhere to send, and what it

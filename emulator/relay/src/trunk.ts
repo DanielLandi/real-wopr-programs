@@ -674,9 +674,14 @@ export class Switchboard {
         // and tells the caller why; a second call finds nothing to close and
         // sends no second CLOSE.
         onEnd: (reason) => {
-          if (from.channels.delete(callerChan)) {
+          if (!from.channels.delete(callerChan)) return;
+          // `unregister` reaches here THROUGH the port it is closing: the
+          // trunk socket is already going, and ws raises on send-after-close.
+          // There is no one left to tell, and nothing to fix by throwing out
+          // of a close handler.
+          try {
             from.port?.send(JSON.stringify({ t: "CLOSE", chan: callerChan, reason }));
-          }
+          } catch { /* the socket that would have carried it is already gone */ }
         },
       });
       if (port === "busy" || port === "seat-gone") return port;

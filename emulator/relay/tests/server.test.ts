@@ -1064,8 +1064,16 @@ function transcript(ws: WebSocket) {
       await waitFor(() => msgs.length >= n);
       return decodeEnvelope(msgs[n - 1]!);
     },
+    /** Everything said so far, decoded, in order. */
+    all(): Envelope[] { return msgs.map((m) => decodeEnvelope(m)); },
+    /** Wait until something said so far satisfies `pred`. */
+    until(pred: (e: Envelope) => boolean): Promise<void> {
+      return waitFor(() => msgs.some((m) => pred(decodeEnvelope(m))));
+    },
   };
 }
+
+const isNoCarrier = (e: Envelope) => e.kind === "control" && e.payload === "NO CARRIER";
 
 function ringServer(registry: SeatRegistry): Promise<RunningServer> {
   return startServer({ port: 0, config: { ...DEFAULT_CONFIG, mode: "fast" },
@@ -1088,6 +1096,7 @@ function machineSays(chan: number, payload: string): string {
  *  the seat socket, its leg id, and the seat's transcript. */
 async function seatThatCalled(server: RunningServer, host: WebSocket, registry: SeatRegistry) {
   const assigned = JSON.parse(await nextMessage(host));
+  const exchange: string = assigned.exchange;
   const seat = await connect(`ws://127.0.0.1:${server.port}/seat?surface=home-terminal`);
   askSeat(seat);
   const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1]!;
@@ -1103,7 +1112,7 @@ async function seatThatCalled(server: RunningServer, host: WebSocket, registry: 
   // released rather than sleeping on it: until it is, the seat is busy for a
   // legitimate reason and the ring under test would be refused.
   await waitFor(() => registry.leg(id)?.onCall === false);
-  return { handle, seat, id, said };
+  return { handle, seat, id, said, token, exchange };
 }
 
 test("ring: a machine rings a seat that called it, and the seat answers", async () => {
@@ -1182,14 +1191,16 @@ test("ring: an answered call that ends frees the seat to be rung again", async (
     seatControl(seat, "ANSWER");
     await waitFor(() => registry.leg(id)?.onCall === true);
 
-    // PAN AM hangs up. The seat's hold must end with the call.
+    // PAN AM hangs up. The seat is told the carrier dropped, and the seat's
+    // hold must end with the call.
     host.send(JSON.stringify({ t: "CLOSE", chan: first.chan, reason: "goodbye" }));
+    assert.equal((await said.at(2)).payload, "NO CARRIER");
     await waitFor(() => registry.leg(id)?.onCall === false);
 
     host.send(JSON.stringify({ t: "PLACE", call: 2, to: { seat: handle } }));
     const second = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
     assert.equal(second.t, "PLACED", "a seat that answered once must be ringable again");
-    assert.equal((await said.at(2)).payload, "RING PAN AM");
+    assert.equal((await said.at(3)).payload, "RING PAN AM");
     seat.close();
   } finally { host.close(); await server.close(); }
 });
@@ -1239,5 +1250,184 @@ test("ring: a seat leaving mid-call closes the machine's channel", async () => {
     const closed = await nextFrame(host, (f) => f.t === "CLOSE");
     assert.equal(closed.chan, placed.chan);
     assert.equal(closed.reason, "seat gone");
+  } finally { host.close(); await server.close(); }
+});
+
+// ---- fix round 1: the doors that were left open ---------------------------
+
+// The sharpest of them. `seats.ring` arms `leg.ring` and a 30s timer; a caller
+// that hangs up mid-ring used to leave both armed. The seat went on ringing for
+// a caller that was gone and was "busy" to everyone else for the window — and
+// if the visitor pressed ANSWER inside it, `answer()` took a hold that the
+// bridge's already-latched `end` could never release, so the seat was busy for
+// the life of its socket. Place-and-CLOSE on a loop is a cheap denial of
+// service against any seat whose handle an exchange holds.
+test("ring: a caller that hangs up mid-ring disarms the ring", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // PAN AM gives up before anyone picks up.
+    host.send(JSON.stringify({ t: "CLOSE", chan: placed.chan, reason: "gave up" }));
+    assert.equal((await said.at(2)).payload, "NO CARRIER",
+      "the seat must be told to stop ringing");
+    await waitFor(() => registry.leg(id)?.onCall === false);
+
+    // The visitor presses ANSWER inside the window the stale ring used to
+    // leave open. There is no call to answer, so it must take no hold. `SEAT?`
+    // is the barrier: it is answered on the SAME socket, behind the ANSWER.
+    seatControl(seat, "ANSWER");
+    askSeat(seat);
+    assert.match((await said.at(3)).payload, /^SEAT \S+$/);
+    assert.equal(registry.leg(id)?.onCall, false, "a stale ANSWER must take no hold");
+
+    // And the seat is genuinely ringable again, not merely reported idle.
+    host.send(JSON.stringify({ t: "PLACE", call: 2, to: { seat: handle } }));
+    const again = await nextFrame(host, (f) => f.t === "PLACED" || f.t === "REFUSED");
+    assert.equal(again.t, "PLACED", "an abandoned ring must not leave the seat busy");
+    assert.equal((await said.at(4)).payload, "RING PAN AM");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// Issue #62 on the seat leg. The machine's last line is still trickling through
+// the shaper when it hangs up; closing in front of the playout swallows it.
+test("ring: a machine's parting words reach the seat before the carrier drops", async () => {
+  const display = "PANAMAC OFF LINE. GOODBYE.";
+  const registry = new SeatRegistry();
+  // Authentic, not fast: at 600 baud (home-terminal) this display takes ~0.4s
+  // to trickle out, which is the whole point — the CLOSE lands behind it.
+  const server = await startServer({ port: 0,
+    config: { ...DEFAULT_CONFIG, mode: "authentic" },
+    trunk: { reservedWorlds: [] }, seats: { registry } });
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "ANSWER");
+    await waitFor(() => registry.leg(id)?.onCall === true);
+
+    // Sign off and hang up immediately behind it, the way a node's DROP does.
+    host.send(machineSays(placed.chan, display));
+    host.send(JSON.stringify({ t: "CLOSE", chan: placed.chan, reason: "goodbye" }));
+
+    await said.until(isNoCarrier);
+    const said_ = said.all();
+    const carrier = said_.findIndex(isNoCarrier);
+    assert.equal(carrier, said_.length - 1,
+      "NO CARRIER is the last thing on the line, after the parting words");
+    assert.equal(reassemble(said_.slice(0, carrier).filter((e) => e.kind === "output")).join(""),
+      display, "the sign-off must reach the seat before the line drops");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// The `if (answered)` guard on the release, exercised with a SECOND holder
+// outstanding — the case an ablation that removes the release entirely cannot
+// see. Holds are a counter: a visitor mid-ring can dial a machine from the
+// same terminal, and an unconditional release on REJECT would free a seat that
+// is genuinely mid-conversation.
+test("ring: rejecting a ring does not free a seat that is dialling out", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  let dial: WebSocket | undefined;
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said, token, exchange } =
+      await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // Mid-ring, the visitor dials out from the same terminal. That is a
+    // second, independent hold on the seat.
+    dial = new WebSocket(`ws://127.0.0.1:${server.port}/x/${exchange}/link` +
+      `?surface=home-terminal&session=S9&token=T9&seat=${token}`);
+    await nextFrame(host, (f) => f.t === "OPEN");
+    await waitFor(() => registry.leg(id)?.onCall === true);
+
+    seatControl(seat, "REJECT");
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.reason, "rejected");
+    assert.equal(registry.leg(id)?.onCall, true,
+      "the outbound dial still holds this seat; the ring never held it at all");
+
+    dial.close();
+    await waitFor(() => registry.leg(id)?.onCall === false);
+    seat.close();
+  } finally { dial?.close(); host.close(); await server.close(); }
+});
+
+// Control is the seat leg's own vocabulary — what the hub and the terminal say
+// to each other about the line. A visitor must not be able to put a line-state
+// word into a machine's stream.
+test("ring: a seat cannot inject control words into the machine's stream", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+    seatControl(seat, "ANSWER");
+    await waitFor(() => registry.leg(id)?.onCall === true);
+
+    // Two forgeries and then an honest word, in that order on one socket: what
+    // the machine sees first tells us which of them crossed.
+    seatControl(seat, "NO CARRIER");
+    seatControl(seat, "DIAL");
+    seat.send(encodeEnvelope({ v: 1, session: "x", seq: 0, kind: "input",
+      link: "seat", payload: "HELLO", eom: true }));
+    const back = await nextFrame(host, (f) => f.t === "FRAME");
+    assert.equal(back.chan, placed.chan);
+    assert.equal(decodeEnvelope(back.data).payload, "HELLO",
+      "the control words must stop at the hub");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// Holding the caller's first words is the point; holding an unbounded stream of
+// them is a hole. maxChannels and the per-frame cap bound the COUNT of frames a
+// hostile exchange can park on a ringing line, not the total bytes.
+test("ring: a caller that floods an unanswered line is hung up on", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // Nobody has answered. Park frames at close to the per-frame cap on the
+    // held line until the hub stops taking them.
+    const big = "X".repeat(4000);
+    for (let i = 0; i < 12; i++) host.send(machineSays(placed.chan, big));
+
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.chan, placed.chan);
+    assert.equal(closed.reason, "greeting exceeds hold capacity");
+    // ...and the seat, which never answered, is left free rather than ringing.
+    assert.equal((await said.at(2)).payload, "NO CARRIER");
+    await waitFor(() => registry.leg(id)?.onCall === false);
+    seat.close();
   } finally { host.close(); await server.close(); }
 });
