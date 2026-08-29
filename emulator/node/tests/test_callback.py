@@ -124,16 +124,26 @@ def test_a_hub_that_never_answers_is_bounded_by_timeout_s():
     exercises the timeout path at all. 192.0.2.0/24 (RFC 5737 TEST-NET-1) is
     reserved and never routed, so a connection to it blackholes instead of
     refusing — the case timeout_s exists for."""
+    timeout_s = 0.5
     async def flow():
         t0 = time.perf_counter()
         result = await place_seat_call(
-            "http://192.0.2.1", "s3cret", "HANDLE1", timeout_s=0.5)
+            "http://192.0.2.1", "s3cret", "HANDLE1", timeout_s=timeout_s)
         elapsed = time.perf_counter() - t0
 
         assert result != "placed"
-        # Generous multiple of timeout_s: bounds runaway behaviour, not exact
-        # timing, since scheduling jitter is not the thing being pinned.
-        assert elapsed < 2.0
+        # Two bounds, for two different failures. The ceiling (generous: 4x
+        # timeout_s) catches the real regression this test exists for — the
+        # timeout not being honoured, holding the teardown path open. The
+        # floor (0.8x timeout_s) is not a performance check: it exists to
+        # catch this test going vacuous. If some future sandbox's network
+        # rejects TEST-NET-1 instead of dropping it, the call would return in
+        # milliseconds, "result != 'placed'" would still hold, and the
+        # ceiling alone would pass — silently testing nothing. The floor
+        # turns that into a loud failure instead. Measured directly against
+        # this address (task-5-report.md): elapsed tracks timeout_s almost
+        # exactly, so both bounds are comfortable on a normal machine.
+        assert timeout_s * 0.8 <= elapsed < timeout_s * 4
 
     asyncio.run(flow())
 
