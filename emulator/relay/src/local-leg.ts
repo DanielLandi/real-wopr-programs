@@ -37,7 +37,10 @@ export interface LocalLegOpts {
    *  PROGRAM must not be handed them as input: no period program ever had to
    *  answer its own modem. Enforced on the INBOUND path (`deliver`), which is
    *  the direction that carries them; the outbound path is filtered too, where
-   *  it keeps a program's own control traffic off the trunk. */
+   *  it keeps a program's own control traffic off the trunk.
+   *
+   *  Ritual, not conversation: `input` crosses freely (see `forProgram`). What
+   *  the far end TYPES is the call. */
   filterRitual?: boolean;
   send: (data: string) => void;
   close: (reason?: string) => void;
@@ -72,11 +75,25 @@ export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refu
   let open = false;
 
   /** Only what a program should read. Anything that will not decode into a
-   *  kind we can classify is not handed to one either. */
+   *  kind we can classify is not handed to one either.
+   *
+   *  Three kinds pass, and the line between them and the two that do not is
+   *  conversation vs. the modem. `output` and `prompt` are the far end
+   *  talking; `input` is the far end's TYPING, which on a machine call is the
+   *  person who answered the ring speaking into it. Dropping `input` was what
+   *  made an answered callback one-way: the seat's every line reaches here
+   *  (server.ts's seatWss -> seats.inboundOf -> Switchboard.clientFrame ->
+   *  a FRAME on the trunk -> this leg's `deliver`) and was discarded a single
+   *  hop from the program it was addressed to (#71).
+   *
+   *  `handshake` and `control` stay filtered, and they are the entire reason
+   *  `filterRitual` exists: no period program ever had to answer its own
+   *  modem, and forwarding line-state words would also let whoever is on the
+   *  far end inject NO CARRIER / DIAL into a program's input stream. */
   const forProgram = (text: string): boolean => {
     try {
       const kind = decodeEnvelope(text).kind;
-      return kind === "output" || kind === "prompt";
+      return kind === "output" || kind === "prompt" || kind === "input";
     } catch {
       return false;
     }

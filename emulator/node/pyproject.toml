@@ -9,13 +9,17 @@ dependencies = [
   # The node host dials its relays outbound. This arrived transitively via
   # uvicorn[standard]; declared explicitly now that it is imported directly.
   "websockets>=13",
+  # app/callback.py imports this at module scope (not lazily — a callback
+  # that silently no-ops in production defeats its purpose), and the prod
+  # image installs `.[prod]`, not `.[dev]`, so it cannot live only there.
+  "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
 # Production clients (deployment.md D4/D5). Imports are lazy: the bridge runs
 # with the in-memory store + scripted Joshua when these are absent.
 prod = ["asyncpg>=0.30", "anthropic>=0.40"]
-dev = ["pytest>=8", "httpx>=0.27", "uvloop>=0.19", "asyncpg>=0.30"]
+dev = ["pytest>=8", "uvloop>=0.19", "asyncpg>=0.30"]
 
 [build-system]
 requires = ["setuptools>=68"]

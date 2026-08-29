@@ -90,6 +90,7 @@ whole surface.
 | `TRUNK_RESERVED_WORLDS` | comma list of worlds only a keyed REGISTER may enter (default `1`, the flagship's). Blank or whitespace reads as unset, not as "reserve nothing" — a misconfiguration fails closed. `TRUNK_RESERVED_WORLDS=none` opts out on purpose, which also lets strangers into the flagship's world: don't. |
 | `TRUNK_RESERVE_KEY` | the key a tieline sends as `TIELINE_RESERVE_KEY` to enter a reserved world. An empty value unlocks nothing. Dormant while world 1 is self-seeded — nothing needs to claim it. |
 | `TRUNK_LOCAL_WORLD` | the hub's own world 1, seeded rather than claimed (below). |
+| `BRIDGE_TRUNK_URL` | set on the BRIDGE, not the hub: where the bridge reaches this hub's HTTP API to place a call (`POST /trunk/place`), e.g. `http://comms:8081`. Unset (the default) means Joshua forms the intention to ring a visitor back and then rings nobody — silently, because a machine with no trunk cannot call anyone and that is not an error on a dev box. It is what makes the callback in the film work, so an exchange that wants one must set it. Authenticated with the same `BRIDGE_INTERNAL_TOKEN` the two services already share. |
 
 World 1 is not registered by anyone: the hub synthesizes it at startup from
 `TRUNK_LOCAL_WORLD`, a JSON array of `{slot, name, region, system?, joshua?}`.

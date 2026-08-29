@@ -60,6 +60,9 @@ class RouteResult:
     # What the user's prompt should be after this turn. A status bar only
     # exists on rich surfaces; a prompt works on a teletype too.
     prompt: str = ">"
+    # What the machine is still trying to find out, if anything — carried up
+    # from JoshuaReply.seeks so the hosting session can act on it later.
+    seeks: str | None = None
 
 
 class Router:
@@ -170,6 +173,32 @@ class Router:
         later phase that may still want a pure backdoor check."""
         return session_id in self._authenticated
 
+    def open_backdoor(self, session_id: str) -> str:
+        """Put the session behind the front door, as Joshua, and give back the
+        line he answers with.
+
+        Three callers, one body, because the state this sets is not optional
+        decoration: the attachment is what routes the NEXT line to `_converse`
+        instead of the front door's rejection, and the seeded history is what
+        keeps the engine from repeating the greeting on its first reply
+        (joshua.py reads `last_assistant`). A caller that printed
+        BACKDOOR_GREETING without doing all three would greet as Joshua and
+        then answer as a locked door.
+
+        Two of the callers are the film's own backdoor word typed at a
+        terminal. The third is a `trunk-caller` session — the machine end of a
+        call THIS host placed. That end has no visitor to type anything: the
+        machine dialled out, so the machine speaks first, and what it has to
+        say is the same greeting it gives David. Returning the text rather
+        than a RouteResult is what lets that caller send it as a connect-time
+        frame, with no turn to attach it to.
+        """
+        self._attach[session_id] = Attachment(mode=JOSHUA)
+        self._authenticated.add(session_id)
+        self._joshua_history.setdefault(session_id, []).append(
+            {"role": "assistant", "content": BACKDOOR_GREETING})
+        return BACKDOOR_GREETING
+
     async def _logon(self, session_id: str, upper: str) -> RouteResult:
         session = await self.store.get_session(session_id)
         callsign = upper[6:].strip() if upper.startswith("LOGON ") else ""
@@ -271,11 +300,7 @@ class Router:
         if logon is not None:
             return logon
         if upper in ("JOSHUA", "LOGON JOSHUA"):
-            self._attach[session_id] = Attachment(mode=JOSHUA)
-            self._authenticated.add(session_id)
-            self._joshua_history.setdefault(session_id, []).append(
-                {"role": "assistant", "content": BACKDOOR_GREETING})
-            return RouteResult(text=BACKDOOR_GREETING, route="bridge",
+            return RouteResult(text=self.open_backdoor(session_id), route="bridge",
                                detail={"backdoor": True})
         # The door answers two questions before it opens, because the film
         # shows it doing so: David reads the HELP GAMES definition and then
@@ -387,11 +412,7 @@ class Router:
         handler inside the router until then.
         """
         if upper in ("JOSHUA", "LOGON JOSHUA"):
-            self._attach[session_id] = Attachment(mode=JOSHUA)
-            self._authenticated.add(session_id)
-            self._joshua_history.setdefault(session_id, []).append(
-                {"role": "assistant", "content": BACKDOOR_GREETING})
-            return RouteResult(text=BACKDOOR_GREETING, route="bridge",
+            return RouteResult(text=self.open_backdoor(session_id), route="bridge",
                                detail={"backdoor": True})
 
         room = await self._session_room(session_id)
@@ -705,12 +726,14 @@ class Router:
 
         await self.store.log_event(session_id, "joshua", "joshua",
                                    {"input": raw, "reply": reply.text,
-                                    "start_game": reply.start_game_id})
+                                    "start_game": reply.start_game_id,
+                                    "seeks": reply.seeks})
 
         if reply.start_game_id:
             # Joshua asks; the monitor attaches. Joshua never reaches a game
             # itself — which is the film's argument, in the architecture.
             started = await self._new_game(session_id, reply.start_game_id, room)
             return RouteResult(text=f"{reply.text}\n\n{started.text}", route="joshua",
-                               detail={"start_game": reply.start_game_id})
-        return RouteResult(text=reply.text, route="joshua")
+                               detail={"start_game": reply.start_game_id},
+                               seeks=reply.seeks)
+        return RouteResult(text=reply.text, route="joshua", seeks=reply.seeks)

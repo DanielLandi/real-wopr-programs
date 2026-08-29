@@ -26,6 +26,11 @@ export interface WoprLinkOpts {
   surface: string;
   session: string;
   token?: string;
+  /** This terminal's seat token, when it holds one. Presenting it is what
+   *  makes the hub mint a capability handle for this visitor and disclose it
+   *  to the program (relay/src/server.ts:508). Without it the visitor can
+   *  dial out and can never be rung back. */
+  seat?: string;
 }
 
 /** Thin, dependency-free wrapper: connect, receive envelopes, send inputs. */
@@ -56,6 +61,7 @@ export class WoprLink {
     url.searchParams.set("surface", this.opts.surface);
     url.searchParams.set("session", this.opts.session);
     if (this.opts.token) url.searchParams.set("token", this.opts.token);
+    if (this.opts.seat) url.searchParams.set("seat", this.opts.seat);
 
     this.ws = new WebSocket(url.toString());
     this.ws.onopen = () => this.emit({ type: "open" });

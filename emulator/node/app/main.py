@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .attachment import FRONT_DOOR
 from .budget import DailyBudget, MeteredJoshua
+from .callback import place_seat_call
 from .config import load_settings
 from .execstack import decode as decode_stack, encode as encode_stack
 from .games import load_catalog
@@ -37,11 +38,25 @@ from .tokens import sign_session, verify_session
 
 log = logging.getLogger("wopr.bridge")
 
+# Every surface this bridge will mint a session for. The value is the link
+# profile stamped into each envelope's `link` field; the comms layer resolves
+# the profile it actually PACES at from its own `surface_links` (relay/src/
+# config.ts), which is authoritative — so a surface missing HERE is not a
+# cosmetic gap, it is a 400 on POST /api/session and a call that cannot exist.
+#
+# The two trunk surfaces are the machine ends of a machine-to-machine call, and
+# every such call mints an ordinary session here (relay/src/local-leg.ts's
+# `openLocalLeg`): `trunk-call` is the end that ANSWERS, `trunk-caller` the end
+# that PLACED. Their profiles mirror the relay's: a call is paced once, by the
+# answering end (dialup-1200), and the calling end must not shape as well
+# (`off`) or two shapers in series halve throughput for no fiction.
 DEFAULT_LINKS = {
     "home-terminal": "dialup-300",
     "norad-terminal": "leased-9600",
     "norad-bigboard": "internal-bus",
     "wopr-panel": "internal-bus",
+    "trunk-call": "dialup-1200",
+    "trunk-caller": "off",
 }
 
 
@@ -378,6 +393,15 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
 
         await ws.accept()
         pending: dict[str, str] = {}
+        # Disclosed by the relay ahead of anything else on this session, and
+        # the only way this host can ever ring this visitor back. A local,
+        # not a registry: nothing outside this coroutine reads it, and it
+        # must not outlive the session that was given it (spec §3).
+        seat_handle: str | None = None
+        # A latch, not a counter: the machine decided once. Set where the
+        # turn result is read, acted on at the hangup, and — being a local —
+        # incapable of outliving the session that formed it.
+        seeks: str | None = None
         seq = 0
         observer_task: asyncio.Task | None = None
 
@@ -442,6 +466,26 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             if settings.logon_banner:
                 greeting = f"\n{settings.logon_banner}\n{greeting}"
             await ws.send_text(envelope("output", greeting))
+        elif session.surface == "trunk-caller":
+            # The machine end of a call THIS host PLACED (relay/src/local-leg.ts
+            # mints one per outgoing call). Nobody is going to type here: there
+            # is no visitor on this end, and the far end is whoever answered the
+            # ring. The one who dialled is the one who speaks first, and this
+            # call is Joshua's — he rings David back, so what lands on the
+            # answering seat is his greeting, not a front door.
+            #
+            # `open_backdoor` is the same door the word JOSHUA opens at a
+            # terminal, taken as a whole: it returns the greeting AND leaves the
+            # session attached to Joshua and authenticated, so the first line the
+            # answering seat types is conversation rather than
+            # --CONNECTION TERMINATED--. A bare send of BACKDOOR_GREETING would
+            # greet and then reject.
+            #
+            # Deliberately not `trunk-call`: that surface is a call this host
+            # ANSWERED, where the far end dialled in and must knock like anyone
+            # else.
+            await ws.send_text(
+                envelope("output", f"\n{router.open_backdoor(session_id)}\n"))
 
         try:
             while True:
@@ -467,6 +511,20 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     if message == "BREAK":
                         await store.log_event(session_id, "input", "user", {"control": "BREAK"})
                         await ws.send_text(envelope("output", "\n*** BREAK ***\n"))
+                    elif message.startswith("ORIGIN seat "):
+                        seat_handle = message[len("ORIGIN seat "):].strip() or None
+                    elif message.startswith("ORIGIN world "):
+                        # Provenance only: a machine called, and this says which
+                        # slot it called from. Not a seat — ringing it back would
+                        # ring an exchange, not a person — so unlike the seat
+                        # handle above there is nothing to hold it for. Logged,
+                        # which is the whole of what provenance is good for here,
+                        # rather than bound to a local nothing reads: a variable
+                        # that only pretends to record something is worse than
+                        # the comment explaining why it is not recorded.
+                        await store.log_event(
+                            session_id, "route", "system",
+                            {"origin": message[len("ORIGIN "):].strip()})
                     continue
 
                 # A system-bound session speaks only SYSTEM/1 with its own
@@ -520,6 +578,8 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     continue
 
                 result = await router.handle(session_id, message)
+                if result.seeks and seeks is None:
+                    seeks = result.seeks
                 await ws.send_text(envelope("output", f"\n{result.text}\n"))
                 # The mode the user is now in, carried as its own frame so it
                 # never lands inside the teletype text (the evals assert on
@@ -530,6 +590,22 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         finally:
             if observer_task is not None:
                 observer_task.cancel()
+            # The hangup IS the trigger to dial. Until this moment the
+            # visitor held their own seat, and a held seat is refused `busy`
+            # (relay/src/seats.ts:187) — so this is the first instant the
+            # call can succeed, and the last instant the handle is still
+            # worth anything.
+            if seeks and seat_handle:
+                try:
+                    outcome = await place_seat_call(
+                        settings.trunk_url, settings.internal_token, seat_handle)
+                except Exception as exc:            # noqa: BLE001
+                    # place_seat_call promises never to raise. Not depending
+                    # on that promise: an exception escaping here does not
+                    # fail a callback, it fails the disconnect.
+                    log.warning("callback: placement raised: %r", exc)
+                else:
+                    log.info("callback: %s -> %s", seeks, outcome)
 
     return app
 

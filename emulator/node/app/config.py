@@ -85,6 +85,14 @@ class Settings:
     exchange_register_daily: int = field(
         default_factory=lambda: int(os.environ.get("EXCHANGE_REGISTER_DAILY", "20")))
 
+    # The relay's HTTP base, for the one thing the bridge asks the relay to
+    # do: place a call on behalf of the flagship's own Joshua line
+    # (POST /trunk/place). Empty means "no hub" — a monolith, or a dev box —
+    # and the callback becomes a logged no-op rather than an error. Every
+    # other exchange between these two services runs the other way, relay to
+    # bridge; this is the only edge pointing back.
+    trunk_url: str = field(default_factory=lambda: os.environ.get("BRIDGE_TRUNK_URL", ""))
+
     # CORS (D3): single public origin in prod, localhost dev ports.
     cors_origins: tuple[str, ...] = field(
         default_factory=lambda: tuple(

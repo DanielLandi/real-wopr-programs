@@ -8,7 +8,8 @@
 ;;;;   HISTORY <n>                       REPLY <k>
 ;;;;   U <text>   (n lines, U/A)         <k lines of teletype text>
 ;;;;   A <text>                          INTENT START-GAME <id>   (optional)
-;;;;   INPUT <text>                      END
+;;;;   INPUT <text>                      INTENT SEEK <who>        (optional)
+;;;;                                     END
 ;;;;   END
 
 (in-package :joshua)
@@ -46,7 +47,10 @@
 (defun write-response (lines intent)
   (format t "JOSHUA/1 OK~%REPLY ~D~%" (length lines))
   (dolist (line lines) (format t "~A~%" line))
-  (when intent (format t "INTENT START-GAME ~A~%" intent))
+  (when intent
+    (ecase (car intent)
+      (:start-game (format t "INTENT START-GAME ~A~%" (cdr intent)))
+      (:seek       (format t "INTENT SEEK ~A~%" (cdr intent)))))
   (format t "END~%")
   (finish-output))
 
