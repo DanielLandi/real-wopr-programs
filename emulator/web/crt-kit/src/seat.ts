@@ -66,16 +66,26 @@ export class WoprSeat {
       }
       if (!frame || frame.v !== 1 || typeof frame.payload !== "string") return;
 
-      if (frame.kind === "control") {
-        if (frame.payload.startsWith("SEAT ")) {
-          this._token = frame.payload.slice("SEAT ".length);
-          this.emit({ type: "seated", token: this._token });
-        } else if (frame.payload.startsWith("RING ")) {
-          // A name can contain spaces (CHEYENNE MOUNTAIN) — split once.
-          this.emit({ type: "ring", from: frame.payload.slice("RING ".length) });
-        }
-        // Every other control payload is this leg's own vocabulary and is
-        // ignored here; it stops before reaching the visitor's stream.
+      // Only SEAT and RING are this client's own handshake vocabulary —
+      // everything else, including every other control payload, is forwarded
+      // as a frame, exactly like link.ts forwards every kind without
+      // filtering. This matters once a ring is answered: the hub then sends
+      // NO CARRIER (a control envelope) down this same socket as the only
+      // signal that the call ended (relay/src/server.ts's seatBridge.ring ->
+      // playOutAndDrop, which sends it via LinkShaper.sendImmediate before
+      // down.close() — the seat's own socket stays open throughout, since a
+      // seat must outlive the call). Hardcoding a check for that one payload
+      // here would only break again the next time the hub adds a control
+      // word; the caller (terminal/src/frames.ts's HomeFrameHandler) is the
+      // one that knows what NO CARRIER means.
+      if (frame.kind === "control" && frame.payload.startsWith("SEAT ")) {
+        this._token = frame.payload.slice("SEAT ".length);
+        this.emit({ type: "seated", token: this._token });
+        return;
+      }
+      if (frame.kind === "control" && frame.payload.startsWith("RING ")) {
+        // A name can contain spaces (CHEYENNE MOUNTAIN) — split once.
+        this.emit({ type: "ring", from: frame.payload.slice("RING ".length) });
         return;
       }
       this.emit({ type: "frame", frame });

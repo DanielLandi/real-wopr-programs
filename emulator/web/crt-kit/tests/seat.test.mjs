@@ -127,3 +127,44 @@ test("a link carries the seat token, so the hub knows who to mint for", (t) => {
                  session: "s", token: "t", seat: "TOK1" }).connect();
   assert.match(made[0].url, /seat=TOK1/);
 });
+
+// This is the load-bearing case: once a ring is answered, the hub reuses this
+// same socket to carry the call, and an unrecognized control payload is the
+// hub's ONLY way to say something happened to that call (e.g. it ended). If
+// WoprSeat swallowed every control payload it doesn't itself use, nothing
+// downstream could ever learn of it. Deliberately NOT "NO CARRIER" here, so
+// this proves the general no-filtering rule rather than one hardcoded word.
+test("an unrecognized control payload is forwarded as a frame, not swallowed", (t) => {
+  const made = withFakeSocket(t);
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  const events = [];
+  seat.onEvent((e) => events.push(e));
+  seat.connect();
+  const ws = made[0];
+  ws.readyState = 1;
+  ws.onopen?.();
+  ws.onmessage?.({ data: control("SEAT TOK1") });
+  ws.onmessage?.({ data: control("BUSY") });
+  assert.equal(events.at(-1).type, "frame");
+  assert.equal(events.at(-1).frame.payload, "BUSY");
+});
+
+// The specific instance that motivated the rule above: NO CARRIER is how a
+// terminal that answered a ring learns the call ended (relay/src/server.ts's
+// playOutAndDrop). This is documentation value on top of the general test,
+// not a special case in the implementation.
+test("NO CARRIER on an answered seat also reaches a listener as a frame", (t) => {
+  const made = withFakeSocket(t);
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  const events = [];
+  seat.onEvent((e) => events.push(e));
+  seat.connect();
+  const ws = made[0];
+  ws.readyState = 1;
+  ws.onopen?.();
+  ws.onmessage?.({ data: control("SEAT TOK1") });
+  seat.answer();
+  ws.onmessage?.({ data: control("NO CARRIER") });
+  assert.equal(events.at(-1).type, "frame");
+  assert.equal(events.at(-1).frame.payload, "NO CARRIER");
+});
