@@ -161,6 +161,49 @@ test("local-leg: the caller side drops the far end's ritual, the callee side kee
   } finally { await caller.close(); await callee.close(); }
 });
 
+// Every kind, named individually, because #71 records that two of the five
+// were never covered at all — and `input`, the one the whole two-way call
+// depends on, was among them and was being dropped. A test that only ever
+// asserted "the ritual is filtered" cannot tell a correct filter from one that
+// eats the conversation as well.
+test("local-leg: filterRitual keeps conversation and drops only the modem", async () => {
+  const env = (kind: string, payload: string) => encodeEnvelope({
+    v: 1, session: "S1", seq: 0, kind: kind as never,
+    link: "trunk-caller", payload, eom: true,
+  });
+  const s = await stubs();
+  try {
+    const leg = await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-caller",
+      filterRitual: true, send: () => {}, close: () => {},
+    });
+    assert.notEqual(leg, "refused");
+    await settle();
+    const d = (leg as { deliver: (data: string) => void }).deliver;
+    // The ORIGIN control envelope this leg sends itself is not in play: no
+    // `origin` was passed, so everything on the comms socket arrived via
+    // `deliver`.
+    d(env("output", "GREETINGS PROFESSOR FALKEN."));
+    d(env("prompt", ">"));
+    d(env("input", "HELLO"));
+    d(env("handshake", "CARRIER DETECT"));
+    d(env("control", "NO CARRIER"));
+    await settle();
+
+    const got = s.received.map((r) => {
+      const e = decodeEnvelope(r);
+      return [e.kind, e.payload];
+    });
+    assert.deepEqual(got, [
+      ["output", "GREETINGS PROFESSOR FALKEN."],
+      ["prompt", ">"],
+      // The load-bearing row: a person answered the ring and typed. Without
+      // it the callback is a monologue.
+      ["input", "HELLO"],
+    ], "handshake and control are the modem; output, prompt and input are the call");
+  } finally { await s.close(); }
+});
+
 test("local-leg: a refused mint is a close with a reason, never a hang", async () => {
   const s = await stubs({ mintStatus: 400 });
   try {
