@@ -19,3 +19,4 @@ export {
   type Envelope,
   type FrameKind,
 } from "./link";
+export { WoprSeat, type WoprSeatOpts, type SeatEvent } from "./seat";
