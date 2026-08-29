@@ -9,7 +9,7 @@
 ;;;;   U <text>   (n lines, U/A)         <k lines of teletype text>
 ;;;;   A <text>                          INTENT START-GAME <id>   (optional)
 ;;;;   INPUT <text>                      INTENT SEEK <who>        (optional)
-;;;;                                      END
+;;;;                                     END
 ;;;;   END
 
 (in-package :joshua)
