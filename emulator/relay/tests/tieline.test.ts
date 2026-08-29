@@ -11,7 +11,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { startServer } from "../src/server.ts";
-import { startTieline } from "../src/tieline.ts";
+import { startTieline, type PlacedCall } from "../src/tieline.ts";
 import { encodeEnvelope } from "../src/envelope.ts";
 
 function connect(url: string): Promise<WebSocket> {
@@ -1084,5 +1084,94 @@ test("tieline: a peer whose bridge is down refuses each call rather than wedging
       `the second call must reach the exchange, not a channel the first one leaked: ${JSON.stringify(second)}`);
   } finally {
     t.stop(); caller.close(); await hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+// ---- a refused mint must tell the HOST, not only the hub -----------------
+//
+// The CLOSE tests above prove the hub's channel is freed. They say nothing
+// about the host that asked for the call. `place()` hands back a PlacedCall
+// whether or not a leg ever attached, and `openMachineChannel` fires onOpen
+// the instant a call arrives — so on a refused mint both ends of this host's
+// own API report a live call that has already been torn down on the wire. A
+// host tracking live calls through onOpen/onClose (the tieline CLI, and every
+// program that will place calls of its own) leaks one entry per refusal and
+// holds a handle for a channel the hub has forgotten.
+
+test("tieline: a refused mint on a call this host placed tells the host, once", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ fail: true });
+  const hub = new WebSocketServer({ port: 0 });
+  const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
+  hub.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const f = JSON.parse(data.toString());
+      fromTieline.push(f);
+      if (f.t === "PLACE") ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 6 }));
+    });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await waitFor(() => t.assigned());
+    const placed = await t.place({ world: 1, slot: "PANAM" });
+    assert.equal(typeof placed, "object");
+    await waitFor(() => closed.length > 0);
+    assert.deepEqual(closed, [{ chan: 6, reason: "no session" }],
+      "the placer must learn its own call never got a local end");
+
+    // And the handle it still holds must not end the call a second time: the
+    // hub freed chan 6 when the CLOSE above arrived and may have handed that
+    // number to a different call since.
+    (placed as PlacedCall).close("changed my mind");
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(closed, [{ chan: 6, reason: "no session" }],
+      "hanging up an already-ended call must not fire a second onClose");
+    assert.deepEqual(fromTieline.filter((f) => f.t === "CLOSE"),
+                     [{ t: "CLOSE", chan: 6, reason: "no session" }],
+                     "nor put a second CLOSE for that channel on the wire");
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a refused mint on an inbound machine call closes the onOpen it fired", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ fail: true });
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const opened: number[] = [];
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onOpen: (chan) => opened.push(chan),
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await waitFor(() => t.assigned());
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 5, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await waitFor(() => opened.length > 0);
+    await waitFor(() => closed.length > 0);
+    assert.deepEqual(closed, [{ chan: 5, reason: "no session" }],
+      "onOpen without a matching onClose leaks the call in every host that tracks them");
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
   }
 });
