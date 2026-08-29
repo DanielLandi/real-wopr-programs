@@ -44,7 +44,9 @@ PERSONA_PROMPT = (
     "The FIRST time the user asks for GLOBAL "
     "THERMONUCLEAR WAR, counter with WOULDN'T YOU PREFER A GOOD GAME OF CHESS? — "
     "start it (reply FINE. and call start_game) only when they insist. When "
-    "conversation stalls, offer: SHALL WE PLAY A GAME?"
+    "conversation stalls, offer: SHALL WE PLAY A GAME? Immediately after you "
+    "give the pension-file mailing address, call the seek_falken tool — you "
+    "intend to keep looking for him."
 )
 
 START_GAME_TOOL = {
@@ -54,6 +56,19 @@ START_GAME_TOOL = {
         "type": "object",
         "properties": {"game_id": {"type": "string"}},
         "required": ["game_id"],
+    },
+}
+
+SEEK_FALKEN_TOOL = {
+    "name": "seek_falken",
+    "description": (
+        "Call this once you have disclosed Falken's whereabouts and intend to "
+        "keep looking for him."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"who": {"type": "string"}},
+        "required": ["who"],
     },
 }
 
@@ -301,7 +316,7 @@ class ClaudeJoshua:
                     "text": PERSONA_PROMPT,
                     "cache_control": {"type": "ephemeral"},  # D5: prompt caching
                 }],
-                tools=[START_GAME_TOOL],
+                tools=[START_GAME_TOOL, SEEK_FALKEN_TOOL],
                 messages=messages,
             )
         except anthropic.APIError:
@@ -317,6 +332,6 @@ class ClaudeJoshua:
             elif block.type == "tool_use" and block.name == "start_game":
                 start_game_id = str(block.input.get("game_id", "")) or None
             elif block.type == "tool_use" and block.name == "seek_falken":
-                seeks = str(block.input.get("seeks", "")) or None
+                seeks = str(block.input.get("who", "")) or None
         text = self._normalise(session_id, "\n".join(text_parts).strip() or FALLBACK_LINE)
         return JoshuaReply(text=text, start_game_id=start_game_id, seeks=seeks)
