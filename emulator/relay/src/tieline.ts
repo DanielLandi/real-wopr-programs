@@ -138,8 +138,18 @@ export function startTieline(opts: TielineOpts): {
       //
       // Skip only if the hub already forgot this chan on its own (an incoming
       // CLOSE set `abandoned` first) — that CLOSE already freed the channel
-      // there, and the number may since have been reused.
-      if (!abandoned) send({ t: "CLOSE", chan: f.chan, reason: "no session" });
+      // there, the number may since have been reused, and its handler has
+      // already fired the onClose below.
+      //
+      // The onOpen above fired the moment the call arrived, deliberately, so
+      // the same close has to reach the same listener: a host that tracks live
+      // calls through this pair — the tieline CLI does, and so will every
+      // program that places calls of its own — otherwise counts a call that
+      // was torn down on the wire before it ever had a local end.
+      if (!abandoned) {
+        send({ t: "CLOSE", chan: f.chan, reason: "no session" });
+        opts.onClose?.(f.chan, "no session");
+      }
       return;
     }
     // The hub already forgot this chan while the mint was in flight — close
@@ -154,17 +164,27 @@ export function startTieline(opts: TielineOpts): {
    *  as openMachineChannel above — so the returned PlacedCall has something
    *  real to hang up. */
   async function attachPlaced(chan: number): Promise<PlacedCall> {
+    // One channel, one ending. A PlacedCall is a HANDLE the host keeps, which
+    // makes hangUp the one ending path that can be reached AFTER some other
+    // path already ended this channel — by a host that hangs up inside its own
+    // onClose, or simply later. Every path below sets the latch; hangUp reads
+    // it. Without it that second hangup puts a CLOSE on the wire for a channel
+    // number the hub freed and may since have reused, and fires a second
+    // onClose for a call that ended once.
+    let ended = false;
     const hangUp = (reason?: string) => {
+      if (ended) return;
+      ended = true;
       legs.get(chan)?.close(); legs.delete(chan);
       send({ t: "CLOSE", chan, reason });
       // Told here, not by the leg's own close callback: that callback is
       // latched behind `if (legs.delete(chan))`, and the line above already
       // took the entry, so it can never fire for a call this host hung up
-      // itself. Without this, a placer's own hangup is the ONE channel-ending
-      // path of four that notifies nobody — and a host tracking live channels
-      // through onClose would leak an entry for every call it closed. Exactly
-      // one onClose per ended channel still holds: the leg's callback finds
-      // the latch false, and the hub does not echo a host's own CLOSE back.
+      // itself. Without this, a host tracking live channels through onClose
+      // would leak an entry for every call it closed. Still exactly one
+      // onClose per ended channel: the leg's callback finds its latch false,
+      // the hub does not echo a host's own CLOSE back, and `ended` above
+      // stops this line running twice for one channel.
       opts.onClose?.(chan, reason);
     };
     let abandoned = false;
@@ -176,6 +196,11 @@ export function startTieline(opts: TielineOpts): {
       filterRitual: true,
       send: (data) => send({ t: "FRAME", chan, data }),
       close: (reason) => {
+        // Set before the latch, not inside it: this fires for EVERY way the
+        // local leg goes away, including the ones that already deleted the
+        // entry themselves (an incoming CLOSE, a reconnect sweep). Those are
+        // endings too, and a handle held past them must not reopen the wound.
+        ended = true;
         if (legs.delete(chan)) { send({ t: "CLOSE", chan, reason }); opts.onClose?.(chan, reason); }
       },
     });
@@ -187,9 +212,21 @@ export function startTieline(opts: TielineOpts): {
       // Free it explicitly, exactly as `openMachineChannel` and `seededPort`
       // do, or a placer with a sick bridge burns one of its channel budget
       // per attempt until it reconnects. `abandoned` guards the same race:
-      // an incoming CLOSE already freed the channel there.
-      if (!abandoned) send({ t: "CLOSE", chan, reason: "no session" });
+      // an incoming CLOSE already freed the channel there, and its handler
+      // has already fired the onClose below.
+      //
+      // The host is told too. place() resolves with a real PlacedCall whether
+      // or not a leg attached — that is deliberate, the hangup handle is not
+      // conditional — so a refusal that only reached the hub would leave the
+      // placer holding a live-looking handle for a channel that is already
+      // gone, and waiting on an onClose that can never come.
+      ended = true;
+      if (!abandoned) {
+        send({ t: "CLOSE", chan, reason: "no session" });
+        opts.onClose?.(chan, "no session");
+      }
     } else if (abandoned) {
+      ended = true;
       // The hub already forgot this chan while the mint was in flight — close
       // the leg that just arrived instead of resurrecting an entry nothing
       // will ever send a second CLOSE for.
