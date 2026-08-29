@@ -31,7 +31,7 @@ export type FrameEvent =
 
 // --- home terminal ---------------------------------------------------------
 
-export type Phase = "idle" | "scanning" | "dialing" | "connected" | "no-carrier";
+export type Phase = "idle" | "scanning" | "dialing" | "connected" | "no-carrier" | "ringing";
 
 /** The dial-up FSM states as displayed teletype lines (docs/comms-protocol.md
  *  §4). Surface-local copy of the labels the crt-kit HandshakeView renders —

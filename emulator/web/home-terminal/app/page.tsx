@@ -23,7 +23,9 @@ import {
   JoshuaVoice,
   ModemAudio,
   WoprLink,
+  WoprSeat,
   type LinkEvent,
+  type SeatEvent,
 } from "@real-wopr/crt-kit";
 // By path, not through the barrel: the barrel is shared with the feed surfaces,
 // which must not pull xterm in behind it.
@@ -80,6 +82,10 @@ export default function HomeTerminal() {
   const [hits, setHits] = useState<SweepEntry[] | null>(null);
   const [voiceOn, setVoiceOn] = useState(false);
   const link = useRef<WoprLink | null>(null);
+  // ONE seat for the life of the terminal, not one per call. This is the
+  // whole reason a callback can arrive after the visitor hangs up: the call
+  // ends, the seat does not (spec §2).
+  const seat = useRef<WoprSeat | null>(null);
   // Unsubscribe for the current link's event listener. Detaching before a
   // deliberate hangup keeps that self-inflicted close from printing NO CARRIER.
   const detach = useRef<(() => void) | null>(null);
@@ -161,6 +167,45 @@ export default function HomeTerminal() {
   const onLinkEvent = useCallback((e: LinkEvent) => {
     frames.current?.onEvent(e);
   }, []);
+
+  const onSeatEvent = useCallback((e: SeatEvent) => {
+    if (e.type === "ring") {
+      // A ring can only arrive at the command prompt: a terminal on a call
+      // holds its own seat, and the hub refuses to ring a held seat as busy
+      // (relay/src/seats.ts:187). No guard is needed for "ringing mid-call",
+      // and adding one would imply it can happen.
+      appendText(`\n\nRING\n${e.from} IS CALLING.\nANSWER? (Y/N)\n`);
+      setPhase("ringing");
+      return;
+    }
+    if (e.type === "frame") {
+      // An answered seat delivers ordinary paced envelopes — including a
+      // control NO CARRIER when the call ends, the only signal that it did
+      // (seat.ts). Forwarding every frame, unfiltered, into the same handler
+      // the dial path uses is what makes that work.
+      frames.current?.onEvent({ type: "frame", frame: e.frame });
+      return;
+    }
+    if (e.type === "close") setPhase("idle");
+  }, [appendText]);
+
+  // ONE seat, constructed once for the life of the page — not inside the
+  // dial effect, which runs per call.
+  useEffect(() => {
+    if (seat.current) return;
+    const base = process.env.NEXT_PUBLIC_COMMS_URL;
+    const s = new WoprSeat({
+      // Same comms layer the dial reaches, different endpoint. `surface`
+      // decides the profile an answered ring is paced at, so this is also
+      // what makes a callback arrive at the home terminal's own 600 baud.
+      url: base ? base.replace(/\/link$/, "/seat") : undefined,
+      surface: "home-terminal",
+    });
+    s.onEvent(onSeatEvent);
+    s.connect();
+    seat.current = s;
+    return () => { s.close(); seat.current = null; };
+  }, [onSeatEvent]);
 
   // Mint a session token, absorbing one transient failure. During an exchange
   // redeploy the tunnel 502s for a few seconds; without this a dial that lands
@@ -313,6 +358,7 @@ export default function HomeTerminal() {
         surface: "home-terminal",
         session: s.session_id,
         token: s.token,
+        seat: seat.current?.token, // absent until the seat handshake lands
       });
       detach.current = link.current.onEvent(onLinkEvent);
       link.current.connect();
@@ -430,6 +476,25 @@ export default function HomeTerminal() {
   };
 
   const submit = (line: string) => {
+    // A ring owns the line until it is answered or declined — console.ts has
+    // no vocabulary for Y/N, so this is handled here rather than by widening
+    // the local-command grammar for a prompt that only exists mid-ring.
+    if (phase === "ringing") {
+      const cmd = line.trim().toUpperCase();
+      if (cmd === "Y") {
+        appendText(`> ${cmd}\n`);
+        seat.current?.answer();
+        setPhase("connected");
+      } else if (cmd === "N") {
+        appendText(`> ${cmd}\n`);
+        seat.current?.reject();
+        setPhase("idle");
+      }
+      // Anything else, or nothing at all, is ignored: the hub's 30-second
+      // ring timeout ends it on its own, which is a supported outcome, not a
+      // leak.
+      return;
+    }
     // Once a carrier is up the line passes straight through to the exchange;
     // otherwise the local interpreter owns it.
     if (phase === "connected" && link.current) {
