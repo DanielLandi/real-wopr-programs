@@ -3,11 +3,13 @@
 These tests are about WHEN a call is placed, not about HTTP — place_seat_call
 is stubbed throughout. Task 5's tests own the request itself.
 
-Two of these tests are deliberately red: `test_origin_seat_records_the_handle`
-and `test_origin_world_slot_is_not_a_handle` both assert on `placed_calls`,
-and this task (6) only *records* the seat handle — it does not place a call.
-That is Task 7's work. Only `test_an_unknown_origin_never_reaches_the_program`
-is expected to pass here.
+The call is placed in the session's `finally`, at the hangup, never at the
+moment the dossier is disclosed: a seat on a call is held, and a held seat
+is refused `busy` (relay/src/seats.ts:187), so a call placed while the
+visitor is still on the line would be refused every time. The tests below
+pin that ordering, the latch behaviour (one intention per session, however
+many times it is re-triggered), the no-handle and no-intention no-ops, and
+that a failure in placement never breaks the disconnect path itself.
 
 session_ws drives the real `/ws/session/{id}` endpoint through FastAPI's
 TestClient (fastapi.testclient.TestClient + websocket_connect), the same
@@ -71,9 +73,8 @@ def placed_calls():
 def session_ws(monkeypatch, placed_calls):
     """A context-manager factory: `with session_ws() as ws: ...`.
 
-    Monkeypatches app.main.place_seat_call so a future call (Task 7's, not
-    this task's) would append its handle to `placed_calls` — Task 6 wires
-    nothing to it yet, so the list only ever changes once Task 7 does.
+    Monkeypatches app.main.place_seat_call so any call the session places
+    appends its handle to `placed_calls`, instead of reaching HTTP.
     """
     async def fake_place_seat_call(trunk_url, internal_token, handle, *, timeout_s=5.0):
         placed_calls.append(handle)
@@ -94,6 +95,24 @@ def session_ws(monkeypatch, placed_calls):
             yield _Session(raw)
 
     return opener
+
+
+@pytest.fixture()
+def refuse_calls(monkeypatch):
+    """Make the monkeypatched place_seat_call raise instead of succeeding.
+
+    Must be requested after `session_ws` (fixture args do not order this;
+    pytest resolves `session_ws` first because it is listed first in the
+    test's own signature), so this replacement lands on top of the fake
+    installed by that fixture.
+    """
+    def setter(exc: BaseException):
+        async def fake_place_seat_call(trunk_url, internal_token, handle, *, timeout_s=5.0):
+            raise exc
+
+        monkeypatch.setattr(main_module, "place_seat_call", fake_place_seat_call, raising=False)
+
+    return setter
 
 
 def test_origin_seat_records_the_handle(session_ws, placed_calls):
@@ -128,3 +147,62 @@ def test_an_unknown_origin_never_reaches_the_program(session_ws):
         ws.send_json(user_input("HELLO"))
         reply = ws.receive_json()["payload"]
         assert "something we do not know" not in reply
+
+
+def test_the_call_is_placed_at_the_hangup_not_at_the_dossier(session_ws, placed_calls):
+    """A seat on a call is held, and a held seat is refused `busy`. Placing
+    at the moment of intention would fail every time (spec §2)."""
+    with session_ws() as ws:
+        ws.send_json(control("ORIGIN seat HANDLE1"))
+        ws.send_json(user_input("JOSHUA"))
+        ws.receive_json()
+        ws.send_json(user_input("IS FALKEN DEAD?"))
+        assert FALKEN_DOSSIER in ws.receive_json()["payload"]
+        assert placed_calls == [], "placed while the visitor was still on the line"
+    assert placed_calls == ["HANDLE1"]
+
+
+def test_no_intention_places_nothing(session_ws, placed_calls):
+    with session_ws() as ws:
+        ws.send_json(control("ORIGIN seat HANDLE1"))
+        ws.send_json(user_input("HELLO"))
+        ws.receive_json()
+    assert placed_calls == []
+
+
+def test_no_handle_places_nothing(session_ws, placed_calls):
+    """A visitor who dialled without a seat token cannot be rung back, and
+    the intention is dropped rather than guessed at."""
+    with session_ws() as ws:
+        ws.send_json(user_input("JOSHUA"))
+        ws.receive_json()
+        ws.send_json(user_input("IS FALKEN DEAD?"))
+        ws.receive_json()
+    assert placed_calls == []
+
+
+def test_the_intention_is_a_latch_not_a_counter(session_ws, placed_calls):
+    """Two dossier disclosures in one session are one intention. A machine
+    that rings twice for one decision is a machine with a bug."""
+    with session_ws() as ws:
+        ws.send_json(control("ORIGIN seat HANDLE1"))
+        ws.send_json(user_input("JOSHUA"))
+        ws.receive_json()
+        for _ in range(2):
+            ws.send_json(user_input("IS FALKEN DEAD?"))
+            ws.receive_json()
+    assert placed_calls == ["HANDLE1"]
+
+
+def test_a_refusal_does_not_break_the_hangup(session_ws, placed_calls, refuse_calls):
+    """The callback runs in `finally`, during teardown. A failure there must
+    be a callback that did not happen, never a session that did not close."""
+    refuse_calls(RuntimeError("hub exploded"))
+    with session_ws() as ws:
+        ws.send_json(control("ORIGIN seat HANDLE1"))
+        ws.send_json(user_input("JOSHUA"))
+        ws.receive_json()
+        ws.send_json(user_input("IS FALKEN DEAD?"))
+        ws.receive_json()
+    # Reaching here at all is the assertion: the context manager exited
+    # cleanly rather than propagating out of the disconnect path.

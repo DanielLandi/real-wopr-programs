@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from .attachment import FRONT_DOOR
 from .budget import DailyBudget, MeteredJoshua
+from .callback import place_seat_call
 from .config import load_settings
 from .execstack import decode as decode_stack, encode as encode_stack
 from .games import load_catalog
@@ -384,6 +385,10 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         # must not outlive the session that was given it (spec §3).
         seat_handle: str | None = None
         called_from: str | None = None
+        # A latch, not a counter: the machine decided once. Set where the
+        # turn result is read, acted on at the hangup, and — being a local —
+        # incapable of outliving the session that formed it.
+        seeks: str | None = None
         seq = 0
         observer_task: asyncio.Task | None = None
 
@@ -533,6 +538,8 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     continue
 
                 result = await router.handle(session_id, message)
+                if result.seeks and seeks is None:
+                    seeks = result.seeks
                 await ws.send_text(envelope("output", f"\n{result.text}\n"))
                 # The mode the user is now in, carried as its own frame so it
                 # never lands inside the teletype text (the evals assert on
@@ -543,6 +550,22 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         finally:
             if observer_task is not None:
                 observer_task.cancel()
+            # The hangup IS the trigger to dial. Until this moment the
+            # visitor held their own seat, and a held seat is refused `busy`
+            # (relay/src/seats.ts:187) — so this is the first instant the
+            # call can succeed, and the last instant the handle is still
+            # worth anything.
+            if seeks and seat_handle:
+                try:
+                    outcome = await place_seat_call(
+                        settings.trunk_url, settings.internal_token, seat_handle)
+                except Exception as exc:            # noqa: BLE001
+                    # place_seat_call promises never to raise. Not depending
+                    # on that promise: an exception escaping here does not
+                    # fail a callback, it fails the disconnect.
+                    log.warning("callback: placement raised: %r", exc)
+                else:
+                    log.info("callback: %s -> %s", seeks, outcome)
 
     return app
 
