@@ -59,6 +59,15 @@ export const DEFAULT_CONFIG: CommsConfig = {
     "norad-terminal": "leased-9600",
     "norad-bigboard": "internal-bus",
     "wopr-panel": "internal-bus",
+    // A machine that ANSWERS a machine runs the same ritual a person's call
+    // runs — 1200 baud is the period read of a business line between two
+    // installations, faster than David's 600-baud home line and slower than
+    // NORAD's leased circuit.
+    "trunk-call": "dialup-1200",
+    // A machine that PLACES a call must not shape: the answering end already
+    // paces the call, and two shapers in series halve throughput and double
+    // latency for no fiction. `off` is baud 0, handshake "none".
+    "trunk-caller": "off",
   },
 };
 

@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
 import { startServer } from "../src/server.ts";
 import { startTieline } from "../src/tieline.ts";
+import { encodeEnvelope } from "../src/envelope.ts";
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -19,6 +20,17 @@ function connect(url: string): Promise<WebSocket> {
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
+}
+
+/** Poll `check` until it is true or `timeoutMs` elapses — an effect observed
+ *  without racing the processing of the frame that causes it, and without a
+ *  wall-clock sleep standing in for a condition. */
+async function waitFor(check: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("waitFor: timed out");
+    await new Promise((r) => setTimeout(r, 10));
+  }
 }
 
 function nextMessage(ws: WebSocket): Promise<string> {
@@ -48,24 +60,40 @@ function httpJson(
 // Stub local comms: echoes every text frame straight back, byte-identical —
 // enough to prove the tieline is bridging chan frames to a real local socket
 // rather than fabricating a response itself.
-async function startStubComms(): Promise<{ port: number; close: () => Promise<void> }> {
+async function startStubComms(): Promise<{
+  port: number; onDial?: (url: string) => void; close: () => Promise<void>;
+}> {
   const wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (ws) => {
+  const self = {
+    port: 0,
+    onDial: undefined as ((url: string) => void) | undefined,
+    close: () => new Promise<void>((resolve) => {
+      for (const c of wss.clients) c.terminate();
+      wss.close(() => resolve());
+    }),
+  };
+  wss.on("connection", (ws, req) => {
+    self.onDial?.(req.url ?? "");
     ws.on("message", (data) => ws.send(data.toString()));
   });
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const port = (wss.address() as { port: number }).port;
-  return {
-    port,
-    close: () => new Promise<void>((resolve) => wss.close(() => resolve())),
-  };
+  await new Promise<void>((r) => wss.once("listening", r));
+  self.port = (wss.address() as { port: number }).port;
+  return self;
 }
 
 // Stub local bridge: only answers the two allowlisted paths this test drives
 // with real success bodies. Everything else — including any disallowed path
 // a misbehaving tieline might forward — answers 500, so a host-side allowlist
 // leak would be visible as a 500 instead of the correct un-forwarded 404.
-async function startStubBridge(): Promise<{
+async function startStubBridge(opts?: {
+  // Delays the /api/session response — the hook a race test needs to hold a
+  // mint open long enough to fire a CLOSE while it is still in flight.
+  sessionDelayMs?: number;
+  // Refuses every /api/session — a host whose local stack is down. The mint
+  // then resolves "refused" with no leg, which is the case the CLOSE-on-refusal
+  // fix exists for.
+  fail?: boolean;
+}): Promise<{
   port: number;
   requests: Array<{ method: string; path: string; body: string }>;
   close: () => Promise<void>;
@@ -78,8 +106,13 @@ async function startStubBridge(): Promise<{
       const body = Buffer.concat(chunks).toString();
       requests.push({ method: req.method ?? "", path: req.url ?? "", body });
       if (req.method === "POST" && req.url === "/api/session") {
-        res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ session_id: "s" }));
+        const respond = () => {
+          if (opts?.fail) { res.writeHead(500); res.end(); return; }
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ session_id: "s" }));
+        };
+        if (opts?.sessionDelayMs) setTimeout(respond, opts.sessionDelayMs);
+        else respond();
         return;
       }
       if (req.method === "GET" && req.url === "/api/games") {
@@ -552,7 +585,9 @@ test("tieline: place() resolves with the hub's PLACED, and rejects nothing", asy
   });
   try {
     const ok = await tie.place({ world: 1, slot: "PANAM" });
-    assert.deepEqual(ok, { chan: 5 });
+    assert.equal(typeof ok, "object");
+    assert.equal((ok as { chan: number }).chan, 5);
+    assert.equal(typeof (ok as { close: unknown }).close, "function");
     const no = await tie.place({ world: 1, slot: "PACTEL" });
     assert.equal(no, "offline");
   } finally {
@@ -589,5 +624,465 @@ test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
   } finally {
     tie.stop();
     await new Promise<void>((r) => hub.close(() => r()));
+  }
+});
+
+// ---- inbound OPEN: the origin's shape decides the local attachment (Task 2) -
+
+test("tieline: an OPEN from a machine opens a local leg, not a query dial", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  const dialled: string[] = [];
+  comms.onDial = (url: string) => dialled.push(url);
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", () => {});
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 1, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await new Promise((r) => setTimeout(r, 200));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "a machine call must mint its own session");
+    assert.match(dialled.at(-1) ?? "", /surface=trunk-call/);
+    assert.match(dialled.at(-1) ?? "", /session=/);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: an OPEN from a seat still pastes the hub's query", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  const dialled: string[] = [];
+  comms.onDial = (url: string) => dialled.push(url);
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", () => {});
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 2, query: "surface=home-terminal&session=S9&token=T9",
+      origin: { seat: "HDL1" } }));
+    await new Promise((r) => setTimeout(r, 200));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 0, "a visitor already has a session");
+    assert.match(dialled.at(-1) ?? "", /session=S9/);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a hub CLOSE that arrives while a machine call's mint is in flight does not leak the leg", async () => {
+  // openMachineChannel mints a session (a real async POST) before it has
+  // anything to register under `legs`. If the hub hangs up on that chan
+  // during the mint, the CLOSE handler finds nothing yet — and the naive fix
+  // is for the mint to just register the leg anyway once it resolves. That
+  // resurrects a channel the hub has already forgotten: no second CLOSE is
+  // ever coming, so the local session and socket leak for good. The delayed
+  // stub bridge is what makes the mint slow enough to land the CLOSE inside
+  // that window deterministically instead of by luck.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ sessionDelayMs: 200 });
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  const fromTieline: Array<{ t: string; chan?: number }> = [];
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (data) => { fromTieline.push(JSON.parse(data.toString())); });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 7, query: "", origin: { world: 1, slot: "PANAM" } }));
+    // Well inside the 200ms mint delay: the session POST has not resolved yet.
+    await new Promise((r) => setTimeout(r, 50));
+    hostSocket!.send(JSON.stringify({ t: "CLOSE", chan: 7 }));
+    // Past the mint delay: the leg has now resolved, found itself abandoned,
+    // and must have closed rather than registering under chan 7.
+    await new Promise((r) => setTimeout(r, 400));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the mint to actually complete");
+    // Only the hub's own CLOSE must have produced an onClose — the abandoned
+    // leg's own eventual self-close must not fire a second one, which is
+    // what a leaked-but-later-noticed leg would do.
+    assert.deepEqual(closed, [{ chan: 7, reason: undefined }]);
+    // A live (leaked) leg would deliver this to the echoing stub comms and
+    // relay the echo back as a FRAME the hub receives. An abandoned leg has
+    // nothing registered under chan 7 to deliver to.
+    hostSocket!.send(JSON.stringify({ t: "FRAME", chan: 7, data: "PING" }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(
+      fromTieline.some((f) => f.t === "FRAME" && f.chan === 7),
+      false,
+      "an abandoned machine leg must not still be attached to its channel",
+    );
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a dropped hub connection cancels an in-flight machine mint before it can leak or misroute",
+     { timeout: 20_000 }, async () => {
+  // pendingLegs.clear() alone only removes the LOOKUP entry — it does not
+  // touch the closure's captured `abandoned` variable. If retry() (a dropped
+  // hub connection) does not also invoke every stored canceller, a mint that
+  // is still in flight never learns it was abandoned: when it resolves it
+  // falls through to the unconditional legs.set(), resurrecting an entry on
+  // the very same `legs` map the reconnect will keep using. Worse, channel
+  // numbering restarts after a reconnect, so that stale resolve can silently
+  // overwrite — or in this test, be reachable as — a chan number a genuinely
+  // new call reuses.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ sessionDelayMs: 300 });
+  const hub = new WebSocketServer({ port: 0 });
+  const connections: WebSocket[] = [];
+  const framesBySocket = new Map<WebSocket, Array<{ t: string; chan?: number }>>();
+  hub.on("connection", (ws) => {
+    connections.push(ws);
+    const seen: Array<{ t: string; chan?: number }> = [];
+    framesBySocket.set(ws, seen);
+    ws.on("message", (data) => { seen.push(JSON.parse(data.toString())); });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: true,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    const untilConnected = async (n: number) => {
+      const deadline = Date.now() + 9000;
+      while (connections.length < n && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      assert.ok(connections.length >= n, `expected ${n} connection(s), got ${connections.length}`);
+    };
+
+    await untilConnected(1);
+    // Place a machine call whose mint (300ms) will still be outstanding when
+    // this connection goes away.
+    connections[0].send(JSON.stringify({
+      t: "OPEN", chan: 9, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await new Promise((r) => setTimeout(r, 50));           // well inside the mint delay
+    connections[0].terminate();                            // the hub connection drops mid-mint
+
+    // Past both the mint delay and the fixed 5s reconnect backoff.
+    await untilConnected(2);
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the stale mint to actually complete");
+
+    // The stale mint is long resolved by now. If it leaked into the shared
+    // `legs` map (the bug this fixes), this FRAME — sent on the NEW
+    // connection, for the SAME reused chan number — is relayed to the zombie
+    // leg from the dropped call instead of being dropped as unrecognized,
+    // and its echo comes back out over the CURRENT hub connection.
+    connections[1].send(JSON.stringify({ t: "FRAME", chan: 9, data: "PING" }));
+    await new Promise((r) => setTimeout(r, 300));
+    const onSecond = framesBySocket.get(connections[1]) ?? [];
+    assert.equal(
+      onSecond.some((f) => f.t === "FRAME" && f.chan === 9),
+      false,
+      "a stale mint from a dropped connection must not resurrect or misroute chan 9 on the new one",
+    );
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+// ---- a placed call gets an end of its own (Task 3) ------------------------
+
+test("tieline: a placed call attaches a local leg and can be hung up", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  const dialled: string[] = [];
+  const fromHost: string[] = [];
+  comms.onDial = (url: string) => dialled.push(url);
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (d) => {
+      const f = JSON.parse(d.toString());
+      fromHost.push(f.t);
+      if (f.t === "PLACE") ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 7 }));
+    });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    const placed = await t.place({ world: 1, slot: "PANAM" });
+    assert.equal(typeof placed, "object");
+    const call = placed as { chan: number; close: (r?: string) => void };
+    assert.equal(call.chan, 7);
+    await new Promise((r) => setTimeout(r, 200));
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the placer needs a program of its own");
+    assert.match(dialled.at(-1) ?? "", /surface=trunk-caller/);
+
+    call.close("done");
+    await new Promise((r) => setTimeout(r, 100));
+    assert.ok(fromHost.includes("CLOSE"), "close() must reach the hub");
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: the placer is told when the callee hangs up", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (d) => {
+      const f = JSON.parse(d.toString());
+      if (f.t === "PLACE") ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 4 }));
+    });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    await t.place({ world: 1, slot: "PANAM" });
+    await new Promise((r) => setTimeout(r, 150));
+    hostSocket!.send(JSON.stringify({ t: "CLOSE", chan: 4, reason: "call ended" }));
+    await new Promise((r) => setTimeout(r, 100));
+    assert.deepEqual(closed, [{ chan: 4, reason: "call ended" }]);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a hub CLOSE that arrives while a placed call's attach is in flight does not leak the leg", async () => {
+  // attachPlaced mints a session (a real async POST) before it has anything to
+  // register under `legs`. If the hub hangs up on that chan during the mint,
+  // the naive fix is to register the leg anyway once the mint resolves —
+  // resurrecting a channel the hub has already forgotten, with no second
+  // CLOSE ever coming to clean it up. The delayed stub bridge lands the CLOSE
+  // inside that window deterministically instead of by luck.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ sessionDelayMs: 200 });
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  const fromTieline: Array<{ t: string; chan?: number }> = [];
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (data) => {
+      const f = JSON.parse(data.toString());
+      fromTieline.push(f);
+      if (f.t === "PLACE") ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 7 }));
+    });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const closed: Array<{ chan: number; reason?: string }> = [];
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    onClose: (chan, reason) => closed.push({ chan, reason }),
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 100));
+    const placedPromise = t.place({ world: 1, slot: "PANAM" });
+    // Well inside the 200ms mint delay: the session POST has not resolved yet.
+    await new Promise((r) => setTimeout(r, 50));
+    hostSocket!.send(JSON.stringify({ t: "CLOSE", chan: 7 }));
+    // place() itself still resolves once the (abandoned) attach settles.
+    const placed = await placedPromise;
+    assert.equal(typeof placed, "object");
+    const mints = bridge.requests.filter((r) => r.path === "/api/session");
+    assert.equal(mints.length, 1, "the race requires the mint to actually complete");
+    // Only the hub's own CLOSE must have produced an onClose — the abandoned
+    // leg's own eventual self-close must not fire a second one, which is what
+    // a leaked-but-later-noticed leg would do.
+    assert.deepEqual(closed, [{ chan: 7, reason: undefined }]);
+    // A live (leaked) leg would deliver this to the echoing stub comms and
+    // relay the echo back as a FRAME the hub receives. An abandoned leg has
+    // nothing registered under chan 7 to deliver to. A real envelope (not
+    // raw "PING") is required here: the caller side sets filterRitual, which
+    // drops anything that does not decode as an "output"/"prompt" envelope —
+    // a plain string would be silently filtered regardless of the guard,
+    // making this assertion pass for the wrong reason.
+    const envelope = encodeEnvelope({
+      v: 1, session: "s", seq: 0, kind: "output", link: "trunk-caller", payload: "hi", eom: true,
+    });
+    hostSocket!.send(JSON.stringify({ t: "FRAME", chan: 7, data: envelope }));
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(
+      fromTieline.some((f) => f.t === "FRAME" && f.chan === 7),
+      false,
+      "an abandoned placed-call leg must not still be attached to its channel",
+    );
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+// ---- a refused local-leg mint must free the hub's channel (fix wave) ------
+//
+// Both mint sites bail on "refused" with nothing registered under `legs`, so
+// openLocalLeg's own `close` callback — latched behind `legs.delete(chan)` —
+// fires into a no-op and no CLOSE ever reaches the hub. The hub keeps the
+// channel; the caller sits on a connected-but-silent line it was never
+// refused on. The same hazard was found and fixed in seededPort during this
+// branch; these two are the sites every real peer actually runs.
+
+test("tieline: a refused mint on an inbound machine call frees the hub's channel", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ fail: true });
+  const hub = new WebSocketServer({ port: 0 });
+  let hostSocket: WebSocket | undefined;
+  const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
+  hub.on("connection", (ws) => {
+    hostSocket = ws;
+    ws.on("message", (data) => { fromTieline.push(JSON.parse(data.toString())); });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await waitFor(() => t.assigned());
+    hostSocket!.send(JSON.stringify({
+      t: "OPEN", chan: 5, query: "", origin: { world: 1, slot: "PANAM" } }));
+    await waitFor(() => fromTieline.some((f) => f.t === "CLOSE"));
+    assert.deepEqual(fromTieline.filter((f) => f.t === "CLOSE"),
+                     [{ t: "CLOSE", chan: 5, reason: "no session" }],
+                     "a mint this host could not complete must be refused, once, on the wire");
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a refused mint on a call this host placed frees the hub's channel", async () => {
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ fail: true });
+  const hub = new WebSocketServer({ port: 0 });
+  const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
+  hub.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const f = JSON.parse(data.toString());
+      fromTieline.push(f);
+      if (f.t === "PLACE") ws.send(JSON.stringify({ t: "PLACED", call: f.call, chan: 6 }));
+    });
+    ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
+  });
+  const port = (hub.address() as { port: number }).port;
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
+    joshua: "period", reconnect: false,
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  try {
+    await waitFor(() => t.assigned());
+    // place() still resolves with a PlacedCall — the hangup handle is real
+    // whether or not a local leg ever attached to it.
+    const placed = await t.place({ world: 1, slot: "PANAM" });
+    assert.equal(typeof placed, "object");
+    await waitFor(() => fromTieline.some((f) => f.t === "CLOSE"));
+    assert.deepEqual(fromTieline.filter((f) => f.t === "CLOSE"),
+                     [{ t: "CLOSE", chan: 6, reason: "no session" }]);
+  } finally {
+    t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+test("tieline: a peer whose bridge is down refuses each call rather than wedging its exchange",
+     { timeout: 15_000 }, async () => {
+  // The whole point of the CLOSE above, against a REAL hub. maxChannels is 1
+  // here so one leaked channel is the entire budget: without the refusal, the
+  // exchange is busy to every subsequent caller until it reconnects — which
+  // is what 16 inbound calls to a peer with a sick bridge would do on the
+  // shipped default.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge({ fail: true });
+  const hub = await startServer({ port: 0, trunk: { reservedWorlds: [], maxChannels: 1 } });
+  const t = startTieline({
+    hubUrl: `ws://127.0.0.1:${hub.port}/trunk`, name: "PAN AM", region: "NEW YORK US",
+    joshua: "period", reconnect: false, world: 1, slot: "PANAM",
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+  });
+  const caller = await connect(`ws://127.0.0.1:${hub.port}/trunk`);
+  const seen: Array<{ t: string; call?: number; chan?: number; reason?: string }> = [];
+  caller.on("message", (d) => seen.push(JSON.parse(d.toString())));
+  try {
+    await waitFor(() => t.assigned());
+    caller.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PROTOVISION",
+      region: "SUNNYVALE US", joshua: "period", world: 1, slot: "PROTOVISION" }));
+    await waitFor(() => seen.some((f) => f.t === "ASSIGNED"));
+
+    caller.send(JSON.stringify({ t: "PLACE", call: 1, to: { world: 1, slot: "PANAM" } }));
+    await waitFor(() => seen.some((f) => f.t === "PLACED" && f.call === 1));
+    // The callee's mint fails; its CLOSE reaches the hub, which frees BOTH
+    // legs and tells this caller the line is gone instead of leaving it
+    // connected to silence.
+    await waitFor(() => seen.some((f) => f.t === "CLOSE"));
+    assert.equal(seen.find((f) => f.t === "CLOSE")!.reason, "no session");
+
+    caller.send(JSON.stringify({ t: "PLACE", call: 2, to: { world: 1, slot: "PANAM" } }));
+    await waitFor(() => seen.some((f) => (f.t === "PLACED" || f.t === "REFUSED") && f.call === 2));
+    const second = seen.find((f) => (f.t === "PLACED" || f.t === "REFUSED") && f.call === 2)!;
+    assert.equal(second.t, "PLACED",
+      `the second call must reach the exchange, not a channel the first one leaked: ${JSON.stringify(second)}`);
+  } finally {
+    t.stop(); caller.close(); await hub.close(); await comms.close(); await bridge.close();
   }
 });

@@ -194,9 +194,35 @@ export interface WorldDirectory { n: number; reserved?: true; slots: DirectoryEn
 export interface TrunkPort { send(data: string): void; close(code?: number, reason?: string): void; }
 export interface ChannelPort extends TrunkPort {}
 
+/** The seat end of a machine call, supplied by whoever owns the seat wire (the
+ *  server). The switchboard holds it at arm's length on purpose: it knows that
+ *  a handle resolves and that a seat rings, and nothing about link profiles,
+ *  shapers, or sockets — so `trunk.ts` stays free of link config.
+ *
+ *  Both methods answer in the closed vocabulary a PLACE is refused in, and
+ *  `resolve` must refuse a live handle another exchange holds with the exact
+ *  same `"seat-gone"` it refuses an unknown one: a machine learns nothing
+ *  about seats it has not spoken to. */
+export interface SeatBridge {
+  resolve(handle: string, code: string): { id: string } | "seat-gone";
+  /** Ring, and hand back the port the caller's channel writes into. Frames
+   *  written before the seat answers are HELD, not dropped: the calling
+   *  program greets the moment it connects, and those are its first words. */
+  ring(id: string, callerName: string,
+       wire: { toMachine: (data: string) => void; onEnd: (reason: string) => void })
+    : ChannelPort | "busy" | "seat-gone";
+}
+
 interface Exchange {
   code: string; name: string; region: string; joshua: string; operator?: string;
-  port: TrunkPort;
+  /** null until a seeded slot is given a port. A registrant always has one.
+   *  Nullable rather than flagged so the compiler names every send site. */
+  port: TrunkPort | null;
+  /** A world-1 slot the hub seeds from its manifest rather than one a host
+   *  registered. It is a real exchange — callable, and able to place — but it
+   *  has no socket, is never swept, and prints its own directory shape. */
+  seeded?: true;
+  system?: string;
   world: number; slot: string;
   channels: Map<number, ChannelPort>;
   nextChan: number;
@@ -292,10 +318,15 @@ export class Switchboard {
   private reservedWorlds: number[];
   private reserveKey: string | undefined;
   private localWorld: LocalSlot[];
+  /** Absent on a hub with no seat wire at all (every unit test that does not
+   *  care about seats). With none, every seat target is refused "seat-gone" —
+   *  the same answer a bad handle gets, so nothing about the hub's own
+   *  configuration leaks into a refusal. */
+  private seats?: SeatBridge;
 
   constructor(opts: { maxExchanges?: number; maxChannels?: number; maxWorlds?: number;
                       reservedWorlds?: number[]; reserveKey?: string;
-                      localWorld?: LocalSlot[] } = {}) {
+                      localWorld?: LocalSlot[]; seats?: SeatBridge } = {}) {
     this.maxExchanges = opts.maxExchanges ?? 32;
     this.maxChannels = opts.maxChannels ?? 16;
     this.maxWorlds = opts.maxWorlds ?? 8;
@@ -308,6 +339,37 @@ export class Switchboard {
     // flagship needs no trunk back to itself and its entries dial the public
     // base directly.
     this.localWorld = checkLocalWorld(opts.localWorld ?? []);
+    this.seats = opts.seats;
+    // Seeds are exchanges from construction: `directory()` must be able to
+    // print world 1 before the server has finished listening and can hand them
+    // a port. `place()`'s occupancy check therefore needs no special case for
+    // them, and neither does `register()`'s slot-taken rule.
+    for (const seed of this.localWorld) {
+      let code = newExchangeCode();
+      while (this.exchanges.has(code)) code = newExchangeCode();
+      this.exchanges.set(code, {
+        code, name: seed.name, region: seed.region,
+        joshua: seed.joshua ?? "period", operator: seed.operator,
+        port: null, seeded: true, system: seed.system,
+        world: 1, slot: seed.slot,
+        channels: new Map(), nextChan: 1, originated: new Set(),
+        pending: new Map(), nextRid: 1, missedPongs: 0,
+      });
+    }
+  }
+
+  /** The code the hub gave a seeded slot, for a caller that has only the name. */
+  seededCode(slot: string): string | undefined {
+    for (const ex of this.exchanges.values()) if (ex.seeded && ex.slot === slot) return ex.code;
+    return undefined;
+  }
+
+  /** Give a seeded slot the port that answers its calls. Called once, at
+   *  startup, when the server knows its own address. */
+  seedPort(slot: string, port: TrunkPort): string | undefined {
+    const code = this.seededCode(slot);
+    if (code) this.exchanges.get(code)!.port = port;
+    return code;
   }
 
   /** Where does a REGISTER land? Worlds are derived, not stored: a world is
@@ -329,14 +391,6 @@ export class Switchboard {
       let s = occ.get(ex.world);
       if (!s) occ.set(ex.world, (s = new Set()));
       s.add(ex.slot);
-    }
-    // A seeded slot is filled, even though nothing is registered in it: an
-    // unlocked keyed REGISTER for CHEYENNE MOUNTAIN's slot is "slot-taken",
-    // not a silent second occupant of world 1.
-    if (this.localWorld.length > 0) {
-      let s = occ.get(1);
-      if (!s) occ.set(1, (s = new Set()));
-      for (const seed of this.localWorld) s.add(seed.slot);
     }
     const open = (w: number): string | null =>
       req.slot !== undefined
@@ -375,7 +429,9 @@ export class Switchboard {
 
   register(port: TrunkPort, f: Extract<TrunkFrame, { t: "REGISTER" }>):
       { code: string; world: number; slot: string } | "full" | "no-circuits" | "slot-taken" | "world-reserved" {
-    if (this.exchanges.size >= this.maxExchanges) return "full";
+    let registered = 0;
+    for (const ex of this.exchanges.values()) if (!ex.seeded) registered += 1;
+    if (registered >= this.maxExchanges) return "full";
     const placed = this.place({ slot: f.slot, world: f.world, key: f.key });
     if (typeof placed === "string") return placed;
     let code = newExchangeCode();
@@ -392,7 +448,7 @@ export class Switchboard {
 
   unregister(code: string): void {
     const ex = this.exchanges.get(code);
-    if (!ex) return;
+    if (!ex || ex.seeded) return;
     this.exchanges.delete(code);
     for (const client of ex.channels.values()) client.close(1001, "trunk dropped");
     // The exchange was live when it accepted these requests: reject them as a
@@ -400,12 +456,25 @@ export class Switchboard {
     for (const p of ex.pending.values()) { clearTimeout(p.timer); p.reject("dropped"); }
   }
 
-  openChannel(code: string, client: ChannelPort, query: string): number | "offline" | "busy" | "oversize" {
+  /** Whether `code` names an exchange that could actually take an OPEN right
+   *  now — registered (or seeded) AND ported. Mirrors openChannel's two
+   *  "offline" checks exactly, so a caller can decide whether an action tied
+   *  to `code` (minting a seat handle, say) is worth taking at all, before
+   *  finding out — after already taking it — that the code was never real. */
+  isLive(code: string): boolean {
+    const ex = this.exchanges.get(code);
+    return !!ex && !!ex.port;
+  }
+
+  openChannel(code: string, client: ChannelPort, query: string,
+              origin?: CallOrigin): number | "offline" | "busy" | "oversize" {
     const ex = this.exchanges.get(code);
     if (!ex) return "offline";
     if (ex.channels.size >= this.maxChannels) return "busy";
+    // A seeded slot with no port attached yet has nothing to send an OPEN to.
+    if (!ex.port) return "offline";
     const chan = ex.nextChan;
-    const encoded = JSON.stringify({ t: "OPEN", chan, query });
+    const encoded = JSON.stringify({ t: "OPEN", chan, query, ...(origin ? { origin } : {}) });
     // JSON-escaping puts no upper bound on the wrapped query relative to the
     // raw URL: refuse an OPEN the trunk leg could never carry rather than
     // sending a frame the host-side decoder would drop (leaving this end's
@@ -413,6 +482,8 @@ export class Switchboard {
     if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) return "oversize";
     ex.nextChan += 1;
     ex.channels.set(chan, client);
+    // NOT `originated`. That set means "arrived from a machine" and gates the
+    // one-hop cap; a person's call must leave a machine free to call onward.
     ex.port.send(encoded);
     return chan;
   }
@@ -422,7 +493,7 @@ export class Switchboard {
     if (!ex || !ex.channels.has(chan)) return;
     ex.channels.delete(chan);
     ex.originated.delete(chan);
-    ex.port.send(JSON.stringify({ t: "CLOSE", chan }));
+    ex.port?.send(JSON.stringify({ t: "CLOSE", chan }));
   }
 
   clientFrame(code: string, chan: number, data: string): void {
@@ -439,10 +510,10 @@ export class Switchboard {
       ex.channels.delete(chan);
       ex.originated.delete(chan);
       client.close(1009, "frame exceeds trunk capacity");
-      ex.port.send(JSON.stringify({ t: "CLOSE", chan, reason: "oversize frame" }));
+      ex.port?.send(JSON.stringify({ t: "CLOSE", chan, reason: "oversize frame" }));
       return;
     }
-    ex.port.send(encoded);
+    ex.port?.send(encoded);
   }
 
   handleHostFrame(code: string, f: TrunkFrame): void {
@@ -450,10 +521,17 @@ export class Switchboard {
     if (!ex) return;
     if (f.t === "FRAME") ex.channels.get(f.chan)?.send(f.data);
     else if (f.t === "CLOSE") {
-      // Relay the host's stated reason (decode caps it) instead of discarding it.
-      ex.channels.get(f.chan)?.close(1000, f.reason ?? "call ended");
+      // Unfiled BEFORE the port is closed, not after, and for the same reason
+      // `peerPort`'s hangUpPeer and `closeChannel` unfile first: a port whose
+      // close() ends the far leg can call back in here (a seat bridge's does,
+      // through `wire.onEnd`) and must find the channel already gone. Closing
+      // first left it present, so the callback's own "did I still hold this?"
+      // guard passed and the hub bounced the host's own CLOSE back at it.
+      const client = ex.channels.get(f.chan);
       ex.channels.delete(f.chan);
       ex.originated.delete(f.chan);
+      // Relay the host's stated reason (decode caps it) instead of discarding it.
+      client?.close(1000, f.reason ?? "call ended");
     }
     else if (f.t === "RESPONSE") {
       const p = ex.pending.get(f.rid);
@@ -465,11 +543,17 @@ export class Switchboard {
           timeoutMs = 10_000): Promise<{ status: number; body: string }> {
     const ex = this.exchanges.get(code);
     if (!ex) return Promise.reject("offline");
+    // A seeded slot has no host socket, so `port?.send` below is a silent
+    // no-op and the RESPONSE that would settle this promise can never come:
+    // the caller sits out the full timeout for an answer nothing is composing.
+    // Fail fast with the same reason an unknown code gets — the server maps
+    // "offline" to 404 either way.
+    if (!ex.port) return Promise.reject("offline");
     const rid = ex.nextRid++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { ex.pending.delete(rid); reject("timeout"); }, timeoutMs);
       ex.pending.set(rid, { resolve, reject, timer });
-      ex.port.send(JSON.stringify({ t: "REQUEST", rid, method, path, body }));
+      ex.port?.send(JSON.stringify({ t: "REQUEST", rid, method, path, body }));
     });
   }
 
@@ -481,28 +565,21 @@ export class Switchboard {
     const publicBase = rawPublicBase.replace(/\/+$/, "");
     const wsBase = publicBase.replace(/^http/, "ws");
     const byWorld = new Map<number, DirectoryEntry[]>([[1, []]]); // world 1 pinned
-    // The flagship's own slots, synthesized rather than registered. No
-    // `/x/<CODE>` hop: there is no trunk to hop over, so every seed points at
-    // the hub's public base and a period system carries the bridge `system` id
-    // that opens a session against it.
-    byWorld.set(1, this.localWorld.map((s) => ({
-      id: `local-${s.slot.toLowerCase()}`, name: s.name, region: s.region,
-      api: publicBase, link: `${wsBase}/link`,
-      joshua: s.joshua ?? "period", operator: s.operator, online: true as const,
-      world: 1, slot: s.slot,
-      // Spread, not an undefined value: an own `system` key with no value is a
-      // different document once a surface round-trips it.
-      ...(s.system ? { system: s.system } : {}),
-    })));
     for (const ex of this.exchanges.values()) {
       let list = byWorld.get(ex.world);
       if (!list) byWorld.set(ex.world, (list = []));
-      list.push({
-        id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
-        api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
-        joshua: ex.joshua, operator: ex.operator, online: true as const,
-        world: ex.world, slot: ex.slot,
-      });
+      list.push(ex.seeded
+        // No `/x/<CODE>` hop: there is no trunk to hop over, so a seed points
+        // at the hub's public base and carries the bridge `system` id that
+        // opens a session against it.
+        ? { id: `local-${ex.slot.toLowerCase()}`, name: ex.name, region: ex.region,
+            api: publicBase, link: `${wsBase}/link`,
+            joshua: ex.joshua, operator: ex.operator, online: true as const,
+            world: ex.world, slot: ex.slot, ...(ex.system ? { system: ex.system } : {}) }
+        : { id: `trunk-${ex.code.toLowerCase()}`, name: ex.name, region: ex.region,
+            api: `${publicBase}/x/${ex.code}`, link: `${wsBase}/x/${ex.code}/link`,
+            joshua: ex.joshua, operator: ex.operator, online: true as const,
+            world: ex.world, slot: ex.slot });
     }
     return [...byWorld.entries()].sort((a, b) => a[0] - b[0]).map(([n, slots]) => ({
       n,
@@ -534,7 +611,7 @@ export class Switchboard {
       // the exchange. Inert (nextChan never reuses a number, so a stale entry
       // can never wrongly match) but unbounded, on a hub that runs for weeks.
       peer.originated.delete(peerChan);
-      peer.port.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
+      peer.port?.send(JSON.stringify({ t: "CLOSE", chan: peerChan, reason }));
     };
     return {
       send: (data: string) => {
@@ -549,13 +626,13 @@ export class Switchboard {
         if (Buffer.byteLength(encoded) > TRUNK_MAX_FRAME_BYTES) {
           if (self.channels.delete(selfChan)) {
             self.originated.delete(selfChan);
-            self.port.send(JSON.stringify(
+            self.port?.send(JSON.stringify(
               { t: "CLOSE", chan: selfChan, reason: "oversize frame" }));
           }
           hangUpPeer("oversize frame");
           return;
         }
-        peer.port.send(encoded);
+        peer.port?.send(encoded);
       },
       close: (_code?: number, reason?: string) => hangUpPeer(reason),
     };
@@ -577,23 +654,62 @@ export class Switchboard {
     // channel arrived with an origin, the caller is relaying, and relaying is
     // what makes loops possible.
     if (on !== undefined && from.originated.has(on)) return "depth";
-    // Seat targets are piece B. The wire accepts them already so piece B does
-    // not have to change the protocol a second time; until it lands there is
-    // no seat registry, so no handle can resolve.
-    if ("seat" in to) return "seat-gone";
+    // A seat is the far end of a machine call too. The handle is a capability
+    // the caller earned by being called from that seat — resolve refuses one
+    // another exchange holds exactly as it refuses an unknown one, so a
+    // machine learns nothing about seats it has not spoken to.
+    //
+    // No `originated` bookkeeping and no depth check beyond the one above: a
+    // seat is a person, and a person is where a chain of calls stops. There is
+    // nothing on the far end that could relay onward.
+    if ("seat" in to) {
+      if (!this.seats) return "seat-gone";
+      const leg = this.seats.resolve(to.seat, from.code);
+      if (leg === "seat-gone") return "seat-gone";
+      // Same honesty the slot branch shows: a caller whose own socket has
+      // already dropped has nothing to hear the seat with, so do not ring a
+      // person on its behalf.
+      if (!from.port) return "offline";
+      if (from.channels.size >= this.maxChannels) return "busy";
+      const callerChan = from.nextChan;
+      const port = this.seats.ring(leg.id, from.name, {
+        toMachine: (data) => this.clientFrame(from.code, callerChan, data),
+        // The seat's end has ended the call — rejected, unanswered, hung up,
+        // or gone. The `delete` doubles as the once-only latch: whichever of
+        // the bridge's terminal paths gets here first frees the channel slot
+        // and tells the caller why; a second call finds nothing to close and
+        // sends no second CLOSE.
+        onEnd: (reason) => {
+          if (!from.channels.delete(callerChan)) return;
+          // `unregister` reaches here THROUGH the port it is closing: the
+          // trunk socket is already going, and ws raises on send-after-close.
+          // There is no one left to tell, and nothing to fix by throwing out
+          // of a close handler.
+          try {
+            from.port?.send(JSON.stringify({ t: "CLOSE", chan: callerChan, reason }));
+          } catch { /* the socket that would have carried it is already gone */ }
+        },
+      });
+      if (port === "busy" || port === "seat-gone") return port;
+      from.nextChan += 1;
+      from.channels.set(callerChan, port);
+      return { chan: callerChan };
+    }
 
     const world = to.world ?? from.world;
-    // REGISTERED exchanges only. World 1's SEEDED slots (the `localWorld`
-    // manifest) have no trunk port to send an OPEN down, so a PLACE to the
-    // flagship's own WOPR answers "offline" while `GET /trunk/directory`
-    // lists that same slot online — the directory synthesizes those entries,
-    // this cannot. Piece D meets it head-on rather than at the margins: the
-    // film's beat is the FLAGSHIP's Joshua placing the call. See issue #67.
+    // Seeded slots are exchanges too (see the constructor), so a PLACE to the
+    // flagship's own WOPR can resolve here exactly like a registered one — it
+    // just has no port until seedPort() attaches one, which the guard below
+    // answers "offline" for. (`GET /trunk/directory` does NOT agree: it still
+    // prints a portless seed as `online: true`.)
     let target: Exchange | undefined;
     for (const ex of this.exchanges.values()) {
       if (ex.world === world && ex.slot === to.slot) { target = ex; break; }
     }
     if (!target) return "offline";
+    // A seeded slot with no port attached yet, or a caller whose own socket
+    // has already dropped, has nothing to relay to.
+    if (!target.port || !from.port) return "offline";
     if (target.code === from.code) return "self";
     if (target.channels.size >= this.maxChannels) return "busy";
     if (from.channels.size >= this.maxChannels) return "busy";
@@ -601,13 +717,14 @@ export class Switchboard {
     const calleeChan = target.nextChan;
     const callerChan = from.nextChan;
     const encoded = JSON.stringify({
-      // Nothing resolves an empty query yet: the callee's tieline dials
-      // `${localComms}/link?` and server.ts refuses it outright for want of
-      // `surface` and `session`, closing the local socket 4400 before a byte
-      // moves. What session a machine call mints on the callee — whether it
-      // mints one at all — is the piece-that-converses question (piece D), so
-      // it is left open here rather than guessed into API D would have to
-      // undo. See issue #67.
+      // The query is empty on purpose, and the origin is what makes it safe:
+      // a machine call carries no visitor credentials to paste into a dial.
+      // The callee's tieline reads the origin's SHAPE (`slot` present = a
+      // machine called) and, instead of dialling this query, mints an
+      // ordinary session on its own bridge and dials its own /link with it
+      // (`openMachineChannel` -> `openLocalLeg`). So the callee's program
+      // answers a machine exactly as it answers a person, and nothing here
+      // has to know what a session on that host looks like.
       t: "OPEN", chan: calleeChan, query: "",
       origin: { world: from.world, slot: from.slot },
     });
@@ -627,9 +744,10 @@ export class Switchboard {
   sweepDead(): string[] {
     const dropped: string[] = [];
     for (const ex of this.exchanges.values()) {
+      if (ex.seeded) continue;
       ex.missedPongs += 1;
       if (ex.missedPongs >= 2) dropped.push(ex.code);
-      else ex.port.send(JSON.stringify({ t: "PING" }));
+      else ex.port?.send(JSON.stringify({ t: "PING" }));
     }
     for (const code of dropped) this.unregister(code);
     return dropped;

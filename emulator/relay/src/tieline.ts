@@ -8,6 +8,7 @@ import {
   ALL_SLOTS, decodeTrunkFrame, restAllowed, type CallOrigin, type CallTarget,
   type RefusedReason, type TrunkFrame,
 } from "./trunk.ts";
+import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 
 export interface TielineOpts {
   hubUrl: string;          // wss://wopr.realwopr.ai/trunk
@@ -26,11 +27,19 @@ export interface TielineOpts {
   // target), so this never fires for a call place() caused. origin is
   // present when a machine called, absent when a visitor did.
   onOpen?: (chan: number, origin?: CallOrigin) => void;
+  /** Fires when any channel ends — one this host placed or one it answered.
+   *  A placer is otherwise never told the callee hung up. */
+  onClose?: (chan: number, reason?: string) => void;
 }
+
+/** A call this host placed. There is deliberately no `send`: the caller's own
+ *  PROGRAM talks, through the session `place()` attached, and a fresh session's
+ *  program greets on connect. */
+export interface PlacedCall { chan: number; close(reason?: string): void }
 
 export function startTieline(opts: TielineOpts): {
   stop: () => void;
-  place: (to: CallTarget, on?: number) => Promise<{ chan: number } | RefusedReason>;
+  place: (to: CallTarget, on?: number) => Promise<PlacedCall | RefusedReason>;
   assigned: () => boolean;
 } {
   let hub: WebSocket | null = null;
@@ -38,7 +47,18 @@ export function startTieline(opts: TielineOpts): {
   let backoffMs = 5_000;
   let everAssigned = false;
   const channels = new Map<number, { local: WebSocket; buffer: string[] }>();
-  const placing = new Map<number, (r: { chan: number } | RefusedReason) => void>();
+  // Machine-call ends, keyed by the same channel numbers `channels` uses. A
+  // channel is in exactly one of the two maps: a visitor's dial or a machine's
+  // local leg.
+  const legs = new Map<number, LocalLeg>();
+  // A machine call's leg is minted asynchronously (a session POST, then a
+  // dial) — the hub's CLOSE for that chan can arrive before either finishes,
+  // and `legs` has no entry yet for the CLOSE handler to find. This registry
+  // is how that race gets remembered: a canceller per in-flight mint, so the
+  // leg that eventually resolves finds out it was abandoned instead of
+  // silently resurrecting a channel the hub has already forgotten.
+  const pendingLegs = new Map<number, () => void>();
+  const placing = new Map<number, (r: PlacedCall | RefusedReason) => void>();
   let nextCall = 1;
 
   const send = (f: TrunkFrame) => { if (hub?.readyState === WebSocket.OPEN) hub.send(JSON.stringify(f)); };
@@ -61,16 +81,121 @@ export function startTieline(opts: TielineOpts): {
     }
   }
 
+  /** An inbound call. WHO called decides what it attaches to locally, and the
+   *  SHAPE of `origin` is what says who — never its presence. Once seats exist
+   *  every inbound OPEN carries an origin: a visitor's is `{ seat }`. Reading
+   *  the presence here would send every relayed visitor's call to an empty
+   *  local leg. */
   function openChannel(f: Extract<TrunkFrame, { t: "OPEN" }>): void {
+    const fromMachine = f.origin !== undefined && "slot" in f.origin;
+    if (fromMachine) { void openMachineChannel(f); return; }
+
     const local = new WebSocket(`${opts.localComms}/link?${f.query}`);
     const entry = { local, buffer: [] as string[] };
     channels.set(f.chan, entry);
     local.on("open", () => { for (const d of entry.buffer.splice(0)) local.send(d); });
     local.on("message", (data) => send({ t: "FRAME", chan: f.chan, data: data.toString() }));
-    const drop = () => { if (channels.delete(f.chan)) send({ t: "CLOSE", chan: f.chan }); };
+    const drop = () => {
+      if (channels.delete(f.chan)) { send({ t: "CLOSE", chan: f.chan }); opts.onClose?.(f.chan); }
+    };
     local.on("close", drop);
     local.on("error", drop);
     opts.onOpen?.(f.chan, f.origin);
+  }
+
+  /** A machine called. There is no visitor query to paste — this host mints an
+   *  ordinary session of its own and dials its own /link, so the program
+   *  answers a machine exactly as it answers a person. */
+  async function openMachineChannel(f: Extract<TrunkFrame, { t: "OPEN" }>): Promise<void> {
+    const o = f.origin as { world: number; slot: string };
+    // Fire onOpen synchronously with the visitor path, not after the mint
+    // resolves — a caller learns of an inbound call the instant it arrives,
+    // whether or not the local leg then attaches successfully.
+    opts.onOpen?.(f.chan, f.origin);
+    let abandoned = false;
+    pendingLegs.set(f.chan, () => { abandoned = true; });
+    const leg = await openLocalLeg({
+      bridgeUrl: opts.localBridge,
+      commsUrl: opts.localComms,
+      surface: "trunk-call",
+      origin: `world ${o.world} slot ${o.slot}`,
+      send: (data) => send({ t: "FRAME", chan: f.chan, data }),
+      close: (reason) => {
+        if (legs.delete(f.chan)) { send({ t: "CLOSE", chan: f.chan, reason }); opts.onClose?.(f.chan, reason); }
+      },
+    });
+    pendingLegs.delete(f.chan);
+    if (leg === "refused") {
+      // openLocalLeg already invoked the `close` callback above for this
+      // failure — but `f.chan` had nothing registered under `legs` yet (the
+      // leg had not resolved), so that guard's `legs.delete(f.chan)` was a
+      // no-op and no CLOSE ever reached the hub. Without sending one here the
+      // hub's channel entry for this call is never freed: a host whose bridge
+      // is briefly down leaves a live entry in the hub's `channels` map for
+      // every inbound machine call, goes "busy" to every further caller, and
+      // leaves each of them on a connected-but-silent channel that was never
+      // refused. Same fix, same reason, as `seededPort`'s in server.ts.
+      //
+      // Skip only if the hub already forgot this chan on its own (an incoming
+      // CLOSE set `abandoned` first) — that CLOSE already freed the channel
+      // there, and the number may since have been reused.
+      if (!abandoned) send({ t: "CLOSE", chan: f.chan, reason: "no session" });
+      return;
+    }
+    // The hub already forgot this chan while the mint was in flight — close
+    // the leg that just arrived instead of resurrecting an entry nothing will
+    // ever send a second CLOSE for.
+    if (abandoned) { leg.close(); return; }
+    legs.set(f.chan, leg);
+  }
+
+  /** A call this host placed just got a hub-assigned channel (PLACED). Attach
+   *  a local leg of its own — same asynchronous mint, same abandonment race,
+   *  as openMachineChannel above — so the returned PlacedCall has something
+   *  real to hang up. */
+  async function attachPlaced(chan: number): Promise<PlacedCall> {
+    const hangUp = (reason?: string) => {
+      legs.get(chan)?.close(); legs.delete(chan);
+      send({ t: "CLOSE", chan, reason });
+      // Told here, not by the leg's own close callback: that callback is
+      // latched behind `if (legs.delete(chan))`, and the line above already
+      // took the entry, so it can never fire for a call this host hung up
+      // itself. Without this, a placer's own hangup is the ONE channel-ending
+      // path of four that notifies nobody — and a host tracking live channels
+      // through onClose would leak an entry for every call it closed. Exactly
+      // one onClose per ended channel still holds: the leg's callback finds
+      // the latch false, and the hub does not echo a host's own CLOSE back.
+      opts.onClose?.(chan, reason);
+    };
+    let abandoned = false;
+    pendingLegs.set(chan, () => { abandoned = true; });
+    const leg = await openLocalLeg({
+      bridgeUrl: opts.localBridge,
+      commsUrl: opts.localComms,
+      surface: "trunk-caller",
+      filterRitual: true,
+      send: (data) => send({ t: "FRAME", chan, data }),
+      close: (reason) => {
+        if (legs.delete(chan)) { send({ t: "CLOSE", chan, reason }); opts.onClose?.(chan, reason); }
+      },
+    });
+    pendingLegs.delete(chan);
+    if (leg === "refused") {
+      // Nothing was ever registered under `legs` for this chan, so the leg's
+      // own `close` callback above found its latch false and sent no CLOSE —
+      // leaving the hub holding a channel for a call that has no local end.
+      // Free it explicitly, exactly as `openMachineChannel` and `seededPort`
+      // do, or a placer with a sick bridge burns one of its channel budget
+      // per attempt until it reconnects. `abandoned` guards the same race:
+      // an incoming CLOSE already freed the channel there.
+      if (!abandoned) send({ t: "CLOSE", chan, reason: "no session" });
+    } else if (abandoned) {
+      // The hub already forgot this chan while the mint was in flight — close
+      // the leg that just arrived instead of resurrecting an entry nothing
+      // will ever send a second CLOSE for.
+      leg.close();
+    } else legs.set(chan, leg);
+    return { chan, close: hangUp };
   }
 
   function connect(): void {
@@ -94,19 +219,39 @@ export function startTieline(opts: TielineOpts): {
       if (f.t === "ASSIGNED") { everAssigned = true; opts.onAssigned?.(f.exchange, f.world, f.slot); }
       else if (f.t === "OPEN") openChannel(f);
       else if (f.t === "FRAME") {
+        const leg = legs.get(f.chan);
+        if (leg) { leg.deliver(f.data); return; }
         const c = channels.get(f.chan);
         if (!c) return;
         if (c.local.readyState === WebSocket.OPEN) c.local.send(f.data);
         else c.buffer.push(f.data);
-      } else if (f.t === "CLOSE") { channels.get(f.chan)?.local.close(); channels.delete(f.chan); }
+      } else if (f.t === "CLOSE") {
+        pendingLegs.get(f.chan)?.(); pendingLegs.delete(f.chan);
+        legs.get(f.chan)?.close(); legs.delete(f.chan);
+        channels.get(f.chan)?.local.close(); channels.delete(f.chan);
+        opts.onClose?.(f.chan, f.reason);
+      }
       else if (f.t === "REQUEST") void handleRequest(f);
       else if (f.t === "PING") send({ t: "PONG" });
-      else if (f.t === "PLACED") { placing.get(f.call)?.({ chan: f.chan }); placing.delete(f.call); }
+      else if (f.t === "PLACED") {
+        const resolve = placing.get(f.call);
+        placing.delete(f.call);
+        if (resolve) void attachPlaced(f.chan).then(resolve);
+      }
       else if (f.t === "REFUSED") { placing.get(f.call)?.(f.reason); placing.delete(f.call); }
     });
     const retry = () => {
       for (const c of channels.values()) c.local.close();
       channels.clear();
+      for (const leg of legs.values()) leg.close();
+      legs.clear();
+      // Mark every in-flight mint abandoned before dropping the map — the
+      // dropped hub connection means no CLOSE is ever coming for these, and
+      // a reconnect reuses the same small chan numbers, so a stale mint
+      // resolving later must not resurrect (or worse, overwrite a genuinely
+      // new call's) entry in the post-reconnect `legs` map.
+      for (const cancel of pendingLegs.values()) cancel();
+      pendingLegs.clear();
       // The hub is gone — every in-flight place() would otherwise hang
       // forever waiting for a PLACED/REFUSED that can no longer arrive.
       // Resolve (never reject) each one with "offline" and drop the map, so
@@ -167,20 +312,11 @@ export function startTieline(opts: TielineOpts): {
      *  by itself. Omitting it on a relayed call is not a shortcut; it is the
      *  loop-prevention mechanism switched off.
      *
-     *  KNOWN GAP — issue #67. The `chan` this resolves with is a HUB-SIDE
-     *  identifier and nothing more. This module has no local endpoint for a
-     *  machine call at EITHER end, so the placer can neither send on that
-     *  channel, read from it, nor hang it up: there is no `send(chan, data)`
-     *  and no `close(chan)` on this object, and the placer is not even told
-     *  when the callee closes (the FRAME and CLOSE handlers look the channel
-     *  up in a map that only an inbound OPEN ever fills, and a placer never
-     *  receives an OPEN — it receives PLACED). At the other end, an inbound
-     *  machine call is dialled with an empty query the local `/link` refuses.
-     *  So: a call is really placed, refusals and PLACED are real, and no data
-     *  crosses. Deciding what a machine call attaches to locally belongs with
-     *  the piece that actually converses (piece D); guessing it here is API
-     *  that piece would have to undo. */
-    place(to: CallTarget, on?: number): Promise<{ chan: number } | RefusedReason> {
+     *  The returned call attaches a local leg of its own: a session on this
+     *  host's bridge, dialled over this host's /link, whose program is what
+     *  actually talks. Hang it up with close(); opts.onClose fires when the
+     *  channel ends, whichever end ended it. */
+    place(to: CallTarget, on?: number): Promise<PlacedCall | RefusedReason> {
       // No socket, or one already on its way out: resolve rather than
       // reject, so a caller handles "could not place" in one branch instead
       // of a try/catch plus a branch.
@@ -188,7 +324,7 @@ export function startTieline(opts: TielineOpts): {
       if (!h || h.readyState === WebSocket.CLOSING || h.readyState === WebSocket.CLOSED) {
         return Promise.resolve("offline");
       }
-      const dial = (resolve: (r: { chan: number } | RefusedReason) => void) => {
+      const dial = (resolve: (r: PlacedCall | RefusedReason) => void) => {
         const call = nextCall++;
         placing.set(call, resolve);
         h.send(JSON.stringify({ t: "PLACE", call, on, to }));

@@ -373,12 +373,9 @@ test("two tielines share world 2 in different slots (world 1 is reserved); hangu
 // asserted directly: the placing side must never see its own placed call
 // echoed back as an inbound open.
 //
-// What this does NOT prove, because no host can: frames crossing both ways,
-// and a clean close. Those are pinned at HUB level only — tests/trunk.test.ts,
-// "placeCall: bridges two exchanges..." and "a closed leg closes its peer" —
-// because a tieline has no local endpoint for a machine call at either end,
-// so there is nothing here to send from or receive into. Issue #67; the
-// endpoints arrive with the piece that converses.
+// Deliberately narrow: both tielines point at dead local endpoints, so this
+// pins the SIGNALLING alone — who is told about the call, and what they are
+// told. Words crossing the call and the drop that ends it are the test below.
 test("e2e: one exchange places a call to another's slot, and the callee is told who called", async () => {
   const server = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
   const hubUrl = `ws://127.0.0.1:${server.port}/trunk`;
@@ -414,5 +411,116 @@ test("e2e: one exchange places a call to another's slot, and the callee is told 
     assert.equal(inboundA.length, 0, "A placed the call; it must not also receive one");
   } finally {
     a.stop(); b.stop(); await server.close();
+  }
+});
+
+test("e2e: a machine calls a machine, words cross both ways, and the line drops clean",
+  { timeout: 15_000 }, async () => {
+  const hubServer = await startServer({ port: 0, trunk: { reservedWorlds: [] } });
+  const hubUrl = `ws://127.0.0.1:${hubServer.port}/trunk`;
+
+  // Each exchange is a full stack: its own bridge and its own comms relay.
+  const bridgeA = await startStubBridge();
+  const bridgeB = await startStubBridge();
+  // startServer's bridgeUrl is a ws:// url; the tieline's localBridge is http://.
+  // Authentic profiles throughout — the callee answers on `trunk-call`
+  // (dialup-1200), so this exercises the shaping and framing production runs,
+  // not `fast`. Only the dial ritual's CLOCK is scaled: at timeScale 1 it is
+  // 6-9s of sleeps whose RINGING leg is an unseeded Math.random, which would
+  // make the test both slow and nondeterministic. Seeded and scaled, every
+  // transition still runs, in order.
+  const hs = { timeScale: 0.01, rng: () => 0.5, failRate: 0 };
+  const commsA = await startServer({ port: 0, bridgeUrl: `ws://127.0.0.1:${bridgeA.port}`, handshake: hs });
+  const commsB = await startServer({ port: 0, bridgeUrl: `ws://127.0.0.1:${bridgeB.port}`, handshake: hs });
+
+  const closesA: Array<{ chan: number; reason?: string }> = [];
+  const a = startTieline({ hubUrl, name: "A EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "WOPR",
+    localComms: `ws://127.0.0.1:${commsA.port}`, localBridge: `http://127.0.0.1:${bridgeA.port}`,
+    onClose: (chan, reason) => closesA.push({ chan, reason }) });
+  const b = startTieline({ hubUrl, name: "B EXCH", region: "SEATTLE US", joshua: "period",
+    world: 1, slot: "PANAM",
+    localComms: `ws://127.0.0.1:${commsB.port}`, localBridge: `http://127.0.0.1:${bridgeB.port}` });
+
+  try {
+    const deadline = Date.now() + 8000;
+    while ((!a.assigned() || !b.assigned()) && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(a.assigned() && b.assigned());
+
+    const placed = await a.place({ world: 1, slot: "PANAM" });
+    assert.equal(typeof placed, "object", `A could not call B: ${JSON.stringify(placed)}`);
+    const call = placed as { chan: number; close: (r?: string) => void };
+
+    // Both ends minted a session of their own: the placer's program and the
+    // answerer's program are what talk.
+    while ((bridgeA.sessionPosts.length === 0 || bridgeB.sessionPosts.length === 0)
+           && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(bridgeA.sessionPosts.length, 1, "the placer needs an end of its own");
+    assert.equal(bridgeB.sessionPosts.length, 1, "the callee needs an end of its own");
+    assert.match(bridgeA.sessionPosts[0], /"surface":"trunk-caller"/);
+    assert.match(bridgeB.sessionPosts[0], /"surface":"trunk-call"/);
+
+    // B's program was told who called, on the uniform rule.
+    while (bridgeB.connections.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    while (bridgeB.connections[0].received.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    // A message, not a frame: at 1200 baud the ORIGIN control envelope is
+    // paced out in 8-byte quanta like everything else on that link, and the
+    // bridge reassembles on `eom` (emulator/node app/main.py accumulates per
+    // kind, control included). Assert what B's program is told.
+    const firstMessage = (): string | undefined => {
+      const frames = bridgeB.connections[0].received.map(decodeEnvelope);
+      const end = frames.findIndex((e) => e.eom);
+      return end < 0 ? undefined : reassemble(frames.slice(0, end + 1))[0];
+    };
+    while (firstMessage() === undefined && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(firstMessage(), "ORIGIN world 1 slot WOPR");
+
+    // Words cross: the stub bridge echoes, so A's program hears B's program.
+    while (bridgeA.connections.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const heardByA = () => bridgeA.connections[0].received
+      .map((r) => decodeEnvelope(r).payload).join("");
+    while (!heardByA().includes("ECHO") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.match(heardByA(), /ECHO/, "B's answer must reach A's program");
+
+    // ...and only the answer. B answers on `trunk-call` (dialup-1200), so its
+    // /link runs the full dial FSM and every DIALING/RINGING/CARRIER DETECT
+    // frame travels back over the trunk — correct for a visitor, who is
+    // watching a modem connect, and wrong for a calling PROGRAM, which never
+    // had to answer its own modem. The caller's leg filters them on the way
+    // in; by now the ECHO has landed, so the whole ritual has had its chance
+    // to arrive ahead of it.
+    assert.deepEqual(
+      [...new Set(bridgeA.connections[0].received.map((r) => decodeEnvelope(r).kind))],
+      ["output"],
+      "a calling program must be handed the far end's output and nothing else",
+    );
+    assert.doesNotMatch(heardByA(), /DIALING|RINGING|CARRIER|HANDSHAKE|CONNECT/,
+      "the answering end's dial ritual must not reach the calling program");
+
+    // And a clean close, seen at both ends.
+    call.close("done");
+    while (closesA.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(closesA.length, 1);
+  } finally {
+    a.stop(); b.stop();
+    await commsA.close(); await commsB.close();
+    await bridgeA.close(); await bridgeB.close();
+    await hubServer.close();
   }
 });

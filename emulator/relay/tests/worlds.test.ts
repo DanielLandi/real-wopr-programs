@@ -233,7 +233,7 @@ test("a seeded slot is occupied: even the hub's own key cannot claim it", () => 
   assert.equal(place(sb, { key: "K", world: 1, slot: "PANAM" }).slot, "PANAM");
 });
 
-test("seeds are not exchanges: sweepDead never reaps them", () => {
+test("seeds are exchanges, but not registrants: sweepDead never reaps them", () => {
   const sb = new Switchboard({ localWorld: SEEDS });
   sb.sweepDead();
   sb.sweepDead();
@@ -298,4 +298,17 @@ test("a seed's name and region are uppercased, like a REGISTER's", () => {
   });
   const e = sb.directory("http://hub")[0].slots[0];
   assert.deepEqual([e.name, e.region], ["CHEYENNE MOUNTAIN", "SAO PAULO BR"]);
+});
+
+test("a seeded slot with no port refuses a REST request at once, rather than timing out", async () => {
+  // A seed is an exchange from construction but has no host socket, so
+  // `port?.send` is a silent no-op and the RESPONSE that would settle the
+  // promise can never arrive. Without the guard the caller sits out the full
+  // timeout; the server maps "offline" to a 404 either way.
+  const sb = new Switchboard({ localWorld: SEEDS });
+  const code = sb.seededCode("WOPR")!;
+  await assert.rejects(
+    sb.request(code, "GET", "/api/games", undefined, 10_000),
+    (e: unknown) => e === "offline",
+  );
 });
