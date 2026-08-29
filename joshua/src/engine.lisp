@@ -572,7 +572,8 @@ plain NO-style answers only when they follow a game offer."
 ;;; ------------------------------------------------------------ respond ----
 
 (defun respond (history input)
-  "Return (reply-lines . intent) where intent is NIL or a game id string."
+  "Return (reply-lines . intent) where intent is NIL, (:START-GAME . id),
+   or (:SEEK . who)."
   (seed-rng (concatenate 'string (history-text history :u)
                          (history-text history :a) (string-upcase input)))
   (let* ((tokens (tokenize input))
@@ -589,6 +590,7 @@ plain NO-style answers only when they follow a game offer."
          (planned-lines (domain-reply-lines act)))
     (declare (ignore trust))
     (labels ((finish (lines intent &optional (pressure t))
+               "Intent is NIL, (:START-GAME . id), or (:SEEK . who)."
                (let ((reply lines))
                  ;; PARRY-style pressure: obsession pushes toward the game.
                  (when (and pressure (>= obsession 2) (null intent)
@@ -615,7 +617,7 @@ plain NO-style answers only when they follow a game offer."
                    "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)"
                    "5 TALL CEDAR ROAD"
                    "GOOSE ISLAND, OREGON 97014")
-                 nil nil))
+                 '(:seek . "FALKEN") nil))
         ((and (eq act 'falken) (not (second state)))
          (finish '("GREETINGS PROFESSOR FALKEN.") nil))
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)
@@ -642,7 +644,7 @@ plain NO-style answers only when they follow a game offer."
               (not chess-offered))
          (finish '("WOULDN'T YOU PREFER A GOOD GAME OF CHESS?") nil))
         ((and game (wants-play-p input act) (string= (cdr game) "gtw"))
-         (finish '("FINE.") "gtw"))
+         (finish '("FINE.") '(:start-game . "gtw")))
         ((and chess-offered
               (containsp "GOOD GAME OF CHESS" last-a)
               (or (eq act 'no) (containsp "LATER" (string-upcase input))
@@ -650,10 +652,10 @@ plain NO-style answers only when they follow a game offer."
                   (and (token-present-p "WAR" tokens)
                        (token-present-p "SIMULATION" tokens))
                   (containsp "THERMONUCLEAR" (string-upcase input))))
-         (finish '("FINE.") "gtw"))
+         (finish '("FINE.") '(:start-game . "gtw")))
         ((and game (wants-play-p input act))
          (finish (list (concatenate 'string "INITIALIZING " (car game) "."))
-                 (cdr game)))
+                 (cons :start-game (cdr game))))
         ;; --- deterministic dialogue memory -------------------------------
         (memory-lines
          (finish memory-lines nil nil))
