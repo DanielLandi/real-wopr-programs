@@ -503,6 +503,18 @@ export default function HomeTerminal() {
       link.current.sendInput(cmd);
       return;
     }
+    // The other way "connected" happens: a ring was answered rather than
+    // dialled, so there is no WoprLink — the conversation rides the seat's
+    // own socket instead (relay/src/server.ts routes it to the machine byte
+    // for byte). link.current being unset is what tells the two apart; a
+    // ring can only be answered from the command prompt, so this can never
+    // coincide with a dialled call in progress.
+    if (phase === "connected" && seat.current) {
+      const cmd = line.toUpperCase();
+      appendText(`> ${cmd}`);
+      seat.current.send(cmd);
+      return;
+    }
     runLocalCommand(line);
   };
 

@@ -104,6 +104,34 @@ test("answering and declining each send one control frame", (t) => {
   assert.deepEqual(ws.sent.map((s) => JSON.parse(s).payload), ["ANSWER", "REJECT"]);
 });
 
+test("send() puts one input envelope on the wire once seated, nothing before", (t) => {
+  const made = withFakeSocket(t);
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  const ws = made[0];
+  ws.readyState = 1;
+  ws.onopen?.();
+
+  // Before the handshake has produced a token, send() is a no-op — same as
+  // answer()/reject() before a token exists. The connect-time SEAT? is
+  // already sitting in ws.sent; clear it so this checks send() alone.
+  ws.sent.length = 0;
+  seat.send("HELLO");
+  assert.deepEqual(ws.sent, [], "send() before a token must not touch the wire");
+
+  ws.onmessage?.({ data: control("SEAT TOK1") });
+  ws.sent.length = 0;
+  seat.send("HELLO");
+  assert.equal(ws.sent.length, 1, "send() after seating must put exactly one envelope on the wire");
+  const env = JSON.parse(ws.sent[0]);
+  // seq is monotonic across every envelope this seat has sent, not reset per
+  // call — the earlier SEAT? (sent on open, before this test cleared
+  // ws.sent) already consumed seq 0, so the first send() lands on seq 1.
+  assert.deepEqual(env, {
+    v: 1, session: "TOK1", seq: 1, kind: "input", link: "seat", payload: "HELLO", eom: true,
+  });
+});
+
 test("after answering, ordinary frames are delivered as frames", (t) => {
   const made = withFakeSocket(t);
   const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });

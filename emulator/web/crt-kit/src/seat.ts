@@ -5,7 +5,7 @@
 // has hung up. Mirrors link.ts's structure and envelope encoding on purpose
 // — same listener set, same emit helper, same dependency-free style.
 
-import type { Envelope } from "./link.ts";
+import type { Envelope, FrameKind } from "./link.ts";
 
 export type SeatEvent =
   | { type: "seated"; token: string }
@@ -26,6 +26,10 @@ export class WoprSeat {
   private readonly opts: WoprSeatOpts;
   private listeners = new Set<(e: SeatEvent) => void>();
   private _token: string | undefined;
+  // Monotonic, mirroring WoprLink's own — the hub sequences every envelope
+  // it receives on a given link the same way regardless of which side sent
+  // it (link.ts's sendEnvelope).
+  private seq = 0;
 
   constructor(opts: WoprSeatOpts) {
     this.opts = opts;
@@ -92,19 +96,26 @@ export class WoprSeat {
     };
   }
 
-  private sendControl(payload: string): void {
+  // Same shape link.ts's own sendEnvelope builds, same monotonic seq — the
+  // hub does not care which side of a call sent an envelope, only that each
+  // side's own sequence climbs.
+  private sendEnvelope(kind: FrameKind, payload: string): void {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const env: Envelope = {
       v: 1,
       session: this._token ?? "",
-      seq: 0,
-      kind: "control",
+      seq: this.seq++,
+      kind,
       link: "seat",
       payload,
       eom: true,
     };
     ws.send(JSON.stringify(env));
+  }
+
+  private sendControl(payload: string): void {
+    this.sendEnvelope("control", payload);
   }
 
   /** Accept the pending ring. A no-op before a token exists — there is
@@ -118,6 +129,15 @@ export class WoprSeat {
   reject(): void {
     if (this._token === undefined) return;
     this.sendControl("REJECT");
+  }
+
+  /** Send one line of conversation to the machine this seat answered — the
+   *  seat's side of WoprLink.sendInput, same envelope shape and seq
+   *  handling. A no-op before a token exists, same as answer()/reject():
+   *  there is no call to speak into yet. */
+  send(text: string): void {
+    if (this._token === undefined) return;
+    this.sendEnvelope("input", text);
   }
 
   /** Close the seat. A closed seat cannot be rung; that is correct and needs
