@@ -14,9 +14,28 @@ from __future__ import annotations
 import asyncio
 import http.server
 import json
+import socketserver
 import threading
+import time
 
 from app.callback import place_seat_call
+
+
+class _FastBindHTTPServer(http.server.HTTPServer):
+    """HTTPServer, minus the reverse-DNS lookup nobody here asked for.
+
+    Stock HTTPServer.server_bind() calls socket.getfqdn(host) to set
+    self.server_name. On this machine/network that reverse lookup for
+    127.0.0.1 measured ~35s (see task-5-report.md's timeout investigation)
+    — a one-time, environment-specific stall that has nothing to do with
+    anything under test. Skip it; server_name is never used here.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
 
 
 class FakeHub:
@@ -51,7 +70,7 @@ class FakeHub:
             def log_message(self, *args):  # silence stdlib's per-request stderr line
                 pass
 
-        self._server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        self._server = _FastBindHTTPServer(("127.0.0.1", 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         return self
@@ -94,6 +113,27 @@ def test_an_unreachable_hub_is_returned_not_raised():
         # Port 9 discards: a connection that fails rather than one that answers.
         result = await place_seat_call("http://127.0.0.1:9", "s3cret", "HANDLE1")
         assert result != "placed"
+
+    asyncio.run(flow())
+
+
+def test_a_hub_that_never_answers_is_bounded_by_timeout_s():
+    """Pins the contract that actually matters: place_seat_call runs in
+    teardown, so a host that never answers must not hold the caller past
+    timeout_s. Port 9 above refuses instantly (ECONNREFUSED) and never
+    exercises the timeout path at all. 192.0.2.0/24 (RFC 5737 TEST-NET-1) is
+    reserved and never routed, so a connection to it blackholes instead of
+    refusing — the case timeout_s exists for."""
+    async def flow():
+        t0 = time.perf_counter()
+        result = await place_seat_call(
+            "http://192.0.2.1", "s3cret", "HANDLE1", timeout_s=0.5)
+        elapsed = time.perf_counter() - t0
+
+        assert result != "placed"
+        # Generous multiple of timeout_s: bounds runaway behaviour, not exact
+        # timing, since scheduling jitter is not the thing being pinned.
+        assert elapsed < 2.0
 
     asyncio.run(flow())
 
