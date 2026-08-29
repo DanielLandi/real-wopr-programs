@@ -186,7 +186,24 @@ export default function HomeTerminal() {
       frames.current?.onEvent({ type: "frame", frame: e.frame });
       return;
     }
-    if (e.type === "close") setPhase("idle");
+    if (e.type === "close") {
+      // The seat socket went away. That only owns the screen in two states —
+      // a ring waiting for Y/N, and a call that was ANSWERED rather than
+      // dialled (which has no WoprLink; that is exactly how `submit` tells
+      // the two apart). In any other state the screen belongs to a dialled
+      // call or to the local interpreter, and resetting the phase here would
+      // silently drop David out of a live conversation on /link and back to
+      // the command prompt with nothing said about it. A seat can drop for
+      // its own reasons — it is a separate socket with a separate lifetime,
+      // which is the whole point of a seat — so this is not a rare case.
+      //
+      // `phaseRef` rather than `phase`: this callback is memoised on
+      // [appendText] and runs outside render, so the captured `phase` would
+      // be whatever it was when the seat was constructed.
+      const owned = phaseRef.current === "ringing"
+        || (phaseRef.current === "connected" && !link.current?.isOpen());
+      if (owned) setPhase("idle");
+    }
   }, [appendText]);
 
   // ONE seat, constructed once for the life of the page — not inside the
@@ -326,6 +343,13 @@ export default function HomeTerminal() {
           surface: "home-terminal",
           session: s.session_id,
           token: s.token,
+          // Same as the exchange branch below, and for the same reason: the
+          // seat token is what lets the hub HOLD this seat for the duration
+          // of the call (relay/src/seats.ts's `hold`), and a held seat is
+          // refused `busy` rather than rung. Without it a ring could land
+          // mid-call — which is precisely what the comment on the ring
+          // handler above says cannot happen.
+          seat: seat.current?.token, // absent until the seat handshake lands
         });
         detach.current = link.current.onEvent(onLinkEvent);
         link.current.connect();
@@ -497,18 +521,28 @@ export default function HomeTerminal() {
     }
     // Once a carrier is up the line passes straight through to the exchange;
     // otherwise the local interpreter owns it.
-    if (phase === "connected" && link.current) {
+    //
+    // `isOpen()`, not mere existence: `link.current` is nulled in exactly one
+    // place (the top of `dial`), so after the first call of the page's life it
+    // is permanently non-null — a hung-up or carrier-lost WoprLink outlives its
+    // socket. Testing truthiness sent every line of an ANSWERED CALLBACK into
+    // that corpse, where `sendEnvelope` drops it silently against a closed
+    // socket, and the seat branch below was unreachable for anyone who had
+    // dialled even once. Which is everyone: Joshua only rings back a visitor he
+    // has already spoken to.
+    if (phase === "connected" && link.current?.isOpen()) {
       const cmd = line.toUpperCase();
       appendText(`> ${cmd}`);
       link.current.sendInput(cmd);
       return;
     }
     // The other way "connected" happens: a ring was answered rather than
-    // dialled, so there is no WoprLink — the conversation rides the seat's
+    // dialled, so there is no live WoprLink — the conversation rides the seat's
     // own socket instead (relay/src/server.ts routes it to the machine byte
-    // for byte). link.current being unset is what tells the two apart; a
-    // ring can only be answered from the command prompt, so this can never
-    // coincide with a dialled call in progress.
+    // for byte). A live link is what tells the two apart; a ring can only be
+    // answered from the command prompt, and a terminal on a dialled call holds
+    // its own seat (which the hub then refuses to ring, busy), so this can
+    // never coincide with a dialled call in progress.
     if (phase === "connected" && seat.current) {
       const cmd = line.toUpperCase();
       appendText(`> ${cmd}`);
