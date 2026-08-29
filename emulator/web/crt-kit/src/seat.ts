@@ -26,6 +26,20 @@ export class WoprSeat {
   private readonly opts: WoprSeatOpts;
   private listeners = new Set<(e: SeatEvent) => void>();
   private _token: string | undefined;
+  // The hub's own name for this leg, read off the `session` field of the
+  // SEAT reply. Kept because it — not the token — is what belongs in the
+  // envelopes this client sends: the token is the visitor's secret (see the
+  // header of relay/src/seats.ts, "travels only to the terminal that owns
+  // it… is never disclosed to any machine"), and an envelope sent from a
+  // seat can be forwarded verbatim into a foreign exchange once a ring is
+  // answered (server.ts's seatWss -> seats.inboundOf -> Switchboard's
+  // clientFrame -> FRAME over the trunk). Stamping the token there would
+  // hand every peer that rings this terminal the one credential the whole
+  // handle design exists to keep away from machines. The hub routes a /seat
+  // socket by the socket, never by this field, so the leg id is purely
+  // informational on the wire — and an empty string is equally acceptable to
+  // decodeEnvelope, which is what the pre-handshake `SEAT?` still carries.
+  private legId: string | undefined;
   // Monotonic, mirroring WoprLink's own — the hub sequences every envelope
   // it receives on a given link the same way regardless of which side sent
   // it (link.ts's sendEnvelope).
@@ -84,6 +98,7 @@ export class WoprSeat {
       // one that knows what NO CARRIER means.
       if (frame.kind === "control" && frame.payload.startsWith("SEAT ")) {
         this._token = frame.payload.slice("SEAT ".length);
+        this.legId = frame.session;
         this.emit({ type: "seated", token: this._token });
         return;
       }
@@ -104,7 +119,7 @@ export class WoprSeat {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     const env: Envelope = {
       v: 1,
-      session: this._token ?? "",
+      session: this.legId ?? "",
       seq: this.seq++,
       kind,
       link: "seat",

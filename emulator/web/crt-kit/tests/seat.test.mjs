@@ -51,8 +51,15 @@ function withFakeSocket(t) {
   return made;
 }
 
+// The hub's own name for the leg, which it stamps into the `session` field of
+// every envelope it sends down a /seat socket (relay/src/seats.ts's private
+// `envelope()`, which sends `session: id`). Distinct from the token on purpose:
+// these two must never be confused, and a test fixture that used the same
+// string for both could not tell them apart.
+const LEG_ID = "LEG7";
+
 const control = (payload) => JSON.stringify({
-  v: 1, session: "x", seq: 0, kind: "control", link: "seat", payload, eom: true,
+  v: 1, session: LEG_ID, seq: 0, kind: "control", link: "seat", payload, eom: true,
 });
 
 test("a seat asks for its token — the hub never volunteers one", (t) => {
@@ -127,9 +134,54 @@ test("send() puts one input envelope on the wire once seated, nothing before", (
   // seq is monotonic across every envelope this seat has sent, not reset per
   // call — the earlier SEAT? (sent on open, before this test cleared
   // ws.sent) already consumed seq 0, so the first send() lands on seq 1.
+  // `session` carries the LEG ID the hub disclosed on the SEAT reply, never
+  // the token — see the token-containment test below for why.
   assert.deepEqual(env, {
-    v: 1, session: "TOK1", seq: 1, kind: "input", link: "seat", payload: "HELLO", eom: true,
+    v: 1, session: LEG_ID, seq: 1, kind: "input", link: "seat", payload: "HELLO", eom: true,
   });
+});
+
+// The one credential the handle design exists to keep away from machines. An
+// envelope a seat sends does not stop at the hub: once a ring is answered it is
+// forwarded byte for byte into the machine on the other end (server.ts's
+// seatWss -> seats.inboundOf -> Switchboard.clientFrame -> a FRAME on the
+// trunk), and that machine may be a foreign exchange. So the assertion is on
+// the RAW text of every envelope this client puts on the wire, across the whole
+// handshake-answer-converse sequence, not on one field of one frame.
+test("the seat token never appears in anything the seat sends", (t) => {
+  const made = withFakeSocket(t);
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  const ws = made[0];
+  ws.readyState = 1;
+  ws.onopen?.();
+  ws.onmessage?.({ data: control("SEAT TOK1") });
+  seat.answer();
+  seat.send("HELLO");
+  seat.reject();
+  assert.ok(ws.sent.length >= 4, "the sequence under test must have reached the wire");
+  assert.equal(seat.token, "TOK1", "the terminal still knows its own token");
+  for (const raw of ws.sent) {
+    assert.ok(!raw.includes("TOK1"),
+      `the visitor's seat token escaped in an envelope: ${raw}`);
+  }
+});
+
+test("the leg id from the SEAT reply is what rides in `session`", (t) => {
+  const made = withFakeSocket(t);
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  const ws = made[0];
+  ws.readyState = 1;
+  ws.onopen?.();
+  // Before the reply there is no leg id, and an empty session is what
+  // decodeEnvelope accepts and the hub ignores — it routes a /seat socket by
+  // the socket, never by this field.
+  assert.equal(JSON.parse(ws.sent[0]).session, "");
+  ws.onmessage?.({ data: control("SEAT TOK1") });
+  ws.sent.length = 0;
+  seat.send("HELLO");
+  assert.equal(JSON.parse(ws.sent[0]).session, LEG_ID);
 });
 
 test("after answering, ordinary frames are delivered as frames", (t) => {
