@@ -378,6 +378,12 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
 
         await ws.accept()
         pending: dict[str, str] = {}
+        # Disclosed by the relay ahead of anything else on this session, and
+        # the only way this host can ever ring this visitor back. A local,
+        # not a registry: nothing outside this coroutine reads it, and it
+        # must not outlive the session that was given it (spec §3).
+        seat_handle: str | None = None
+        called_from: str | None = None
         seq = 0
         observer_task: asyncio.Task | None = None
 
@@ -467,6 +473,13 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     if message == "BREAK":
                         await store.log_event(session_id, "input", "user", {"control": "BREAK"})
                         await ws.send_text(envelope("output", "\n*** BREAK ***\n"))
+                    elif message.startswith("ORIGIN seat "):
+                        seat_handle = message[len("ORIGIN seat "):].strip() or None
+                    elif message.startswith("ORIGIN world "):
+                        # Provenance only: a machine called, and this says
+                        # which slot it called from. Not a seat — ringing it
+                        # back would ring an exchange, not a person.
+                        called_from = message[len("ORIGIN "):].strip() or None
                     continue
 
                 # A system-bound session speaks only SYSTEM/1 with its own
