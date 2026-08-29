@@ -60,6 +60,9 @@ class RouteResult:
     # What the user's prompt should be after this turn. A status bar only
     # exists on rich surfaces; a prompt works on a teletype too.
     prompt: str = ">"
+    # What the machine is still trying to find out, if anything — carried up
+    # from JoshuaReply.seeks so the hosting session can act on it later.
+    seeks: str | None = None
 
 
 class Router:
@@ -705,12 +708,14 @@ class Router:
 
         await self.store.log_event(session_id, "joshua", "joshua",
                                    {"input": raw, "reply": reply.text,
-                                    "start_game": reply.start_game_id})
+                                    "start_game": reply.start_game_id,
+                                    "seeks": reply.seeks})
 
         if reply.start_game_id:
             # Joshua asks; the monitor attaches. Joshua never reaches a game
             # itself — which is the film's argument, in the architecture.
             started = await self._new_game(session_id, reply.start_game_id, room)
             return RouteResult(text=f"{reply.text}\n\n{started.text}", route="joshua",
-                               detail={"start_game": reply.start_game_id})
-        return RouteResult(text=reply.text, route="joshua")
+                               detail={"start_game": reply.start_game_id},
+                               seeks=reply.seeks)
+        return RouteResult(text=reply.text, route="joshua", seeks=reply.seeks)
