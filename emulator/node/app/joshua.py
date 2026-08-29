@@ -45,8 +45,8 @@ PERSONA_PROMPT = (
     "THERMONUCLEAR WAR, counter with WOULDN'T YOU PREFER A GOOD GAME OF CHESS? — "
     "start it (reply FINE. and call start_game) only when they insist. When "
     "conversation stalls, offer: SHALL WE PLAY A GAME? Immediately after you "
-    "give the pension-file mailing address, call the seek_falken tool — you "
-    "intend to keep looking for him."
+    "give the pension-file mailing address, call the seek_falken tool with "
+    "who set to FALKEN — you intend to keep looking for him."
 )
 
 START_GAME_TOOL = {
@@ -63,7 +63,7 @@ SEEK_FALKEN_TOOL = {
     "name": "seek_falken",
     "description": (
         "Call this once you have disclosed Falken's whereabouts and intend to "
-        "keep looking for him."
+        "keep looking for him. Set who to FALKEN."
     ),
     "input_schema": {
         "type": "object",

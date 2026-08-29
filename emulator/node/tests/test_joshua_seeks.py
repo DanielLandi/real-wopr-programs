@@ -4,6 +4,11 @@ The dossier is the trigger (spec §4) because it is the one deterministic
 beat both engines already share byte-identically. These tests pin that the
 signal reaches Python from each engine, not that the text is right — the
 golden fixtures already own the text.
+
+Deterministic engines only: no anthropic import anywhere in this file, so it
+collects and runs under a plain [dev] install (CI's node job). The Claude-only
+tests live in test_joshua_claude_seeks.py, gated by their own module-level
+importorskip — the same isolation test_joshua_claude.py already relies on.
 """
 import asyncio
 
@@ -37,48 +42,3 @@ def test_scripted_engine_seeks_nothing_otherwise():
         assert reply.seeks is None
 
     asyncio.run(flow())
-
-
-# --- ClaudeJoshua wiring (still no API calls: the client is stubbed) --------
-# Parity only: the evals run scripted and lisp, not claude, and this signal
-# is inherently nondeterministic (the model may or may not call the tool).
-
-import pytest  # noqa: E402
-
-anthropic = pytest.importorskip(
-    "anthropic", reason="anthropic not installed (pip install -e '.[prod]')")
-
-from types import SimpleNamespace  # noqa: E402
-
-from app.joshua import ClaudeJoshua  # noqa: E402
-
-
-class _StubMessages:
-    def __init__(self, result):
-        self._result = result
-
-    async def create(self, **kwargs):
-        return self._result
-
-
-def test_claude_engine_seeks_falken_when_the_model_calls_the_tool():
-    engine = ClaudeJoshua("claude-haiku-4-5-20251001", 300, 15.0, api_key="sk-ant-test")
-    response = SimpleNamespace(content=[
-        SimpleNamespace(type="text", text=FALKEN_DOSSIER),
-        SimpleNamespace(type="tool_use", name="seek_falken", input={"who": "FALKEN"}),
-    ])
-    engine._client = SimpleNamespace(messages=_StubMessages(response))
-
-    reply = asyncio.run(engine.chat("s1", [], "IS FALKEN DEAD?"))
-
-    assert reply.seeks == "FALKEN"
-
-
-def test_claude_engine_seeks_nothing_when_the_model_does_not_call_the_tool():
-    engine = ClaudeJoshua("claude-haiku-4-5-20251001", 300, 15.0, api_key="sk-ant-test")
-    response = SimpleNamespace(content=[SimpleNamespace(type="text", text="HELLO.")])
-    engine._client = SimpleNamespace(messages=_StubMessages(response))
-
-    reply = asyncio.run(engine.chat("s1", [], "HELLO"))
-
-    assert reply.seeks is None
