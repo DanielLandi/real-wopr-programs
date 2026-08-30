@@ -139,7 +139,7 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
-emulator/node/.venv/bin/python -m uvicorn app.main:app --app-dir emulator/node --port "$BRIDGE_PORT" &
+emulator/node/.venv/bin/python -m uvicorn app.main:create_app --factory --app-dir emulator/node --port "$BRIDGE_PORT" &
 pids+=($!)
 for _ in $(seq 1 60); do curl -sf "localhost:${BRIDGE_PORT}/health" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "localhost:${BRIDGE_PORT}/health" >/dev/null || die "node host failed to start on :${BRIDGE_PORT}"
