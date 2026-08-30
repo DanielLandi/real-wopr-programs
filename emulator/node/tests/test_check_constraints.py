@@ -5,6 +5,7 @@
 one the bridge writes, and nothing compared them. Four more columns had the
 same shape and no guard (#91):
 
+    sessions.surface     <->  store.SESSION_SURFACES   (#111)
     event_logs.kind      <->  store.EVENT_KINDS
     event_logs.actor     <->  store.EVENT_ACTORS
     game_states.status   <->  store.GAME_STATUSES
@@ -28,12 +29,14 @@ from typing import get_args
 
 import pytest
 
-from app.main import RegisterExchange
-from app.store import EVENT_ACTORS, EVENT_KINDS, EXCHANGE_JOSHUAS, GAME_STATUSES
+from app.main import DEFAULT_LINKS, RegisterExchange
+from app.store import (EVENT_ACTORS, EVENT_KINDS, EXCHANGE_JOSHUAS, GAME_STATUSES,
+                       SESSION_SURFACES)
 from app.wire import STATUSES as WIRE_STATUSES
 from constrainttext import constraint_values
 
 COLUMNS = [
+    pytest.param("sessions", "surface", SESSION_SURFACES, id="sessions.surface"),
     pytest.param("event_logs", "kind", EVENT_KINDS, id="event_logs.kind"),
     pytest.param("event_logs", "actor", EVENT_ACTORS, id="event_logs.actor"),
     pytest.param("game_states", "status", GAME_STATUSES, id="game_states.status"),
@@ -77,3 +80,12 @@ def test_the_register_api_offers_exactly_the_engines_the_store_accepts():
     dies in the database."""
     api = set(get_args(RegisterExchange.model_fields["joshua"].annotation))
     assert api == EXCHANGE_JOSHUAS
+
+
+def test_the_store_accepts_exactly_the_surfaces_the_bridge_mints():
+    """`DEFAULT_LINKS` (main.py) is what `POST /api/session` accepts;
+    `SESSION_SURFACES` is what MemoryStore will store. They are two copies
+    because store.py cannot import main.py (main imports the store). A
+    surface added to one and not the other is either a mint the in-memory
+    suite refuses, or a guard with a hole in it (#111)."""
+    assert set(DEFAULT_LINKS) == SESSION_SURFACES
