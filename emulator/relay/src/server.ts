@@ -677,6 +677,17 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       client.close(code, reason);
     };
     const stored = await fetchSessionSurface(bridgeHttpBase, session, internalToken);
+    // The visitor may have gone while the lookup was in flight — a window that
+    // did not exist while this handler was synchronous, when a `close` could
+    // only ever arrive after its listeners were wired.
+    //
+    // A clean hang-up is safe without this: the pause above defers the close
+    // frame until `resume()`, by which time the listeners exist. What this
+    // catches is the socket dying outright — a reset, not a close frame, which
+    // pausing does not defer. That `close` fires with nobody listening, and
+    // building the leg anyway would run dial(), open an upstream socket to the
+    // bridge, and leave nothing behind that could ever tear it down.
+    if (client.readyState !== WebSocket.OPEN) { client.resume(); return; }
     if (!stored.ok) {
       if (stored.why === "unknown") refuse(4404, "unknown session");
       else refuse(4503, "session lookup failed");
@@ -840,7 +851,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
           (state, detail) => down.send({ kind: "handshake", payload: `${state} ${detail}`.trim() }),
           handshakeOpts,
         );
-        if (ok) connectUpstream();
+        // `!closed` because the ritual is long — 6 to 9 seconds of it in
+        // authentic mode — and a visitor who hangs up part way through has
+        // already run teardown(), which found no upstream to close because
+        // there was none yet. Connecting one now would leave a bridge socket
+        // that nothing can ever tear down: teardown is once-only, and the
+        // client whose close would have called it is gone.
+        if (ok && !closed) connectUpstream();
         // On failure the line stays open; the surface may send a control DIAL to retry (§4).
       } finally {
         dialing = false;

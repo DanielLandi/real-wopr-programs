@@ -37,8 +37,11 @@ interface FakeBridge {
 }
 
 /** `fail: "lookup"` answers 500 to the session lookup while still minting —
- *  a bridge whose HTTP face is broken, which must not become a dial. */
-function fakeBridge(opts: { internalToken?: string; fail?: "lookup" } = {}): Promise<FakeBridge> {
+ *  a bridge whose HTTP face is broken, which must not become a dial.
+ *  `lookupDelayMs` holds the lookup open, which is how a test lands a visitor
+ *  hang-up inside the window the lookup opened. */
+function fakeBridge(opts: { internalToken?: string; fail?: "lookup";
+                            lookupDelayMs?: number } = {}): Promise<FakeBridge> {
   const surfaces = new Map<string, string>();
   const requests: FakeBridge["requests"] = [];
   let upstreams = 0;
@@ -68,12 +71,16 @@ function fakeBridge(opts: { internalToken?: string; fail?: "lookup" } = {}): Pro
 
       const lookup = /^\/api\/session\/([^/?]+)$/.exec(path);
       if (req.method === "GET" && lookup) {
-        if (opts.fail === "lookup") { res.writeHead(500); res.end(); return; }
-        const surface = surfaces.get(decodeURIComponent(lookup[1]!));
-        if (surface === undefined) { res.writeHead(404); res.end(); return; }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ surface, defcon: 5, link_profile: "x", room_code: null,
-                                 system: null, last_seen_at: null }));
+        const answer = () => {
+          if (opts.fail === "lookup") { res.writeHead(500); res.end(); return; }
+          const surface = surfaces.get(decodeURIComponent(lookup[1]!));
+          if (surface === undefined) { res.writeHead(404); res.end(); return; }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ surface, defcon: 5, link_profile: "x", room_code: null,
+                                   system: null, last_seen_at: null }));
+        };
+        if (opts.lookupDelayMs) setTimeout(answer, opts.lookupDelayMs);
+        else answer();
         return;
       }
 
@@ -340,4 +347,38 @@ test("the lookup carries the internal token when the relay has one, and no heade
       } finally { ws.close(); }
     } finally { await server.close(); await bridge.close(); }
   }
+});
+
+// -- the window the lookup opened -------------------------------------------
+
+test("a visitor who hangs up during the lookup leaves no upstream socket behind", async () => {
+  // The handler used to be synchronous, so a client `close` could only ever
+  // arrive after its listeners were wired. The lookup opens a window where it
+  // can arrive first — and a leg that goes on to dial for a client that is
+  // already gone opens an upstream socket with nothing left to tear it down:
+  // teardown() has already run and is once-only. Hang up, dial again, and a
+  // visitor leaks one bridge session per connect.
+  //
+  // The ritual is deliberately real here (authentic, lightly scaled) because
+  // the window is the ritual: `runHandshake` is 6-9 seconds in production, and
+  // the hang-up lands inside it.
+  const bridge = await fakeBridge({ lookupDelayMs: 200 });
+  const server = await startServer({
+    port: 0,
+    bridgeUrl: `ws://127.0.0.1:${bridge.port}`,
+    config: structuredClone(DEFAULT_CONFIG),      // authentic: the dial takes time
+    handshake: { timeScale: 0.05, rng: () => 0.5, failRate: 0 },
+  });
+  try {
+    const visitor = await mint(bridge.port, "home-terminal");
+    const ws = dial(server, "home-terminal", visitor.session_id!, visitor.token!);
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    ws.close();                                     // ... while the lookup is in flight
+    await new Promise((r) => setTimeout(r, 2_000)); // past the lookup and the ritual behind it
+    assert.equal(bridge.upstreams, 0,
+                 "a leg must not dial upstream for a client that has already gone");
+  } finally { await server.close(); await bridge.close(); }
 });

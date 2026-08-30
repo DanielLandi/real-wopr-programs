@@ -193,7 +193,23 @@ uses the stored one.** Deletes a parameter instead of verifying it.
     `client.resume()` once the leg is fully built keeps the existing guarantee
     that a frame sent ahead of `CONNECTED` is buffered, never dropped.
 
-13. **The bridge is not changed at all.** No new endpoint, no new field, no
+13. **A dial that lost its client does not connect upstream.** Found by writing
+    the test for decision 12 rather than by reading the code. Pausing the
+    socket defers a clean hang-up until `resume()`, so no `close` is lost —
+    but an abrupt death (a reset, not a close frame) *is* emitted during the
+    lookup, before any listener exists, and the leg would then be built for a
+    client already gone. Two guards, because they cover different halves:
+    `client.readyState !== OPEN` after the lookup, and `!closed` before
+    `connectUpstream()` in `dial()`. The second one closes a **pre-existing**
+    leak this change would otherwise have widened: the dial ritual is 6–9
+    seconds, and a visitor who hangs up during it ran `teardown()` at a moment
+    when there was no upstream to close — so the socket the ritual opened
+    afterwards was left connected to the bridge with nothing able to tear it
+    down, one leaked bridge session per connect-and-hang-up. It is four
+    characters and it is in the window this change extends, so it is fixed
+    here rather than filed.
+
+14. **The bridge is not changed at all.** No new endpoint, no new field, no
     token change. That is what makes this a single-service deploy (see below),
     and it is the strongest practical argument for option 1 over option 2.
 
@@ -285,6 +301,9 @@ than simulated):
 - unknown session → `4404`; bridge down → `4503`; bridge 500 → `4503`
 - a surface this relay does not know → `4400` **and no request to the bridge**
 - the lookup carries the internal token when configured, and no header when not
+- a visitor who hangs up while the lookup is in flight leaves **no** upstream
+  socket behind (decision 13) — run against the real ritual, lightly scaled,
+  because the window is the ritual
 
 Node (`emulator/node/tests/test_trunk_surfaces.py`): `GET /api/session/{id}`
 reports the surface the session was minted with, for every surface in
