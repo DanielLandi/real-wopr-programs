@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
-# make host — run this machine as a hosted exchange: node host + relay +
-# tieline under one supervisor. Ctrl-C hangs up the slot and stops all three.
+# make host — run this machine as a hosted exchange: node host + relay under
+# one supervisor. Ctrl-C hangs up the slot and stops both.
+#
+# The tie line used to be a third process. It now runs INSIDE the relay, so
+# that a callback Joshua wants to place can go out over the trunk instead of
+# into a switchboard that has never heard of the visitor's handle
+# (real-wopr-programs#75). `npm run tieline` still works for a stack you wired
+# yourself; this script no longer uses it. One consequence worth knowing: a
+# terminal refusal (LINE REFUSED, a taken slot) used to end the tieline process
+# and take the whole stack down with it. Now it prints LINE REFUSED and leaves
+# the relay serving locally — read the output, do not assume a quiet stack is a
+# connected one.
 #
 # The hub is only a switchboard. Every game, session and transcript stays on
 # this machine; the hub lists your number and relays calls while the tie line
@@ -25,7 +35,8 @@ cd "$(dirname "$0")/.."
 # opaque here — only the hub can say whether it is the right key.
 HOST_ENV_VARS="TIELINE_SLOT TIELINE_WORLD TIELINE_NAME TIELINE_REGION
 TIELINE_JOSHUA TIELINE_OPERATOR TIELINE_RESERVE_KEY TRUNK_HUB_URL
-BRIDGE_LOGON_BANNER WOPR_OPERATORS JOSHUA_ENGINE COMMS_MODE DATABASE_URL"
+BRIDGE_TRUNK_URL BRIDGE_LOGON_BANNER WOPR_OPERATORS JOSHUA_ENGINE COMMS_MODE
+DATABASE_URL"
 if [ -f .env ]; then
   host_preset=""
   for v in $HOST_ENV_VARS; do
@@ -101,11 +112,25 @@ emulator/node/.venv/bin/python -c "import app" >/dev/null 2>&1 || \
 : "${COMMS_PORT:=8081}"
 export JOSHUA_ENGINE COMMS_MODE BRIDGE_INTERNAL_TOKEN BRIDGE_SESSION_SECRET BRIDGE_PORT COMMS_PORT
 
+# The relay dials out as a peer when TRUNK_HUB_URL is set, so set it — the
+# default is the documented one, and `make host` means "be a hosted exchange".
+# A relay with a seeded world 1 (TRUNK_LOCAL_WORLD) refuses to hold a tie line
+# regardless: a hub is never a peer.
+: "${TRUNK_HUB_URL:=wss://wopr.realwopr.ai/trunk}"
+# Where the bridge reaches its own relay to place a call. On a hosted exchange
+# that is loopback by construction, so it is derived rather than asked for —
+# unset, Joshua forms the intention to ring a visitor back and rings nobody.
+# (The flagship's compose still sets it by hand: there the two are separate
+# containers and `comms` is not on loopback.) A value already in the
+# environment or the .env wins, like everything else here.
+: "${BRIDGE_TRUNK_URL:=http://127.0.0.1:${COMMS_PORT}}"
+export TRUNK_HUB_URL BRIDGE_TRUNK_URL
+
 if [ "$JOSHUA_ENGINE" = "lisp" ] && [ ! -x joshua/harness/bin/joshua ]; then
   echo "note: joshua binary missing — run 'make build' for the Lisp engine (falling back to scripted)"
 fi
 
-# --- the three processes -----------------------------------------------------
+# --- the two processes -------------------------------------------------------
 pids=()
 cleanup() {
   trap - INT TERM EXIT
@@ -120,20 +145,16 @@ for _ in $(seq 1 60); do curl -sf "localhost:${BRIDGE_PORT}/health" >/dev/null 2
 curl -sf "localhost:${BRIDGE_PORT}/health" >/dev/null || die "node host failed to start on :${BRIDGE_PORT}"
 
 # `exec` so the pid we record is node's own — killing a subshell would leave
-# the relay running with the tie line gone.
+# the relay (and the tie line inside it) running.
 (cd emulator/relay && exec env BRIDGE_WS_URL="ws://127.0.0.1:${BRIDGE_PORT}" node src/main.ts) &
 pids+=($!)
 for _ in $(seq 1 30); do curl -sf "localhost:${COMMS_PORT}/trunk/directory" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -sf "localhost:${COMMS_PORT}/trunk/directory" >/dev/null || die "relay failed to start on :${COMMS_PORT}"
 
-TIELINE_LOCAL_COMMS="ws://127.0.0.1:${COMMS_PORT}" TIELINE_LOCAL_BRIDGE="http://127.0.0.1:${BRIDGE_PORT}" \
-  node emulator/relay/src/tieline.ts &
-pids+=($!)
-
-# Supervise, don't just `wait`. A bare wait returns when *all three* have
-# exited, so a tieline that hung up on a refusal would leave the node host and
-# relay running and the operator reading a healthy-looking stack that is not
-# on the switchboard. Any one of the three going down takes the exchange down.
+# Supervise, don't just `wait`. A bare wait returns when *both* have exited, so
+# a node host that died would leave the relay running and the operator reading
+# a healthy-looking stack with no programs behind it. Either one going down
+# takes the exchange down.
 # (`wait -n` would say this in one line; bash 3.2 — the macOS default — does
 # not have it, so poll.) The EXIT trap does the teardown.
 while :; do

@@ -37,6 +37,18 @@ export interface TielineOpts {
   /** Fires when any channel ends — one this host placed or one it answered.
    *  A placer is otherwise never told the callee hung up. */
   onClose?: (chan: number, reason?: string) => void;
+  /** A relayed visitor arrived carrying a seat handle the HUB minted, against
+   *  THIS exchange's code (#75). The handle is the only way this host can ever
+   *  ring that visitor back, and it cannot travel in the query: the hub strips
+   *  `seat=` before relaying, because the seat TOKEN is the one credential a
+   *  foreign host must never see, and the handle would have nowhere to ride
+   *  even if it could.
+   *
+   *  Fires synchronously, BEFORE the local `/link` is dialled, so the local
+   *  relay can have the handle ready to disclose on that exact session. The
+   *  session id is the visitor's own — minted against this host's bridge
+   *  through the hub's REST relay — which is why it identifies the leg. */
+  onVisitorSeat?: (session: string, handle: string) => void;
 }
 
 /** A call this host placed. There is deliberately no `send`: the caller's own
@@ -97,6 +109,15 @@ export function startTieline(opts: TielineOpts): {
     const fromMachine = f.origin !== undefined && "slot" in f.origin;
     if (fromMachine) { void openMachineChannel(f); return; }
 
+    // A visitor's origin is `{ seat }`, and that handle is this host's only
+    // means of ever ringing them back (#75). Hand it over BEFORE dialling, so
+    // the `/link` opened on the next line finds it already registered — the
+    // ordering is the whole contract, and it holds because both are
+    // synchronous.
+    if (f.origin !== undefined && "seat" in f.origin) {
+      const session = new URLSearchParams(f.query).get("session");
+      if (session) opts.onVisitorSeat?.(session, f.origin.seat);
+    }
     const local = new WebSocket(`${opts.localComms}/link?${f.query}`);
     const entry = { local, buffer: [] as string[] };
     channels.set(f.chan, entry);
@@ -399,39 +420,72 @@ export function startTieline(opts: TielineOpts): {
   };
 }
 
-// CLI entry: `npm run tieline` on a host machine.
-if (import.meta.url === `file://${process.argv[1]}`) {
-  // Check what the hub checks, before dialling. A bad slot or world is refused
-  // with a malformed-frame close that says nothing about which field was
-  // wrong; caught here it is one readable line instead.
-  const rawSlot = process.env.TIELINE_SLOT?.toUpperCase() || undefined;
+/** The settings a tie line is configured with, validated the way the HUB
+ *  validates them. A malformed REGISTER is refused with a non-terminal close,
+ *  so an unchecked typo is an infinite redial with nothing to explain it;
+ *  caught here it is one readable line.
+ *
+ *  Two callers, one parse: `npm run tieline` below, and `startServer`, which
+ *  hosts a tie line in its own process for a federated peer (#75). Neither
+ *  supplies `hubUrl`'s meaning: the CLI treats an unset `TRUNK_HUB_URL` as
+ *  "the flagship's hub", while the relay treats it as "this relay is not a
+ *  peer" — so the caller decides, and this only fills in the default. */
+export type TielineEnv = Pick<TielineOpts,
+  "hubUrl" | "name" | "region" | "joshua" | "operator" | "slot" | "world" | "key">;
+
+export function tielineFromEnv(env: NodeJS.ProcessEnv = process.env):
+    { ok: true; opts: TielineEnv } | { ok: false; error: string } {
+  const rawSlot = env.TIELINE_SLOT?.toUpperCase() || undefined;
   if (rawSlot !== undefined && !ALL_SLOTS.includes(rawSlot)) {
-    console.error(`TIELINE_SLOT MUST BE ONE OF: ${ALL_SLOTS.join(" ")}`);
-    process.exit(1);
+    return { ok: false, error: `TIELINE_SLOT MUST BE ONE OF: ${ALL_SLOTS.join(" ")}` };
   }
-  const rawWorld = process.env.TIELINE_WORLD?.toUpperCase() || undefined;
+  const rawWorld = env.TIELINE_WORLD?.toUpperCase() || undefined;
   if (rawWorld !== undefined && rawWorld !== "NEW" &&
       !(/^[0-9]+$/.test(rawWorld) && Number(rawWorld) >= 1)) {
-    console.error("TIELINE_WORLD MUST BE A WORLD NUMBER (1 OR GREATER) OR NEW");
-    process.exit(1);
+    return { ok: false, error: "TIELINE_WORLD MUST BE A WORLD NUMBER (1 OR GREATER) OR NEW" };
   }
-
-  startTieline({
-    hubUrl: process.env.TRUNK_HUB_URL ?? "wss://wopr.realwopr.ai/trunk",
-    name: process.env.TIELINE_NAME ?? "UNNAMED EXCH",
-    region: process.env.TIELINE_REGION ?? "SOMEWHERE",
-    joshua: (process.env.TIELINE_JOSHUA as "claude" | "period") ?? "period",
-    operator: process.env.TIELINE_OPERATOR,
-    slot: rawSlot,
-    world: rawWorld === "NEW" ? "NEW" : rawWorld ? Number(rawWorld) : undefined,
-    // Only needed for a reserved world (world 1 is the flagship's); the hub
-    // operator issues it. Opaque here — the hub is the only thing that reads it.
-    key: process.env.TIELINE_RESERVE_KEY || undefined,
-    localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
-    localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
-    onAssigned: (exchange, world, slot) => {
-      console.log(`TIE LINE UP — YOU ARE WORLD ${world} / ${slot} — EXCHANGE ${exchange}`);
-      console.log(`share: https://realwopr.ai/war-room.html?exch=${exchange}`);
+  return {
+    ok: true,
+    opts: {
+      hubUrl: env.TRUNK_HUB_URL || "wss://wopr.realwopr.ai/trunk",
+      name: env.TIELINE_NAME ?? "UNNAMED EXCH",
+      region: env.TIELINE_REGION ?? "SOMEWHERE",
+      joshua: (env.TIELINE_JOSHUA as "claude" | "period") ?? "period",
+      operator: env.TIELINE_OPERATOR,
+      slot: rawSlot,
+      world: rawWorld === "NEW" ? "NEW" : rawWorld ? Number(rawWorld) : undefined,
+      // Only needed for a reserved world (world 1 is the flagship's); the hub
+      // operator issues it. Opaque here — the hub is the only thing that reads it.
+      key: env.TIELINE_RESERVE_KEY || undefined,
     },
-  });
+  };
+}
+
+/** The line an operator watches for. Printed by whichever process holds the
+ *  tie line — the CLI below, or the relay hosting one (#75). */
+export function tielineUpBanner(exchange: string, world: number, slot: string): string {
+  return `TIE LINE UP — YOU ARE WORLD ${world} / ${slot} — EXCHANGE ${exchange}\n` +
+         `share: https://realwopr.ai/war-room.html?exch=${exchange}`;
+}
+
+// CLI entry: `npm run tieline` on a host machine. Still supported, and still
+// the way to run a tie line beside a stack you wired yourself — but a peer
+// started by `make host` no longer uses it: its relay hosts the tie line, so
+// that the relay can route a callback over the trunk instead of into a
+// switchboard that has never heard of the visitor's handle (#75).
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const parsed = tielineFromEnv();
+  if (!parsed.ok) {
+    console.error(parsed.error);
+    process.exit(1);
+  } else {
+    startTieline({
+      ...parsed.opts,
+      localComms: process.env.TIELINE_LOCAL_COMMS ?? "ws://127.0.0.1:8081",
+      localBridge: process.env.TIELINE_LOCAL_BRIDGE ?? "http://127.0.0.1:8000",
+      onAssigned: (exchange, world, slot) => {
+        console.log(tielineUpBanner(exchange, world, slot));
+      },
+    });
+  }
 }

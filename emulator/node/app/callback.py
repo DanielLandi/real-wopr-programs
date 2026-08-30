@@ -24,8 +24,16 @@ async def place_seat_call(trunk_url: str, internal_token: str, handle: str,
     Returns "placed", or a refusal reason. Never raises.
     """
     if not trunk_url:
-        # A monolith or a dev box with no hub. Not an error: there is simply
-        # nobody to ask, and a machine with no trunk cannot call anyone.
+        # A monolith or a dev box with no relay to ask. Not fatal — a machine
+        # with no trunk cannot call anyone, and that is a supported way to run
+        # a clone. But it is not silent either: reaching this line means Joshua
+        # formed the intention AND held a live handle, so a callback the film
+        # depends on was dropped, and until real-wopr-programs#75 that fact
+        # existed in no log anywhere. `make host` derives this setting now;
+        # only a hand-wired stack can still arrive here.
+        log.warning(
+            "callback: BRIDGE_TRUNK_URL is unset — Joshua wanted to ring the "
+            "visitor back and had nowhere to place the call")
         return "no hub"
     try:
         async with httpx.AsyncClient(timeout=timeout_s) as client:
