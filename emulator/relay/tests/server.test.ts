@@ -1204,6 +1204,65 @@ test("ring: a rejected ring closes the caller's channel", async () => {
   } finally { host.close(); await server.close(); }
 });
 
+// Declining a call and being told the carrier dropped is wrong on the wire and
+// wrong in the fiction: nothing ever carried (#78 item 2). NO CARRIER is a
+// result code for a connection that existed and stopped; a ring that never
+// became a call gets NO ANSWER, which is what `end()` has always called it
+// upstream. The word cannot simply be dropped: a seat socket stays open across
+// a call by design, so this is the ONLY thing that can tell a terminal sitting
+// at ANSWER? (Y/N) that the ring is over.
+test("ring: a declined ring says NO ANSWER, never NO CARRIER", async () => {
+  const registry = new SeatRegistry();
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // The CLOSE first: `nextFrame` reads what arrives AFTER it is called, and
+    // the hub sends the machine's CLOSE before it plays the seat's line out.
+    seatControl(seat, "REJECT");
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.reason, "rejected");
+    assert.equal((await said.at(2)).payload, "NO ANSWER");
+    assert.ok(!said.all().some(isNoCarrier),
+      "nothing carried, so nothing may claim the carrier dropped");
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
+// The other unanswered exit the registry owns. Same reasoning, and it is the
+// one that proves the terminal is not left at a dead Y/N prompt: the timer
+// fires with nobody having touched the seat at all.
+test("ring: a ring nobody answers says NO ANSWER when the timer fires", async () => {
+  // The registry's ring timer, shortened rather than waited out: 30s is the
+  // production value and this test is about the word on the wire, not the wait.
+  const registry = new SeatRegistry({ ringTimeoutMs: 200 });
+  const server = await ringServer(registry);
+  const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
+  try {
+    registerPanAm(host);
+    const { handle, seat, id, said } = await seatThatCalled(server, host, registry);
+
+    host.send(JSON.stringify({ t: "PLACE", call: 1, to: { seat: handle } }));
+    const placed = await nextFrame(host, (f) => f.t === "PLACED");
+    assert.equal((await said.at(1)).payload, "RING PAN AM");
+
+    // Nobody touches the seat at all — this is the case that would otherwise
+    // leave the terminal at a dead ANSWER? (Y/N) prompt for ever.
+    const closed = await nextFrame(host, (f) => f.t === "CLOSE");
+    assert.equal(closed.chan, placed.chan);
+    assert.equal(closed.reason, "no answer");
+    assert.equal((await said.at(2)).payload, "NO ANSWER");
+    await waitFor(() => registry.leg(id)?.onCall === false);
+    seat.close();
+  } finally { host.close(); await server.close(); }
+});
+
 // An answered ring takes a hold on the seat, and nothing but the bridge ever
 // releases it: without that release a seat that answers one call is busy for
 // the rest of its life and can never be rung again.
@@ -1307,8 +1366,8 @@ test("ring: a caller that hangs up mid-ring disarms the ring", async () => {
 
     // PAN AM gives up before anyone picks up.
     host.send(JSON.stringify({ t: "CLOSE", chan: placed.chan, reason: "gave up" }));
-    assert.equal((await said.at(2)).payload, "NO CARRIER",
-      "the seat must be told to stop ringing");
+    assert.equal((await said.at(2)).payload, "NO ANSWER",
+      "the seat must be told to stop ringing — but nothing carried, so not NO CARRIER");
     await waitFor(() => registry.leg(id)?.onCall === false);
 
     // The visitor presses ANSWER inside the window the stale ring used to
@@ -1457,7 +1516,7 @@ test("ring: a caller that floods an unanswered line is hung up on", async () => 
     assert.equal(closed.chan, placed.chan);
     assert.equal(closed.reason, "greeting exceeds hold capacity");
     // ...and the seat, which never answered, is left free rather than ringing.
-    assert.equal((await said.at(2)).payload, "NO CARRIER");
+    assert.equal((await said.at(2)).payload, "NO ANSWER");
     await waitFor(() => registry.leg(id)?.onCall === false);
     seat.close();
   } finally { host.close(); await server.close(); }

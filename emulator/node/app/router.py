@@ -692,7 +692,13 @@ class Router:
         for r in rows:
             payload = r.get("payload", {})
             summary = ""
-            for key in ("text", "route", "defcon", "game", "system"):
+            # A precedence order, so "origin" goes at the END rather than in
+            # some tidier-looking spot: the machine-call provenance payload has
+            # no other key today, and appending guarantees that a future
+            # payload carrying both `origin` and, say, `route` still summarises
+            # by `route` — no existing row's rendering changes as a side effect
+            # of teaching EVENTS one more word (#78).
+            for key in ("text", "route", "defcon", "game", "system", "origin"):
                 if key in payload:
                     summary = f"{key} {payload[key]}"
                     break

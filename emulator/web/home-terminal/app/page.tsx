@@ -178,6 +178,18 @@ export default function HomeTerminal() {
       setPhase("ringing");
       return;
     }
+    if (e.type === "ring-ended") {
+      // The ring ended without becoming a call: declined, or the 30-second
+      // timeout, or the caller gave up. Nothing is printed — a phone that
+      // stops ringing announces nothing, the RING lines are already in the
+      // scrollback as the record that it rang, and a decliner's own `> N`
+      // echo is the record of what they did. The phase is all that changes,
+      // and it goes to `idle` rather than `no-carrier`: nothing carried.
+      // Guarded on `ringing` because a decline has already set `idle` here,
+      // and because this must never disturb a dialled call.
+      if (phaseRef.current === "ringing") setPhase("idle");
+      return;
+    }
     if (e.type === "frame") {
       // An answered seat delivers ordinary paced envelopes — including a
       // control NO CARRIER when the call ends, the only signal that it did
@@ -349,7 +361,12 @@ export default function HomeTerminal() {
           // refused `busy` rather than rung. Without it a ring could land
           // mid-call — which is precisely what the comment on the ring
           // handler above says cannot happen.
-          seat: seat.current?.token, // absent until the seat handshake lands
+          // Absent until the seat handshake lands — and absent again from a
+          // seat drop until it re-seats, which is deliberate: the seat clears
+          // its token on the way down (crt-kit seat.ts), so a dial in that
+          // window is honestly one that cannot be rung back rather than one
+          // presenting a credential the hub has already reaped.
+          seat: seat.current?.token,
         });
         detach.current = link.current.onEvent(onLinkEvent);
         link.current.connect();
@@ -382,7 +399,7 @@ export default function HomeTerminal() {
         surface: "home-terminal",
         session: s.session_id,
         token: s.token,
-        seat: seat.current?.token, // absent until the seat handshake lands
+        seat: seat.current?.token, // absent until the seat handshake lands, and after a drop
       });
       detach.current = link.current.onEvent(onLinkEvent);
       link.current.connect();

@@ -339,11 +339,29 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
        *  not paced serial data (#88), and it is what tells the seat the call
        *  is over — nothing else on this leg says so.
        *
+       *  WHICH word depends on whether there was ever a call. `NO CARRIER` is a
+       *  result code for a connection that existed and stopped; a ring that
+       *  nobody answered — declined, timed out, abandoned by the caller, or
+       *  hung up on for flooding the hold — never carried anything, and saying
+       *  the carrier dropped is wrong on the wire and wrong in the fiction
+       *  (#78). Those get `NO ANSWER`, the same word `end()` has always put on
+       *  the upstream CLOSE for the timeout. The hub does not branch on WHY:
+       *  `answered` is the whole test, and a visitor who declined already
+       *  knows they declined.
+       *
+       *  A word is still required — silence is not an option. A seat socket
+       *  stays open across a call by design, so it never closes to signal
+       *  anything, and this frame is the only thing that can tell a terminal
+       *  sitting at ANSWER? (Y/N) that the ring is over. What the terminal
+       *  PRINTS for it is nothing (crt-kit seat.ts turns it into a ring-ended
+       *  event rather than a frame); a phone that stops ringing announces
+       *  nothing either.
+       *
        *  Not awaited by `end`: the MACHINE must learn the call ended at once,
        *  and only the seat's ear is worth waiting for. */
       const playOutAndDrop = async () => {
         await down.drain(drainTimeoutMs);
-        down.sendImmediate({ kind: "control", payload: "NO CARRIER" });
+        down.sendImmediate({ kind: "control", payload: answered ? "NO CARRIER" : "NO ANSWER" });
         down.close();
       };
 
