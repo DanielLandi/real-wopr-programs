@@ -158,13 +158,30 @@ export interface ServerOpts {
    *  local world is a HUB and refuses to hold a tie line either way (§3.4 of
    *  the federated-callback design). */
   tieline?: Omit<TielineOpts, "localComms" | "localBridge" | "internalToken" | "onVisitorSeat">;
+  /** What this PROCESS does when the hosted tie line is refused for good
+   *  (#86) — the trunk closed with a terminal LINE REFUSED / LINE NOT
+   *  ACCEPTED and will not redial. `startServer` itself never decides: it
+   *  keeps serving its local `/link` either way, because a peer whose slot
+   *  the hub declined is still a working exchange for everyone on its own
+   *  LAN, and this library is imported by the test suite. The entrypoint
+   *  that owns the process (`main.ts`) passes the policy. Fires in addition
+   *  to `tieline.onFatal`, so an explicit `tieline` and an env-resolved one
+   *  reach the same hook. */
+  onTielineFatal?: (reason: string) => void;
 }
 
 export interface RunningServer {
   port: number;
   /** Present when this relay is a peer — see `ServerOpts.tieline`. `undefined`
    *  on a hub, on the flagship, and on any relay with no trunk out. */
-  tieline?: { assigned: () => boolean };
+  tieline?: {
+    assigned: () => boolean;
+    /** The hub's reason once the tie line stopped for good (#86); `undefined`
+     *  while it is up or still redialling. A relay whose tie line was
+     *  refused still answers `/link` — this is how that state is observed
+     *  without watching stderr. */
+    refused: () => string | undefined;
+  };
   close: () => Promise<void>;
 }
 
@@ -1223,6 +1240,7 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // reach it (#75). Assigned after listen(), because a hosted tie line's local
   // comms is this very server and it needs the port it actually bound.
   let tieline: ReturnType<typeof startTieline> | undefined;
+  let tielineRefused: string | undefined;
 
   /** Refuse a placement, and say so where a human is looking.
    *
@@ -1444,12 +1462,21 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         console.log(tielineUpBanner(exchange, world, slot));
         tielineOpts.onAssigned?.(exchange, world, slot);
       },
+      // A terminal refusal ends the TRUNK, never this server (#86): nothing
+      // here closes httpServer or touches the process. The relay goes on
+      // answering local dials with no tie line, and whoever owns the process
+      // is told so it can choose otherwise.
+      onFatal: (reason) => {
+        tielineRefused = reason;
+        tielineOpts.onFatal?.(reason);
+        opts.onTielineFatal?.(reason);
+      },
     });
   }
 
   return {
     port: actualPort,
-    tieline: tieline && { assigned: tieline.assigned },
+    tieline: tieline && { assigned: tieline.assigned, refused: () => tielineRefused },
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(trunkPing);

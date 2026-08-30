@@ -8,9 +8,10 @@
 # (real-wopr-programs#75). `npm run tieline` still works for a stack you wired
 # yourself; this script no longer uses it. One consequence worth knowing: a
 # terminal refusal (LINE REFUSED, a taken slot) used to end the tieline process
-# and take the whole stack down with it. Now it prints LINE REFUSED and leaves
-# the relay serving locally — read the output, do not assume a quiet stack is a
-# connected one.
+# and take the whole stack down with it. Now it prints LINE REFUSED, then
+# TIE LINE HUNG UP FOR GOOD ... SERVING LOCAL CALLS ONLY, and the relay keeps
+# serving locally. That is a decision the relay's entrypoint makes (#86), and a
+# test pins it — read the output, do not assume a quiet stack is a connected one.
 #
 # The hub is only a switchboard. Every game, session and transcript stays on
 # this machine; the hub lists your number and relays calls while the tie line
