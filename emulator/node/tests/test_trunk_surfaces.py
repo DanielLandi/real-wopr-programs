@@ -27,6 +27,7 @@ this suite that a mistake here would take the live site down over.
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 
 import pytest
@@ -201,6 +202,74 @@ def test_a_machine_surface_refuses_a_wrong_token(client, surface):
     r = client.post("/api/session", json={"surface": surface},
                     headers={"x-wopr-internal-token": TOKEN + "x"})
     assert r.status_code == 401, r.text
+
+
+# -- #141: the compare_digest regression case E08 used to guard -------------
+#
+# The engine repo's E08 once probed this guard over the wire with a
+# same-length wrong token; real-wopr#231 trimmed E08 to what only the engine
+# can assert, so the case lives here now. Two tests, because the property has
+# two halves and no single probe covers both:
+#
+# - The same-length probe below refuses a token that agrees with the real one
+#   in length (and in every byte but the last). It catches a guard degraded
+#   to a length or prefix check. It can NOT catch `==` replacing
+#   `compare_digest` — a naive `==` returns the same False for a same-length
+#   wrong token, so the endpoint answers 401 either way; the difference is
+#   timing, which a functional assertion cannot see.
+# - The structural test after it is what catches the `==` swap: it pins the
+#   guard's verdict to `secrets.compare_digest` itself, on both the refusing
+#   and the accepting path, over bytes (the non-ASCII-header case below is
+#   why bytes matter). Replace the call with `==` and this goes red even
+#   though every status code in the suite stays the same.
+
+# Same length as TOKEN, same every byte but the last. Asserted at module
+# scope so the probe can never silently degrade into the different-length
+# test above it.
+SAME_LENGTH_WRONG = TOKEN[:-1] + ("x" if TOKEN[-1] != "x" else "y")
+assert len(SAME_LENGTH_WRONG) == len(TOKEN) and SAME_LENGTH_WRONG != TOKEN
+
+
+@pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
+def test_a_machine_surface_refuses_a_same_length_wrong_token(client, surface):
+    r = client.post("/api/session", json={"surface": surface},
+                    headers={"x-wopr-internal-token": SAME_LENGTH_WRONG})
+    assert r.status_code == 401, r.text
+
+
+def test_the_guard_verdict_is_compare_digest_over_bytes(client, monkeypatch):
+    """The half a wire probe cannot prove: the guard must *route through*
+    `secrets.compare_digest`, not reimplement it with `==`.
+
+    A spy wraps the real function; the test then asserts the guard consulted
+    it — with both operands as bytes — on the refusing path AND on the
+    accepting path. The accepting-path half is what catches the other cheap
+    regression: a short-circuit `given == expected` in front of a decorative
+    `compare_digest` call.
+    """
+    calls: list[tuple] = []
+    real = secrets.compare_digest
+
+    def spy(a, b):
+        calls.append((a, b))
+        return real(a, b)
+
+    monkeypatch.setattr("app.main.secrets.compare_digest", spy)
+
+    r = client.post("/api/session", json={"surface": "trunk-call"},
+                    headers={"x-wopr-internal-token": SAME_LENGTH_WRONG})
+    assert r.status_code == 401, r.text
+    assert calls, "the guard refused without consulting compare_digest"
+    assert (SAME_LENGTH_WRONG.encode(), TOKEN.encode()) in calls
+
+    calls.clear()
+    r = client.post("/api/session", json={"surface": "trunk-call"},
+                    headers=AUTH)
+    assert r.status_code == 201, r.text
+    assert calls, "the guard accepted without consulting compare_digest"
+    assert (TOKEN.encode(), TOKEN.encode()) in calls
+    assert all(isinstance(a, bytes) and isinstance(b, bytes)
+               for a, b in calls), "the compare must run over bytes"
 
 
 @pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
