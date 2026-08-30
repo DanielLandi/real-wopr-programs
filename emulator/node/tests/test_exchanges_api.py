@@ -79,3 +79,43 @@ def test_register_quota_429(client):
         budget.spend()
     r = client.post("/api/exchanges/register", json=VALID)
     assert r.status_code == 429
+
+
+# ---- one machine, one row (#101) ------------------------------------------
+#
+# The flagship once sat in the book as `homelab-sp` beside the hub's seeded
+# `local-wopr`, same api. A registration whose endpoint is already in the book
+# under another id is that machine again: refused, naming the id that holds it.
+
+def test_register_same_api_under_another_id_409_names_the_holder(client):
+    assert client.post("/api/exchanges/register", json=VALID).status_code == 201
+    r = client.post("/api/exchanges/register", json={**VALID, "id": "alpha-again"})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "api already registered as 'alpha'"
+    assert "alpha-again" not in client.app_store.exchanges
+
+
+@pytest.mark.parametrize("variant", [
+    "https://alpha.example/", "https://ALPHA.example", "https://alpha.example//",
+])
+def test_register_api_identity_survives_slash_and_case(client, variant):
+    assert client.post("/api/exchanges/register", json=VALID).status_code == 201
+    r = client.post("/api/exchanges/register",
+                    json={**VALID, "id": "alpha-again", "api": variant})
+    assert r.status_code == 409
+
+
+def test_register_same_api_does_not_spend_quota(client):
+    budget = client.app.state.exchange_register_budget
+    assert client.post("/api/exchanges/register", json=VALID).status_code == 201
+    remaining = budget.remaining()
+    assert client.post("/api/exchanges/register",
+                       json={**VALID, "id": "alpha-again"}).status_code == 409
+    assert budget.remaining() == remaining
+
+
+def test_register_a_different_api_is_a_different_machine(client):
+    assert client.post("/api/exchanges/register", json=VALID).status_code == 201
+    r = client.post("/api/exchanges/register",
+                    json={**VALID, "id": "beta", "api": "https://beta.example"})
+    assert r.status_code == 201

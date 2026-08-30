@@ -171,6 +171,15 @@ stale costs twice over: the machine prints as two lines, and dialling the world
 entry names a system the bridge will not open. The school's id became
 `school-mon` when it was split into monitor + records (`docs/systems.md` §2.6).
 
+The seeded slot's directory id is the hub's to derive (`local-<slot>`, so
+`local-wopr`), never a registry row's. Do not hand-insert the flagship into the
+bridge's `exchanges` book under a name of your own: an exchange IS its `api`
+endpoint, so the bridge refuses `POST /api/exchanges/register` for an api the
+book already holds under another id (409, naming the holder), and the home
+terminal lists one line per endpoint — a book row the trunk is already
+answering is absorbed by the live, world-tagged entry rather than printed
+again as `[NO CARRIER]` (#101).
+
 `slot` comes from the named roster (`WOPR` `SCHOOL` `PANAM` `PROTOVISION`
 `PACTEL` `BANK`) — not a wildcard. `name` and `region` are 2-24 characters, the same
 bounds the REGISTER wire imposes, because the DIRECTORY screen's 80-column

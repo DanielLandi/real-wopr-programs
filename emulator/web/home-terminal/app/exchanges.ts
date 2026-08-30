@@ -12,7 +12,7 @@
 //
 // An optional `trunk_directory` URL points at a comms hub's
 // `GET /trunk/directory` — live federated exchanges merged in behind the
-// book's own entries (dedupe by id; the book always wins on collision). The
+// book's own entries (one line per machine: see `dedupe`). The
 // hub groups those entries into worlds, and each entry carries the world and
 // slot it was placed in; the DIRECTORY screen prints them under world
 // headings.
@@ -93,11 +93,33 @@ async function trunkEntries(url: string | undefined): Promise<Exchange[]> {
   }
 }
 
-/** Merge live trunk entries in behind the book's own entries, deduped by
- *  `id` — a static/api entry always wins over a same-id trunk entry. */
-function dedupe(primary: Exchange[], extra: Exchange[]): Exchange[] {
+/** An exchange IS its api endpoint: case-folded, trailing slashes dropped —
+ *  the same fold the bridge applies when it refuses a second id for an api
+ *  already in its book (#101). */
+function endpoint(e: Exchange): string {
+  return e.api.toLowerCase().replace(/\/+$/, "");
+}
+
+/** Merge live trunk entries in behind the book's own entries. One line per
+ *  machine, decided two ways:
+ *
+ *  - Same `id`: the book wins, the trunk entry drops. A trunk registrant that
+ *    claims a book id must not be able to swap that row's endpoints.
+ *  - Same endpoint, different id: the TRUNK entry wins, the book row drops.
+ *    Two ids for one `api` are one machine — the hub's seeded world-1 slot
+ *    (`local-wopr`, an id the hub derives from the slot) beside the same
+ *    box's hand-typed registry row (`homelab-sp`, before the bridge learned
+ *    to refuse it). The live entry is the one answering, carries the world
+ *    and slot tags DIRECTORY prints under, and its id is the pack's; keeping
+ *    the book row instead printed the flagship twice, the second time as a
+ *    [NO CARRIER] line beneath its own answering one. Endpoint equality is
+ *    what makes this safe: whichever row survives, a dial lands on the same
+ *    machine. */
+export function dedupe(primary: Exchange[], extra: Exchange[]): Exchange[] {
   const ids = new Set(primary.map((e) => e.id));
-  return [...primary, ...extra.filter((e) => !ids.has(e.id))];
+  const live = extra.filter((e) => !ids.has(e.id));
+  const answering = new Set(live.map(endpoint));
+  return [...primary.filter((e) => !answering.has(endpoint(e))), ...live];
 }
 
 export async function loadExchanges(): Promise<Exchange[] | null> {

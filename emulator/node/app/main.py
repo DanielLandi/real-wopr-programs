@@ -451,6 +451,15 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     async def register_exchange(body: RegisterExchange):
         if not exchange_register_budget.available():
             raise HTTPException(429, "registration quota exhausted")
+        # One machine, one row (#101). The flagship once sat in this book under
+        # a hand-typed id beside the hub's own seeded `local-wopr`, and every
+        # directory that deduped by id printed it twice — the second time as
+        # [NO CARRIER]. The endpoint is the identity: a registration for an
+        # api already in the book, under any other id, is that machine again
+        # and is refused by name, so the operator learns which id holds it.
+        holder = await store.exchange_id_for_api(body.api)
+        if holder is not None and holder != body.id:
+            raise HTTPException(409, f"api already registered as {holder!r}")
         ok = await store.register_exchange(
             id=body.id, name=body.name, region=body.region, api=body.api,
             link=body.link, joshua=body.joshua, operator=body.operator)

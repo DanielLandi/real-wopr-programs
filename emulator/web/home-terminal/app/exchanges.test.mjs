@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { loadExchanges, valid } from "./exchanges.ts";
+import { dedupe, loadExchanges, valid } from "./exchanges.ts";
 
 // A well-formed phone-book entry (matches db/migrations/0002_exchanges.sql,
 // which CHECKs api ~ '^https://' and link ~ '^wss://').
@@ -172,6 +172,37 @@ test("api mode dedupes trunk entries behind the book's own rows by id", async (t
     ["/trunk/directory", jsonResponse({ worlds: [{ n: 1, slots: [shadow, TRUNK_GOOD] }] })],
   ]);
   assert.deepEqual(await loadExchanges(), [GOOD, TRUNK_GOOD]);
+});
+
+test("a book row whose api the trunk is already answering is that machine: the live entry wins (#101)", async (t) => {
+  // The flagship, twice: the hub seeds world 1 as `local-wopr` while the same
+  // box sits in the book as `homelab-sp`. Same api, so one line — the live,
+  // world-tagged one, under the id the hub derives.
+  const seeded = { ...TRUNK_GOOD, id: "local-wopr", name: "CHEYENNE MOUNTAIN",
+                   api: "https://hub.example", link: "wss://hub.example/link",
+                   world: 1, slot: "WOPR" };
+  const drifted = { ...GOOD, id: "homelab-sp", name: "CHEYENNE MOUNTAIN (HOMELAB)",
+                    api: "https://HUB.example/" };
+  mockFetch(t, [
+    ["phonebook.json", jsonResponse(API_CFG)],
+    ["/api/exchanges", jsonResponse({ exchanges: [GOOD, drifted] })],
+    ["/trunk/directory", jsonResponse({ worlds: [{ n: 1, slots: [seeded, TRUNK_GOOD] }] })],
+  ]);
+  assert.deepEqual(await loadExchanges(), [GOOD, seeded, TRUNK_GOOD]);
+});
+
+test("same id still favours the book even when the endpoints differ (#101 changes nothing here)", () => {
+  const shadow = { ...TRUNK_GOOD, id: GOOD.id, api: "https://elsewhere.example" };
+  assert.deepEqual(dedupe([GOOD], [shadow]), [GOOD]);
+});
+
+test("a book row is only absorbed by a trunk entry that actually made it through validation", () => {
+  // The endpoint match is computed over the entries that will be listed, not
+  // over the raw directory: a trunk entry dropped for sharing the book's id
+  // cannot also knock a different book row off by its api.
+  const twin = { ...GOOD, id: "other-name" };
+  const shadow = { ...TRUNK_GOOD, id: GOOD.id, api: GOOD.api };
+  assert.deepEqual(dedupe([GOOD, twin], [shadow]), [GOOD, twin]);
 });
 
 // ---- loadExchanges: the {worlds} trunk directory ---------------------------

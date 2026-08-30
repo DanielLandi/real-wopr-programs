@@ -142,6 +142,19 @@ class Store(Protocol):
     async def list_exchanges(self) -> list[dict[str, Any]]: ...
     async def register_exchange(self, id: str, name: str, region: str, api: str,
                                 link: str, joshua: str, operator: str | None) -> bool: ...
+    async def exchange_id_for_api(self, api: str) -> str | None:
+        """The id already holding this endpoint (approved or pending), or None.
+        Matched on `normalize_api`, so a trailing slash or a capital in the
+        host is not a different machine."""
+        ...
+
+
+def normalize_api(api: str) -> str:
+    """An exchange IS its api endpoint (#101): two rows that dial the same
+    base are one machine, whatever each was named. Case-fold and drop
+    trailing slashes, the same normalization the site's directory applies
+    when it decides a registry row is already answering on the trunk."""
+    return api.strip().lower().rstrip("/")
 
 
 class MemoryStore:
@@ -308,6 +321,13 @@ class MemoryStore:
                               "api": api, "link": link, "joshua": joshua,
                               "operator": operator, "approved": False}
         return True
+
+    async def exchange_id_for_api(self, api: str) -> str | None:
+        want = normalize_api(api)
+        for e in self.exchanges.values():
+            if normalize_api(e["api"]) == want:
+                return e["id"]
+        return None
 
 
 #: The journal read behind `PostgresStore.get_recent_events`: a session's own
@@ -588,6 +608,14 @@ class PostgresStore:
             " values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing returning id",
             id, name, region, api, link, joshua, operator)
         return inserted is not None
+
+    async def exchange_id_for_api(self, api: str) -> str | None:
+        pool = await self._pool_or_connect()
+        # Same fold as normalize_api, expressed in SQL so the comparison runs
+        # on the rows rather than after fetching the whole book.
+        return await pool.fetchval(
+            "select id from exchanges where lower(rtrim(api, '/')) = $1"
+            " order by created_at limit 1", normalize_api(api))
 
 
 def make_store(database_url: str) -> Store:

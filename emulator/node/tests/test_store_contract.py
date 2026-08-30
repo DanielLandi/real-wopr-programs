@@ -311,6 +311,24 @@ def test_exchange_register_and_list(store):
     asyncio.run(flow())
 
 
+def test_exchange_id_for_api_folds_case_and_trailing_slash(store):
+    """An exchange IS its api endpoint (#101): the lookup that keeps a second
+    id from entering the book for a machine already in it, on either store."""
+    async def flow():
+        assert await store.exchange_id_for_api("https://alpha.example") is None
+        assert await store.register_exchange(
+            id="alpha", name="Alpha Exchange", region="US-East",
+            api="https://alpha.example", link="wss://alpha.example/link",
+            joshua="claude", operator="op1") is True
+        # pending rows count: the id is taken the moment it is registered
+        assert await store.exchange_id_for_api("https://alpha.example") == "alpha"
+        assert await store.exchange_id_for_api("https://alpha.example/") == "alpha"
+        assert await store.exchange_id_for_api("https://ALPHA.example") == "alpha"
+        assert await store.exchange_id_for_api("https://alpha.example/x") is None
+
+    asyncio.run(flow())
+
+
 @pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
 def test_the_test_database_is_the_schema_the_pack_ships():
     """The test database must be at the pack's HEAD migration, not its baseline.
