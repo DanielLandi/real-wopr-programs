@@ -267,22 +267,19 @@
         (setf found (car rule))))
     found))
 
+(defun guarded-act (tokens raw-act)
+  "RAW-ACT, or OTHER when *ACT-GUARDS* lists it and none of its content
+tokens is present.  Unlisted acts pass through untouched."
+  (let ((guard (assoc raw-act *act-guards*)))
+    (if (and guard (not (any-token-p (cdr guard) tokens)))
+        'other
+        raw-act)))
+
 (defun domain-act (tokens raw-act)
-  "Keyword guard rails over the statistical act classifier."
-  (let ((planned (rule-domain-act tokens raw-act)))
-    (cond
-      (planned planned)
-      ((and (eq raw-act 'war)
-            (not (any-token-p '("WAR" "NUCLEAR" "THERMONUCLEAR" "MISSILE"
-                                "MISSILES" "DEFCON" "STRIKE" "WINNABLE")
-                              tokens)))
-       'other)
-      ((and (eq raw-act 'identity)
-            (not (any-token-p '("YOU" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER"
-                                "MACHINE" "NAME" "IDENTIFY")
-                              tokens)))
-       'other)
-      (t raw-act))))
+  "Keyword guard rails over the statistical act classifier: the planner's
+rules first, then the content guards over the Bayes verdict."
+  (or (rule-domain-act tokens raw-act)
+      (guarded-act tokens raw-act)))
 
 (defun preferred-topics (act)
   (cdr (assoc act *topic-preferences*)))
