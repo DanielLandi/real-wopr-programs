@@ -122,7 +122,7 @@ class NodeHost:
         pack = json.loads((pack_root / "pack.json").read_text())
         program_ids = {p["id"] for p in pack["programs"]}
         program_paths = {p["id"]: p["path"] for p in pack["programs"]}
-        problems = errors(validate(topo, program_ids, program_paths))
+        problems = errors(validate(topo, program_ids, program_paths, pack))
         if problems:
             raise NodeHostError(
                 "topology has errors, refusing to start:\n  "

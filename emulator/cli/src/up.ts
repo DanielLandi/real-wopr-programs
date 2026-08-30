@@ -87,8 +87,7 @@ export async function up(
   const out = opts.out ?? process.stdout;
 
   // A mis-declared federation fails where it is declared, not halfway through a
-  // call. Warnings are printed and do not block — that is what keeps a
-  // composite-host waiting room visible rather than comfortable.
+  // call. Warnings are printed and do not block.
   const errors = errorsOf(topo);
   for (const w of warningsOf(topo)) out.write(`warning ${w.code}: ${w.message}\n`);
   if (errors.length) {

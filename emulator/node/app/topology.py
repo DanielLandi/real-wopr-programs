@@ -2,10 +2,10 @@
 
 Networks are global and few, so they live in pack.json. Node declarations live
 with the program that is the node (its harness/manifest.json) — every one of
-them, now that the executive is a program (`wopr/harness/manifest.json`). A
-pack.json `nodes` section is still read as a waiting room for a node that has
-no period source yet; this pack's is empty, and the validator warns about any
-entry a pack puts there.
+them, now that the executive is a program (`wopr/harness/manifest.json`). There
+is no other place to declare one: the pack.json `nodes` waiting room that once
+held a node without period source is gone, and a pack that brings the key back
+fails validation (topology_validate.py, `pack-nodes`).
 
 This module only loads and shapes. Every rejection rule lives in
 topology_validate.py, so the rules can be read as a list.
@@ -61,7 +61,6 @@ class NodeDecl:
     peers: tuple[str, ...] = ()
     state: str = "ephemeral"                      # ephemeral | persistent
     callable_by: tuple[str, ...] | None = None    # None => anyone sharing a network
-    source: str = "manifest"                      # manifest | pack.json
 
 
 @dataclass(frozen=True)
@@ -70,7 +69,7 @@ class Topology:
     nodes: dict[str, NodeDecl]
 
 
-def _node_from(node_id: str, title: str, block: dict, source: str,
+def _node_from(node_id: str, title: str, block: dict,
                default_protocol: str) -> NodeDecl:
     addrs: dict[str, Address] = {}
     for net, spec in block.get("networks", {}).items():
@@ -88,7 +87,6 @@ def _node_from(node_id: str, title: str, block: dict, source: str,
         peers=tuple(block.get("peers", ())),
         state=block.get("state", "ephemeral"),
         callable_by=tuple(callable_by) if callable_by is not None else None,
-        source=source,
     )
 
 
@@ -103,11 +101,12 @@ def _program_manifests(pack_root: Path, data: dict) -> list[Path]:
 
 
 def load_nodes(pack_root: Path) -> dict[str, NodeDecl]:
-    """Node declarations from program manifests, plus the pack.json waiting room.
+    """Node declarations, from program manifests and nowhere else.
 
     A program folder without a `node` block is not a node — it is somebody's
     mount. Games stay games: GTW is not something you dial, it is something
-    WOPR runs for you.
+    WOPR runs for you. pack.json is not consulted for nodes; a `nodes` key
+    there is the validator's business, and it rejects it.
     """
     out: dict[str, NodeDecl] = {}
     data = json.loads((pack_root / "pack.json").read_text())
@@ -118,13 +117,7 @@ def load_nodes(pack_root: Path) -> dict[str, NodeDecl]:
         if block is None:
             continue
         out[m["id"]] = _node_from(
-            m["id"], m.get("title", m["id"]), block, "manifest",
-            m.get("protocol", "SYSTEM/1"),
-        )
-
-    for node_id, block in data.get("nodes", {}).items():
-        out[node_id] = _node_from(
-            node_id, block.get("title", node_id), block, "pack.json", "SYSTEM/1",
+            m["id"], m.get("title", m["id"]), block, m.get("protocol", "SYSTEM/1"),
         )
     return out
 

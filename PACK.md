@@ -95,8 +95,9 @@ and keeps the terminal, `EXEC` gives the terminal away.
 mounts: `GTW` is not something you dial, it is something W.O.P.R. runs for you. The other end
 of that is `wopr/harness/manifest.json`, which declares the composite host itself: a phone
 number on `pstn`, a hostname on `norad`, `mounts` for the games, Joshua and the console, and
-`reference` as a peer. Every node in this pack declares itself this way; `pack.json` holds
-only the networks.
+`reference` as a peer. Every node declares itself this way; `pack.json` holds only the
+networks, and a `nodes` key there is a validation error (`pack-nodes`) — there is no second
+place to declare a node, and no waiting room for one without period source.
 
 A node's declaration is checked before anything runs: unknown networks, duplicate addresses,
 unknown or unreachable peers, undeclared `EXEC` targets, empty mount globs and cycles are all

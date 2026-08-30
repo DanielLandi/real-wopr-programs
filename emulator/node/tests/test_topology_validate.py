@@ -120,12 +120,13 @@ def test_missing_address_is_an_error():
     assert "no-address" in _codes(t)
 
 
-def test_composite_host_warns_but_does_not_fail():
-    t = Topology(networks={"pstn": _net()},
-                 nodes={"wopr": _node("wopr", source="pack.json")})
-    problems = validate(t, PROGRAMS)
-    assert "composite-host" in {p.code for p in problems}
-    assert errors(problems) == []
+def test_a_pack_json_nodes_key_is_an_error():
+    """The waiting room cannot quietly come back: even an empty `nodes` is refused."""
+    t = Topology(networks={"pstn": _net()}, nodes={"school": _node("school")})
+    pack = {"programs": [], "networks": {}, "nodes": {}}
+    problems = validate(t, PROGRAMS, pack=pack)
+    assert [p.code for p in errors(problems)] == ["pack-nodes"]
+    assert errors(validate(t, PROGRAMS, pack={"programs": [], "networks": {}})) == []
 
 
 def test_the_real_pack_topology_is_valid():
@@ -133,15 +134,14 @@ def test_the_real_pack_topology_is_valid():
     pack = json.loads((PACK / "pack.json").read_text())
     programs = {p["id"] for p in pack["programs"]}
     paths = {p["id"]: p["path"] for p in pack["programs"]}
-    problems = validate(t, programs, paths)
+    problems = validate(t, programs, paths, pack)
     assert errors(problems) == [], [p.message for p in errors(problems)]
 
 
 def test_the_real_pack_has_nothing_to_warn_about():
-    # The waiting room used to hold WOPR, and the one warning was about it.
     t = load_topology(PACK)
     pack = json.loads((PACK / "pack.json").read_text())
     programs = {p["id"] for p in pack["programs"]}
     paths = {p["id"]: p["path"] for p in pack["programs"]}
-    warnings = [p for p in validate(t, programs, paths) if p.level == "warning"]
+    warnings = [p for p in validate(t, programs, paths, pack) if p.level == "warning"]
     assert warnings == []

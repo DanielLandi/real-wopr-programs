@@ -27,7 +27,7 @@ def describe(pack_root: Path) -> tuple[dict, bool]:
     pack = json.loads((pack_root / "pack.json").read_text())
     program_ids = {p["id"] for p in pack["programs"]}
     program_paths = {p["id"]: p["path"] for p in pack["programs"]}
-    problems = validate(topo, program_ids, program_paths)
+    problems = validate(topo, program_ids, program_paths, pack)
 
     out = {
         "networks": {
@@ -49,7 +49,6 @@ def describe(pack_root: Path) -> tuple[dict, bool]:
                 "peers": list(d.peers),
                 "state": d.state,
                 "callable_by": list(d.callable_by) if d.callable_by is not None else None,
-                "source": d.source,
             }
             for node_id, d in topo.nodes.items()
         },

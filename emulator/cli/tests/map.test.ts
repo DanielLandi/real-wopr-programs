@@ -12,7 +12,7 @@ const TOPO: Topology = {
   },
   nodes: {
     school: {
-      id: "school", title: "SEATTLE SCHOOL DISTRICT", source: "manifest",
+      id: "school", title: "SEATTLE SCHOOL DISTRICT",
       networks: {
         pstn: { address: "(206) 555-0142", protocol: "SYSTEM/1" },
         bus: { address: "SCHOOL", protocol: "SYSTEM/1" },
@@ -20,18 +20,18 @@ const TOPO: Topology = {
       mounts: [], peers: ["school-db"], state: "ephemeral", callable_by: null,
     },
     "school-db": {
-      id: "school-db", title: "RECORDS", source: "manifest",
+      id: "school-db", title: "RECORDS",
       networks: { bus: { address: "SCHOOL-DB", protocol: "SYSTEM/1" } },
       mounts: [], peers: [], state: "persistent", callable_by: ["school"],
     },
     wopr: {
-      id: "wopr", title: "W.O.P.R.", source: "pack.json",
+      id: "wopr", title: "W.O.P.R.",
       networks: { pstn: { address: "(311) 486-0623", protocol: "SYSTEM/1" } },
       mounts: ["games/*"], peers: [], state: "ephemeral", callable_by: null,
     },
   },
   problems: [
-    { level: "warning", code: "composite-host", message: "wopr: no period source yet" },
+    { level: "warning", code: "slow-line", message: "wopr: 300 baud is a long evening" },
   ],
 };
 
@@ -57,8 +57,8 @@ test("map: peers and mounts are shown", () => {
   assert.match(out, /mounts\s+games\/\*/);
 });
 
-test("map: the composite-host warning is surfaced, not buried", () => {
-  assert.match(renderMap(TOPO), /warning composite-host: wopr/);
+test("map: a warning is surfaced, not buried", () => {
+  assert.match(renderMap(TOPO), /warning slow-line: wopr/);
 });
 
 test("map: an error is rendered distinctly from a warning", () => {
@@ -74,7 +74,7 @@ test("errorsOf and warningsOf split the problems", () => {
   const mixed: Topology = {
     ...TOPO,
     problems: [
-      { level: "warning", code: "composite-host", message: "w" },
+      { level: "warning", code: "slow-line", message: "w" },
       { level: "error", code: "unknown-peer", message: "e" },
     ],
   };

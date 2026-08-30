@@ -31,7 +31,6 @@ def test_school_no_longer_declares_itself_on_the_phone_network():
     assert "pstn" not in school.networks
     assert school.networks["bus"].address == "SCHOOL"
     assert school.networks["bus"].protocol == "SYSTEM/1"
-    assert school.source == "manifest"
 
 
 def test_every_dialable_system_keeps_the_number_its_manifest_already_had():
@@ -61,15 +60,26 @@ def test_wopr_declares_itself_in_its_own_manifest():
     assert set(wopr.networks) == {"pstn", "norad"}
     assert wopr.networks["pstn"].address == "(311) 486-0623"
     assert wopr.networks["norad"].address == "WOPR"
-    assert wopr.source == "manifest"
     assert wopr.mounts == ("games/*", "joshua", "norad")
     assert wopr.peers == ("reference",)
 
 
-def test_the_waiting_room_is_empty():
+def test_pack_json_declares_no_nodes():
     import json
     pack = json.loads((PACK / "pack.json").read_text())
     assert "nodes" not in pack
+
+
+def test_a_pack_json_nodes_key_declares_nothing(tmp_path):
+    """The waiting room is gone: a node written into pack.json is not loaded.
+    Rejecting the key is the validator's job (test_topology_validate)."""
+    import json
+    (tmp_path / "pack.json").write_text(json.dumps({
+        "programs": [],
+        "networks": {"pstn": {"kind": "dialup", "addressing": "phone"}},
+        "nodes": {"ghost": {"networks": {"pstn": {"address": "(206) 555-0000"}}}},
+    }))
+    assert load_nodes(tmp_path) == {}
 
 
 def test_games_are_not_nodes():
