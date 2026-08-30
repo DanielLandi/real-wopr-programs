@@ -388,9 +388,10 @@
 ;; answer about how one feels, a yes, a no, or nothing in particular is the
 ;; visitor continuing the chain; a turn with a subject of its own (WHO ARE
 ;; YOU, WHAT GAMES HAVE YOU GOT, IS WAR A GAME TO YOU) is answered instead,
-;; and the chain is dropped rather than resumed later.  FAREWELL is here
-;; because a one-word answer to HOW ARE YOU FEELING TODAY? (GOOD) can read
-;; as one; FALKEN because after the greeting the act has nothing to say.
+;; and the chain is dropped rather than resumed later.  FAREWELL yields
+;; (a goodbye is answered as one; GOOD is a YES example so a one-word
+;; answer to HOW ARE YOU FEELING TODAY? does not read as a farewell);
+;; FALKEN continues because after the greeting the act has nothing to say.
 (defparameter *chain-continuing-acts*
   '(greeting feelings yes no other falken))
 
