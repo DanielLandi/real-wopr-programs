@@ -305,6 +305,40 @@ def test_the_host_refuses_a_topology_with_errors(monkeypatch):
         NodeHost.for_node("school", PACK, {})
 
 
+def test_a_node_without_a_manifest_is_refused_at_construction(tmp_path):
+    """The waiting-room fallback is gone (#107): a node the topology declares
+    but no systems/<id>/harness/manifest.json describes is a mis-declared
+    pack, and the host says so before it claims a line — not NO CARRIER to
+    the first caller."""
+    from app.topology import Address, NodeDecl, Topology
+
+    decl = NodeDecl(
+        id="ghost", title="GHOST",
+        networks={"pstn": Address(network="pstn", address="(555) 010-9999",
+                                  protocol="SYSTEM/1")},
+    )
+    topo = Topology(networks={}, nodes={"ghost": decl})
+
+    # An empty pack: nothing under systems/ at all.
+    with pytest.raises(NodeHostError, match="ghost: no program manifest"):
+        NodeHost(decl, tmp_path, {}, topology=topo)
+
+    # A pack with other programs in it, just not this one. Same answer: the
+    # host must not resolve a node by name to a binary nobody declared.
+    _stub_caller_pair(tmp_path)
+    with pytest.raises(NodeHostError, match="ghost: no program manifest"):
+        NodeHost(decl, tmp_path, {}, topology=topo)
+
+
+def test_a_composite_host_is_not_something_the_node_host_runs():
+    """`wopr` is a declared node with a manifest, but it lives at
+    wopr/harness, not systems/: it is the bridge's to serve (up.ts skips
+    it). for_node must refuse it loudly rather than start a host that fails
+    on the first ring."""
+    with pytest.raises(NodeHostError, match="wopr: no program manifest"):
+        NodeHost.for_node("wopr", PACK, {})
+
+
 def _stub_caller_pair(tmp_path, sid="stub-caller", peer="stub-peer"):
     """A purpose-built pair of stub systems for the CALL/RESUME tests below.
 
@@ -373,6 +407,17 @@ exit 0
     binary = bindir / sid
     binary.write_text(script)
     binary.chmod(0o755)
+    # The host only runs a program a manifest describes (#107): the stub is a
+    # real pack system, manifest and all, not a name the host guesses a binary
+    # for. stub-peer has no manifest because nothing ever runs it.
+    (bindir.parent / "manifest.json").write_text(json.dumps({
+        "id": sid, "title": sid.upper(), "language": "bash", "binary": sid,
+        "timeout_s": 5,
+        "node": {"networks": {
+            "pstn": {"address": "(555) 010-1000", "protocol": "SYSTEM/1"},
+            "bus": {"address": sid.upper(), "protocol": "SYSTEM/1"},
+        }, "peers": [peer]},
+    }))
 
     decl = NodeDecl(
         id=sid, title=sid.upper(),

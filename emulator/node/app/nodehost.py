@@ -92,15 +92,23 @@ class NodeHost:
         # program this host then has to run itself, and it needs that program's
         # binary, timeout and exec allow-list to do it.
         self.programs = load_programs(systems_dir)
+        # The node host serves a node that is itself a program, and the
+        # program is what its manifest describes: binary, timeout, execs.
+        # Without one there is nothing to run, so refuse here — at
+        # construction, where the operator sees it — rather than answer the
+        # first caller with NO CARRIER. (A pack.json waiting-room node used to
+        # get a made-up System keyed by its id; #106 emptied the room.)
+        if decl.id not in self.programs:
+            raise NodeHostError(
+                f"{decl.id}: no program manifest at "
+                f"systems/{decl.id}/harness/manifest.json — a node host runs "
+                "the program that is the node, and this node has none"
+            )
         self.runner = system_runner or SystemRunner(
             SystemRunnerConfig(systems_dir=systems_dir),
             {p.id: System(id=p.id, title="", language="", binary=p.binary,
                           number="", timeout_s=p.timeout_s)
-             for p in self.programs.values()}
-            # A node declared in pack.json's waiting room has no manifest of its
-            # own, so it is not in `programs`; keep it resolvable by id.
-            or {decl.id: System(id=decl.id, title=decl.title, language="",
-                                binary=decl.id, number="", timeout_s=None)},
+             for p in self.programs.values()},
         )
 
     # ---- construction -------------------------------------------------------
