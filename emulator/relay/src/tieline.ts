@@ -20,6 +20,13 @@ export interface TielineOpts {
   key?: string;            // the hub operator's key for a reserved world
   localComms: string;      // ws://127.0.0.1:8081
   localBridge: string;     // http://127.0.0.1:8000
+  /** The local bridge's BRIDGE_INTERNAL_TOKEN. A machine call's local leg
+   *  mints a TRUNK surface, and those two surfaces are internal-only (#74);
+   *  a tieline that cannot prove it is the relay gets no session and every
+   *  machine call refuses with `no session`. Omitted falls back to
+   *  `process.env.BRIDGE_INTERNAL_TOKEN` inside `openLocalLeg`, which is
+   *  what a host running this beside its own stack already has. */
+  internalToken?: string;
   reconnect?: boolean;     // default true; tests pass false
   onAssigned?: (exchange: string, world: number, slot: string) => void;
   // Fires only for an INBOUND call: a call this host places is answered with
@@ -117,6 +124,7 @@ export function startTieline(opts: TielineOpts): {
     const leg = await openLocalLeg({
       bridgeUrl: opts.localBridge,
       commsUrl: opts.localComms,
+      internalToken: opts.internalToken,
       surface: "trunk-call",
       origin: `world ${o.world} slot ${o.slot}`,
       send: (data) => send({ t: "FRAME", chan: f.chan, data }),
@@ -192,6 +200,7 @@ export function startTieline(opts: TielineOpts): {
     const leg = await openLocalLeg({
       bridgeUrl: opts.localBridge,
       commsUrl: opts.localComms,
+      internalToken: opts.internalToken,
       surface: "trunk-caller",
       filterRitual: true,
       send: (data) => send({ t: "FRAME", chan, data }),

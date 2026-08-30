@@ -13,17 +13,20 @@ import { decodeEnvelope, encodeEnvelope } from "../src/envelope.ts";
  *  was dialled on and echoes envelopes the test pushes at it. */
 async function stubs(opts: { mintStatus?: number } = {}): Promise<{
   bridgeUrl: string; commsUrl: string;
-  dialled: string[]; sessionPosts: string[]; received: string[];
+  dialled: string[]; sessionPosts: string[]; sessionHeaders: http.IncomingHttpHeaders[];
+  received: string[];
   push: (kind: string, payload: string) => void;
   close: () => Promise<void>;
 }> {
   const sessionPosts: string[] = [];
+  const sessionHeaders: http.IncomingHttpHeaders[] = [];
   const bridge = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       if (req.method === "POST" && req.url === "/api/session") {
         sessionPosts.push(Buffer.concat(chunks).toString());
+        sessionHeaders.push(req.headers);
         const status = opts.mintStatus ?? 201;
         res.writeHead(status, { "content-type": "application/json" });
         res.end(status === 201 ? JSON.stringify({ session_id: "S1", token: "T1" }) : "{}");
@@ -48,7 +51,7 @@ async function stubs(opts: { mintStatus?: number } = {}): Promise<{
   return {
     bridgeUrl: `http://127.0.0.1:${(bridge.address() as { port: number }).port}`,
     commsUrl: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
-    dialled, sessionPosts, received,
+    dialled, sessionPosts, sessionHeaders, received,
     push: (kind, payload) => {
       for (const s of sockets) {
         s.send(encodeEnvelope({ v: 1, session: "S1", seq: 0, kind: kind as never,
@@ -257,4 +260,80 @@ test("local-leg: frames under the cap are still held and flushed on connect", as
   } finally {
     await s.close();
   }
+});
+
+// ---- #74: the mint is authenticated -------------------------------------
+//
+// The two trunk surfaces are pre-authenticated (a `trunk-caller` session is
+// behind the front door on connect) and unpaced (profile `off`), so the
+// bridge now requires the service-to-service token to mint one. This leg is
+// the only caller of those surfaces, and it runs inside a process that
+// already holds the token.
+
+test("local-leg: sends the internal token on the mint", async () => {
+  const s = await stubs();
+  try {
+    const leg = await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
+      internalToken: "SECRET", send: () => {}, close: () => {},
+    });
+    assert.notEqual(leg, "refused");
+    await settle();
+    assert.equal(s.sessionHeaders.length, 1);
+    assert.equal(s.sessionHeaders[0]["x-wopr-internal-token"], "SECRET");
+  } finally { await s.close(); }
+});
+
+test("local-leg: omits the header entirely when it has no token", async () => {
+  // Not a blank header: an unconfigured relay must read as "no header" and
+  // not as "wrong token" in a bridge's logs.
+  const saved = process.env.BRIDGE_INTERNAL_TOKEN;
+  delete process.env.BRIDGE_INTERNAL_TOKEN;
+  const s = await stubs();
+  try {
+    await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
+      send: () => {}, close: () => {},
+    });
+    await settle();
+    assert.equal(s.sessionHeaders.length, 1);
+    assert.equal("x-wopr-internal-token" in s.sessionHeaders[0], false);
+  } finally {
+    await s.close();
+    if (saved !== undefined) process.env.BRIDGE_INTERNAL_TOKEN = saved;
+  }
+});
+
+test("local-leg: falls back to BRIDGE_INTERNAL_TOKEN when given no option", async () => {
+  // The tieline runs as its own process beside a local stack; server.ts
+  // resolves `opts.internalToken ?? process.env… ?? ""` and this mirrors it,
+  // so a host that exports the variable needs no extra wiring.
+  const saved = process.env.BRIDGE_INTERNAL_TOKEN;
+  process.env.BRIDGE_INTERNAL_TOKEN = "FROM-ENV";
+  const s = await stubs();
+  try {
+    await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-caller",
+      send: () => {}, close: () => {},
+    });
+    await settle();
+    assert.equal(s.sessionHeaders[0]["x-wopr-internal-token"], "FROM-ENV");
+  } finally {
+    await s.close();
+    if (saved === undefined) delete process.env.BRIDGE_INTERNAL_TOKEN;
+    else process.env.BRIDGE_INTERNAL_TOKEN = saved;
+  }
+});
+
+test("local-leg: a bridge that refuses the mint with 401 is a refusal, not a crash", async () => {
+  const s = await stubs({ mintStatus: 401 });
+  const closes: Array<string | undefined> = [];
+  try {
+    const leg = await openLocalLeg({
+      bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
+      internalToken: "WRONG", send: () => {}, close: (r) => closes.push(r),
+    });
+    assert.equal(leg, "refused");
+    assert.deepEqual(closes, ["no session"]);
+  } finally { await s.close(); }
 });

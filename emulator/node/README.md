@@ -37,6 +37,14 @@ Key wiring facts:
 - **WS auth (D3/D4):** `/ws/session/{id}` checks the `x-wopr-internal-token` header (comms
   layer only) and the HMAC session token from `POST /api/session`. In deployment the ingress
   never routes `/ws/*` — the era constraints cannot be bypassed.
+- **Session auth (#74):** `POST /api/session` authenticates nobody, deliberately — every
+  visitor surface is one a stranger is supposed to open, and a minted session lands at
+  `LOGON:` paced at that surface's baud. The exception is `INTERNAL_SURFACES`
+  (`trunk-call`, `trunk-caller`): the machine ends of a machine call are behind the front
+  door on connect and run at profile `off`, so they require the same
+  `x-wopr-internal-token` header, and only they do. With `BRIDGE_INTERNAL_TOKEN` unset the
+  two machine surfaces are refused outright (`400 unknown surface`) and startup logs a
+  warning — unlike the WS guard above, this endpoint has no second factor to fall back on.
 - **WOPR plays itself:** after a human move that leaves the game PLAYING, the node host
   invokes the engine side automatically (`MOVE` with INPUT omitted — see `PACK.md`
   §Wire protocols).

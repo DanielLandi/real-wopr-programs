@@ -15,6 +15,14 @@ feature the caller is Joshua ringing David back. So a `trunk-caller`
 session greets on connect with the film's backdoor greeting and is behind
 the front door from that moment, rather than presenting `LOGON:` to a
 person who was rung.
+
+Which is exactly why the third part exists (#74). A surface that is behind
+the front door on connect, at profile `off`, must not be mintable by a
+browser: `POST /api/session` authenticates nobody, so until this guard the
+two machine surfaces were a pre-authenticated, unpaced session anyone could
+curl. The guard is scoped to those two surfaces and nothing else — every
+visitor surface still mints with no header at all, and that is the half of
+this suite that a mistake here would take the live site down over.
 """
 from __future__ import annotations
 
@@ -26,19 +34,31 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.joshua import ScriptedJoshua
-from app.main import create_app
+from app.main import DEFAULT_LINKS, INTERNAL_SURFACES, create_app
 from app.router import BACKDOOR_GREETING, LOGON_REJECTION
 from app.store import MemoryStore
+
+# The relay holds this as BRIDGE_INTERNAL_TOKEN; it is the same value on both
+# services in a deployment.
+TOKEN = "test-internal-token"
+AUTH = {"x-wopr-internal-token": TOKEN}
+
+
+def build_client(internal_token: str = TOKEN) -> TestClient:
+    # The engine is pinned to the scripted one so the conversation below is
+    # deterministic: `create_app` would otherwise register the Lisp processor
+    # whenever its binary happens to be built in this checkout. The token is
+    # passed explicitly rather than left to `Settings()`'s environment read,
+    # so this suite says the same thing on a dev box that exports one.
+    app = create_app(settings=Settings(internal_token=internal_token),
+                     store=MemoryStore(),
+                     engines={"scripted": ScriptedJoshua({})})
+    return TestClient(app)
 
 
 @pytest.fixture()
 def client():
-    # The engine is pinned to the scripted one so the conversation below is
-    # deterministic: `create_app` would otherwise register the Lisp processor
-    # whenever its binary happens to be built in this checkout.
-    app = create_app(settings=Settings(), store=MemoryStore(),
-                     engines={"scripted": ScriptedJoshua({})})
-    return TestClient(app)
+    return build_client()
 
 
 def user_input(message: str) -> str:
@@ -84,7 +104,7 @@ def test_a_machine_surface_mints_a_session(client, surface, profile):
     paced once, by the end that ANSWERED, and the end that placed it must
     not shape as well.
     """
-    r = client.post("/api/session", json={"surface": surface})
+    r = client.post("/api/session", json={"surface": surface}, headers=AUTH)
     assert r.status_code == 201, r.text
     assert r.json()["link_profile"] == profile
 
@@ -92,9 +112,13 @@ def test_a_machine_surface_mints_a_session(client, surface, profile):
 # -- C3: the end that placed the call is the one that speaks ----------------
 
 def open_session(client, surface: str):
-    body = client.post("/api/session", json={"surface": surface}).json()
+    body = client.post("/api/session", json={"surface": surface},
+                       headers=AUTH).json()
+    # The same header on the WS: with an internal token configured, the D3
+    # guard on `/ws/session/{id}` wants it too, and the comms layer is the
+    # only caller of either.
     return client.websocket_connect(
-        f"/ws/session/{body['session_id']}?token={body['token']}")
+        f"/ws/session/{body['session_id']}?token={body['token']}", headers=AUTH)
 
 
 def test_a_placed_call_greets_as_joshua_on_connect(client):
@@ -130,3 +154,111 @@ def test_an_answered_call_still_knocks(client):
     with open_session(client, "trunk-call") as ws:
         ws.send_text(user_input("HELLO"))
         assert LOGON_REJECTION in next_output(ws)
+
+
+# -- #74: the machine surfaces are internal ---------------------------------
+#
+# `POST /api/session` authenticates nobody, deliberately: every visitor
+# surface is one a stranger is supposed to be able to open. The two machine
+# surfaces are not, and they are the two that skip the front door and the
+# pacing. So the guard is scoped to them, and the first four tests below are
+# the ones that matter — a guard that also catches a browser is an outage.
+
+VISITOR_SURFACES = sorted(set(DEFAULT_LINKS) - INTERNAL_SURFACES)
+
+
+@pytest.mark.parametrize("surface", VISITOR_SURFACES)
+def test_a_visitor_surface_still_mints_with_no_header_at_all(client, surface):
+    """The required test. Every browser that dials realwopr.ai mints here,
+    cross-origin, with no credential to offer; if this fails the site is
+    down for everyone."""
+    r = client.post("/api/session", json={"surface": surface})
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.parametrize("surface", VISITOR_SURFACES)
+def test_a_visitor_surface_ignores_the_header_rather_than_checking_it(client, surface):
+    """Present, absent or garbage, the header must not change what a visitor
+    surface does. The rule is "these two surfaces require it", not "this
+    header must be valid wherever it appears" — a stray proxy header must
+    never become a 401 on the front door."""
+    r = client.post("/api/session", json={"surface": surface},
+                    headers={"x-wopr-internal-token": "not-the-token"})
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
+def test_a_machine_surface_refuses_a_caller_with_no_header(client, surface):
+    """The exposure this suite's third part exists for: until the guard,
+    `curl -X POST .../api/session -d '{"surface":"trunk-caller"}'` answered
+    201 and landed the caller behind the front door at baud 0."""
+    r = client.post("/api/session", json={"surface": surface})
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
+def test_a_machine_surface_refuses_a_wrong_token(client, surface):
+    r = client.post("/api/session", json={"surface": surface},
+                    headers={"x-wopr-internal-token": TOKEN + "x"})
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
+def test_a_machine_surface_survives_a_non_ascii_header(client, surface):
+    """A public endpoint must not be turned into a 500 by a header value.
+
+    Sent as raw bytes, which is what a client that is not httpx can put on
+    the wire; starlette decodes headers as latin-1, so the app sees a
+    non-ASCII `str` and `compare_digest` would raise TypeError on it.
+    Comparing UTF-8 bytes instead is what makes this a 401.
+    """
+    r = client.post("/api/session", json={"surface": surface},
+                    headers={"x-wopr-internal-token": "t\u00f6ken".encode()})
+    assert r.status_code == 401, r.text
+
+
+@pytest.mark.parametrize("surface", sorted(INTERNAL_SURFACES))
+def test_an_unconfigured_bridge_refuses_the_machine_surfaces_outright(surface):
+    """Fail closed, and say exactly what a bogus surface is told.
+
+    With no BRIDGE_INTERNAL_TOKEN there is no header any caller could send
+    that would be right, so an exchange that never configured one behaves as
+    it did before the trunk surfaces existed: they do not. Unlike the
+    `/ws/session` guard, which can afford to fail open because it still
+    verifies an HMAC session token, this endpoint has no second factor.
+    """
+    client = build_client(internal_token="")
+    r = client.post("/api/session", json={"surface": surface}, headers=AUTH)
+    bogus = client.post("/api/session", json={"surface": "no-such-surface"})
+    assert r.status_code == 400, r.text
+    # Byte-identical: an unconfigured deployment discloses nothing about its
+    # own configuration.
+    assert r.json() == bogus.json()
+
+
+def test_every_trunk_surface_is_declared_internal():
+    """The likely mistake is adding a third machine surface to DEFAULT_LINKS
+    and forgetting the guard. The set is named rather than inferred from a
+    prefix (a machine surface need not be called `trunk-anything`), so this
+    checks the other direction and fails in CI instead of production."""
+    unguarded = {s for s in DEFAULT_LINKS if s.startswith("trunk-")} - INTERNAL_SURFACES
+    assert not unguarded, (
+        f"these trunk surfaces mint without the internal token: {sorted(unguarded)} "
+        f"— add them to INTERNAL_SURFACES in app/main.py"
+    )
+
+
+def test_the_internal_surfaces_are_all_mintable_surfaces():
+    """A guard naming a surface `DEFAULT_LINKS` does not have would be dead
+    text pretending to be protection."""
+    assert INTERNAL_SURFACES <= set(DEFAULT_LINKS)
+
+
+def test_a_refused_mint_creates_no_room(client):
+    """A refusal has no side effects — the same rule the system/room checks
+    already follow. The guard runs before room creation, so an unauthorised
+    caller cannot manufacture rooms by naming one."""
+    r = client.post("/api/session",
+                    json={"surface": "trunk-call", "room_code": "ABCDEF"})
+    assert r.status_code == 401, r.text
+    assert client.get("/api/room/ABCDEF").status_code == 404

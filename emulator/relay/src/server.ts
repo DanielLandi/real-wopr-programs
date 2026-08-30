@@ -104,7 +104,12 @@ export interface RunningServer {
  *  `openLocalLeg` is tested in local-leg.test.ts, without standing up a full
  *  Switchboard and HTTP server. */
 export function seededPort(seed: LocalSlot, bridgeUrl: string, commsUrl: string,
-                           up: (f: TrunkFrame) => void): TrunkPort & { attach(chan: number): void } {
+                           up: (f: TrunkFrame) => void,
+                           // The bridge requires this to mint a TRUNK surface
+                           // (#74). Defaulted rather than required so the unit
+                           // tests that drive this port directly stay as they
+                           // are; startServer passes the value it resolved.
+                           internalToken = ""): TrunkPort & { attach(chan: number): void } {
   const legs = new Map<number, LocalLeg>();
   // A machine call's leg is minted asynchronously (a session POST, then a
   // dial) — a CLOSE for that chan can arrive before the mint resolves, and
@@ -125,6 +130,7 @@ export function seededPort(seed: LocalSlot, bridgeUrl: string, commsUrl: string,
       // openLocalLeg mints over HTTP against the same host.
       bridgeUrl: bridgeUrl.replace(/^ws/, "http"),
       commsUrl,
+      internalToken,
       surface: params.surface,
       system: seed.system,
       origin: params.origin,
@@ -1073,7 +1079,8 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   for (const seed of trunkLocalWorld) {
     const code = switchboard.seededCode(seed.slot);
     if (!code) continue;
-    const p = seededPort(seed, bridgeUrl, commsUrl, (f) => switchboard.handleHostFrame(code, f));
+    const p = seededPort(seed, bridgeUrl, commsUrl,
+                         (f) => switchboard.handleHostFrame(code, f), internalToken);
     switchboard.seedPort(seed.slot, p);
     seededPorts.push(p);
     if (seed.slot === homeSlot) homePort = p;

@@ -11,10 +11,11 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -58,6 +59,38 @@ DEFAULT_LINKS = {
     "trunk-call": "dialup-1200",
     "trunk-caller": "off",
 }
+
+# Of those, the ones that exist for the RELAY and for nobody else (#74).
+# `POST /api/session` authenticates no caller, deliberately — every visitor
+# surface is one a stranger is supposed to be able to open, and a minted
+# session is not access to anything: it lands at LOGON:, paced at the
+# surface's baud. The two machine surfaces are the exception on both counts.
+# A `trunk-caller` session is behind the front door from the moment it
+# connects (see the WS handler below) and its profile is `off` — baud 0 — so
+# it also skips the output shaping that is the only server-side bound on
+# generated text, and for the `claude` engine on token spend per connection.
+#
+# Hence a guard scoped to these two, and NOT to the endpoint: authenticating
+# the endpoint as a whole would refuse every browser that dials this
+# exchange. Named rather than inferred from a `trunk-` prefix — a machine
+# surface need not be called `trunk-anything` — with a test asserting the
+# other direction, so a third trunk surface added without a guard fails in
+# CI rather than in production.
+INTERNAL_SURFACES = frozenset({"trunk-call", "trunk-caller"})
+
+
+def _internal_token_ok(given: str | None, expected: str) -> bool:
+    """Constant-time, over bytes.
+
+    Bytes rather than str because `compare_digest` raises TypeError on a
+    non-ASCII str, and this value comes off a public endpoint's headers —
+    which starlette decodes as latin-1, so a caller could otherwise turn a
+    refusal into a 500 by typing an umlaut.
+    """
+    if not given:
+        return False
+    return secrets.compare_digest(given.encode("utf-8", "replace"),
+                                  expected.encode("utf-8"))
 
 
 # Module-level on purpose: with `from __future__ import annotations`, FastAPI
@@ -156,6 +189,20 @@ def build_engines(settings, catalog, budget=None) -> dict[str, "Joshua"]:
 def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     """App factory; tests inject fakes for store/engines/runner."""
     settings = settings or load_settings()
+    if not settings.internal_token:
+        # Loud once, at startup, rather than once per refusal: POST
+        # /api/session is public, so a per-request warning is a log flood any
+        # stranger can pull, while an unset token is a deployment-level fact.
+        # Without it the machine surfaces refuse every mint (#74), so an
+        # exchange that wants machine calls and forgot the variable would
+        # otherwise learn about it only as a NO CARRIER on somebody else's
+        # far end.
+        log.warning(
+            "BRIDGE_INTERNAL_TOKEN is unset: machine calls cannot mint a "
+            "session (surfaces %s are refused) and /ws/session/{id} falls "
+            "back to its session token alone",
+            ", ".join(sorted(INTERNAL_SURFACES)),
+        )
     store = store or make_store(settings.database_url)
     catalog = load_catalog(settings.games_dir)
     runner = runner or CoreRunner(RunnerConfig(
@@ -239,9 +286,29 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                 "joshua_default": default_engine}
 
     @app.post("/api/session", status_code=201)
-    async def create_session(body: CreateSession):
+    async def create_session(body: CreateSession, request: Request):
         if body.surface not in DEFAULT_LINKS:
             raise HTTPException(400, "unknown surface")
+        if body.surface in INTERNAL_SURFACES:
+            # The relay's `openLocalLeg` is the only caller of these, and it
+            # already holds BRIDGE_INTERNAL_TOKEN (relay/src/local-leg.ts).
+            # Checked here, before the room/system/processor validation
+            # below, so a refusal has no side effects — no room is created
+            # and no `last_seen_at` is touched by an unauthorised caller.
+            if not settings.internal_token:
+                # Fail closed, and say exactly what a surface that does not
+                # exist is told: with no token configured there is no header
+                # any caller could send that would be right, so an exchange
+                # that never configured one behaves as it did before the
+                # trunk surfaces existed. Deliberately unlike the
+                # `/ws/session/{id}` guard, which can afford to fail open
+                # because it still verifies an HMAC session token — this
+                # endpoint has no second factor, and fail-open here IS #74.
+                raise HTTPException(400, "unknown surface")
+            if not _internal_token_ok(
+                    request.headers.get("x-wopr-internal-token"),
+                    settings.internal_token):
+                raise HTTPException(401, "unauthorized")
         link = body.link_profile or DEFAULT_LINKS[body.surface]
         if body.system is not None:
             if body.system not in systems:

@@ -36,7 +36,11 @@ emulator/relay/
 **Implemented.** Runs as its own container per deployment.md D1/D3: public WS at
 `/link`, upstream to `ws://bridge:8000/ws/session/{id}` on the internal network with the
 `x-wopr-internal-token` header. The bridge's WS path is never routed publicly, so this layer
-cannot be bypassed.
+cannot be bypassed. The same token goes on `openLocalLeg`'s `POST /api/session` — the bridge
+mints the two TRUNK surfaces for the relay and for nobody else (#74) — taken from
+`internalToken` on `ServerOpts`/`TielineOpts`, or from `BRIDGE_INTERNAL_TOKEN` in the
+environment. A relay that sends no token places machine calls that all refuse with
+`no session`.
 
 ```bash
 npm install
