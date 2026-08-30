@@ -6,9 +6,11 @@
 # Build from the PACK ROOT:  docker build -f emulator/node/Dockerfile .
 
 # No import step — this repo *is* the pack, so the programs are built in place.
+# python3 is here for tools/categories.sh, which reads the category list off
+# pack.json; the runtime stage below has its own Python.
 FROM debian:bookworm-slim AS programs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      make gfortran sbcl gnucobol bwbasic cc65 gcc \
+      make gfortran sbcl gnucobol bwbasic cc65 gcc python3 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY tools ./tools
