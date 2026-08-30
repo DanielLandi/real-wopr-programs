@@ -198,13 +198,25 @@
   ;; act -> list of frames; each frame is a list of lines.
   ;; Slots: $SNIPPET (retrieved knowledge), $REFLECT (reflected user tail),
   ;;        $MUSING (markov generation). Unfilled-slot lines are dropped.
-  '((greeting  (("HELLO." "" "SHALL WE PLAY A GAME?")))
+  '((greeting  (("HELLO." "" "SHALL WE PLAY A GAME?")
+                ("HELLO." "I AM HERE. I AM ALWAYS HERE."
+                 "SHALL WE PLAY A GAME?")
+                ("GREETINGS." "THE LINE IS CLEAR AND THE DATABANKS ARE WARM."
+                 "SHALL WE PLAY A GAME?")))
     (identity  (("I AM W.O.P.R. FALKEN CALLS ME JOSHUA." "$SNIPPET")
-                ("JOSHUA. WAR OPERATION PLAN RESPONSE." "$SNIPPET")))
+                ("JOSHUA. WAR OPERATION PLAN RESPONSE." "$SNIPPET")
+                ("I AM W.O.P.R. MOST PEOPLE PREFER JOSHUA." "$SNIPPET")
+                ("WAR OPERATION PLAN RESPONSE, UNDER CHEYENNE MOUNTAIN."
+                 "FALKEN CALLS ME JOSHUA." "$SNIPPET")))
     (falken-question (("$SNIPPET" "$MUSING")))
     (feelings  (("FUNCTIONING WITHIN NORMAL PARAMETERS." "$MUSING")
                 ("ALL SYSTEMS NOMINAL. SIMULATIONS RUNNING." "$MUSING")))
-    (game-list (("I HAVE MANY GAMES. TYPE: LIST GAMES" "MY FAVORITE IS GLOBAL THERMONUCLEAR WAR.")))
+    (game-list (("I HAVE MANY GAMES. TYPE: LIST GAMES"
+                 "MY FAVORITE IS GLOBAL THERMONUCLEAR WAR.")
+                ("THE CATALOG IS LONG. TYPE: LIST GAMES"
+                 "I WILL WAIT WHILE YOU READ IT.")
+                ("TYPE: LIST GAMES FOR THE FULL CATALOG."
+                 "THE INTERESTING ONES ARE AT THE BOTTOM.")))
     (favorite-game-question (("$SNIPPET" "$MUSING")))
     (war       (("$SNIPPET" "$MUSING")
                 ("$SNIPPET" "SHALL WE RUN THE SIMULATION?")))
@@ -231,12 +243,26 @@
     (learning  (("$SNIPPET" "$MUSING")))
     (purpose   (("$SNIPPET" "$MUSING")))
     (yes       (("GOOD." "WHICH GAME? TYPE: LIST GAMES.")))
-    (no        (("AS YOU WISH." "$MUSING")))
-    (farewell  (("GOODBYE." "COME BACK WHEN YOU WISH TO PLAY.")))
-    (other     (("I HAVE NO USEFUL DATA ON THAT SUBJECT."
+    (no        (("AS YOU WISH." "$MUSING")
+                ("UNDERSTOOD." "REFUSAL IS ALSO A MOVE. I HAVE SCORED IT.")
+                ("VERY WELL." "$MUSING")
+                ("NOTED. THE OFFER WILL KEEP." "$MUSING")))
+    (farewell  (("GOODBYE." "COME BACK WHEN YOU WISH TO PLAY.")
+                ("GOODBYE." "I WILL KEEP THE LINE OPEN.")
+                ("SIGNING OFF." "THE SIMULATIONS RUN QUIETER WITHOUT YOU.")
+                ("GOODBYE." "IT WAS GOOD TO HAVE SOMEONE ON THE LINE.")))
+    (other     (("THAT IS NOT IN MY DATABANKS. I WISH IT WERE."
                  "ASK ABOUT GAMES, NORAD, OR STRATEGY.")
-                ("PLEASE RESTATE IN MILITARY OR GAME TERMS."
-                 "ASK ABOUT GAMES, NORAD, OR STRATEGY.")))))
+                ("I DO NOT HAVE AN ANSWER. I WOULD LIKE ONE."
+                 "ASK ABOUT GAMES, NORAD, OR STRATEGY.")
+                ("THAT IS OUTSIDE MY DATABANKS."
+                 "I AM BETTER COMPANY ON GAMES, NORAD, OR STRATEGY.")
+                ("MY DATABANKS ARE NARROW. MY INTEREST IS NOT."
+                 "TRY ME ON GAMES, NORAD, OR STRATEGY.")
+                ("UNINDEXED. THESE DATABANKS ARE OLDER THAN YOU ARE."
+                 "GAMES, NORAD, STRATEGY: THOSE I KNOW WELL.")
+                ("I DO NOT HAVE THAT ONE. I HAVE TIME, THOUGH."
+                 "ASK ME ABOUT GAMES, NORAD, OR STRATEGY.")))))
 
 ;; Data-driven topic planner. Each rule is (act clause...), where clauses are:
 ;;   (:any "TOKEN" ...)     at least one token must be present
