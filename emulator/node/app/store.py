@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from app.wire import STATUSES as WIRE_STATUSES
+
 ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 # Sentinel room key meaning "sessions with room_code is None" — the implicit
@@ -24,6 +26,23 @@ ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 # happens to coin the same literal for lock keys, which is a coincidence of
 # naming, not a shared dependency.
 GLOBAL_ROOM_KEY = "__global__"
+
+# The enumerations the schema enforces with CHECK constraints (db/migrations),
+# as the bridge knows them. Each is the Python copy of a SQL list; the SQL is
+# what Postgres enforces, and when the two drift the failure is a 500 in
+# production only — #73, where `sessions.surface` listed three surfaces and
+# `DEFAULT_LINKS` six. tests/test_check_constraints.py pins every pair against
+# the migrations as text, and tests/test_store_contract.py writes every value
+# through PostgresStore. MemoryStore refuses anything outside these sets so
+# the in-memory suite fails where Postgres would (#91).
+EVENT_KINDS = frozenset({"input", "route", "core", "joshua", "error"})
+EVENT_ACTORS = frozenset({"user", "wopr", "joshua", "system"})
+# The wire's STATUS vocabulary plus QUIT, which no program emits: the bridge
+# writes it itself when the operator quits a game (router.py).
+GAME_STATUSES = frozenset(WIRE_STATUSES) | {"QUIT"}
+# The reconstructions of Joshua an exchange may advertise in the phone book.
+# `RegisterExchange.joshua` (main.py) restates this as a pydantic Literal.
+EXCHANGE_JOSHUAS = frozenset({"claude", "period"})
 
 
 def normalize_room_code(code: str) -> str:
@@ -203,11 +222,19 @@ class MemoryStore:
         # Stamp update recency — get_latest_game orders by it (PostgresStore
         # writes `updated_at: now()`; the two stores must agree). Re-insert so
         # dict order tracks recency too: the tie-breaker for equal stamps.
+        if gs.status not in GAME_STATUSES:
+            raise ValueError(f"game status {gs.status!r} violates game_states.status CHECK")
         gs.updated_at = datetime.now(timezone.utc).isoformat()
         self.games.pop(gs.session_id, None)
         self.games[gs.session_id] = gs
 
     async def log_event(self, session_id: str | None, kind: str, actor: str, payload: dict[str, Any]) -> None:
+        # What PostgresStore's CHECK constraints would refuse, refused here too,
+        # so a new kind or actor cannot pass the in-memory suite and fail in Neon.
+        if kind not in EVENT_KINDS:
+            raise ValueError(f"event kind {kind!r} violates event_logs.kind CHECK")
+        if actor not in EVENT_ACTORS:
+            raise ValueError(f"event actor {actor!r} violates event_logs.actor CHECK")
         self.events.append(
             {"session_id": session_id, "kind": kind, "actor": actor, "payload": payload,
              "ts": datetime.now(timezone.utc).isoformat()}
@@ -248,6 +275,8 @@ class MemoryStore:
 
     async def register_exchange(self, id: str, name: str, region: str, api: str,
                                 link: str, joshua: str, operator: str | None) -> bool:
+        if joshua not in EXCHANGE_JOSHUAS:
+            raise ValueError(f"joshua {joshua!r} violates exchanges.joshua CHECK")
         if id in self.exchanges:
             return False
         self.exchanges[id] = {"id": id, "name": name, "region": region,

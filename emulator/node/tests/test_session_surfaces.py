@@ -35,26 +35,18 @@ import re
 from pathlib import Path
 
 from app.main import DEFAULT_LINKS
+from constrainttext import constraint_values
 
 PACK = Path(__file__).resolve().parents[3]
-MIGRATIONS = PACK / "emulator" / "node" / "db" / "migrations"
+MIGRATIONS = PACK / "emulator" / "node" / "db" / "migrations"  # named in a failure message
 RELAY_CONFIG = PACK / "emulator" / "relay" / "src" / "config.ts"
 
 
 def _constraint_surfaces() -> set[str]:
-    """Every surface named by the newest sessions_surface_check in the migrations."""
-    sql = "\n".join(
-        p.read_text() for p in sorted(MIGRATIONS.glob("*.sql"))
-    )
-    # The LAST definition wins — migrations are forward-only, so a later file
-    # replacing the constraint is the one the database ends up with.
-    blocks = re.findall(
-        r"constraint\s+sessions_surface_check\s+check\s*\(\s*surface\s+in\s*\((.*?)\)\s*\)",
-        sql,
-        re.S | re.I,
-    )
-    assert blocks, "no sessions_surface_check constraint found in the migrations"
-    return set(re.findall(r"'([^']+)'", blocks[-1]))
+    """Every surface the newest sessions_surface_check allows. The text reader
+    was lifted into constrainttext.py when #91 applied the same guard to the
+    other enumerated columns; see test_check_constraints.py."""
+    return constraint_values("sessions", "surface")
 
 
 def _relay_surfaces() -> set[str]:
