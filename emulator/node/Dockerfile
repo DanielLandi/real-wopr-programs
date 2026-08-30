@@ -16,6 +16,7 @@ COPY pack.json ./
 COPY games ./games
 COPY systems ./systems
 COPY joshua ./joshua
+COPY wopr ./wopr
 RUN tools/build.sh && tools/test.sh
 
 FROM python:3.12-slim
@@ -28,10 +29,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ".[prod]"
 
-# The built program pack: games/systems/joshua sources, manifests, and binaries
-# in the pack layout (<cat>/<id>/harness/bin/<binary>). The system wrappers
-# (school-mon, school, protovision) resolve their source relative to the binary, so the
-# whole pack tree is copied, not just the binaries.
+# The built program pack: games/systems/joshua/wopr sources, manifests, and
+# binaries in the pack layout (<cat>/<id>/harness/bin/<binary>). The system
+# wrappers (school-mon, school, protovision) resolve their source relative to
+# the binary, so the whole pack tree is copied, not just the binaries.
 COPY --from=programs /src /opt/wopr/pack
 
 # Smoke: each SYSTEM/1 system must actually run in the runtime image (proves the
@@ -46,6 +47,10 @@ RUN printf 'SYSTEM/1 protovision CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/protovision/harness/bin/protovision | grep -q PROTOVISION
 RUN printf 'SYSTEM/1 pactel CONNECT\nSTATE 0\nEND\n' \
       | /opt/wopr/pack/systems/pactel/harness/bin/pactel | grep -q 'PACIFIC TELEPHONE'
+# The executive is on every terminal turn, so an image without it is an image
+# that cannot route a single line — worth its own smoke test, not just a COPY.
+RUN printf 'SYSTEM/1 wopr INPUT\nSTATE 0\nINPUT JOSHUA\nFACTS 1\nSURFACE home-terminal\nEND\n' \
+      | /opt/wopr/pack/wopr/harness/bin/wopr | grep -q 'GREETINGS PROFESSOR FALKEN.'
 
 ENV BRIDGE_GAMES_DIR=/opt/wopr/pack/games \
     BRIDGE_SYSTEMS_DIR=/opt/wopr/pack/systems \

@@ -32,6 +32,14 @@ class Settings:
             os.environ.get("BRIDGE_SYSTEMS_DIR", str(_pack_root() / "systems"))
         )
     )
+    # The W.O.P.R. executive: <pack>/wopr/harness/bin/wopr. This is the
+    # directory it sits under, not the binary, so it is resolved exactly the
+    # way a system's is.
+    executive_dir: Path = field(
+        default_factory=lambda: Path(
+            os.environ.get("BRIDGE_EXECUTIVE_DIR", str(_pack_root()))
+        )
+    )
     system_timeout_s: float = field(default_factory=lambda: float(os.environ.get("BRIDGE_SYSTEM_TIMEOUT_S", "2")))
     core_timeout_s: float = field(default_factory=lambda: float(os.environ.get("BRIDGE_CORE_TIMEOUT_S", "2")))
     core_pool_size: int = field(default_factory=lambda: int(os.environ.get("BRIDGE_CORE_POOL_SIZE", "4")))

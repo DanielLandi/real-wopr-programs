@@ -234,7 +234,8 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
     router = Router(runner, store, engines, catalog,
                     joshua_session_cap=settings.joshua_session_cap, locks=locks,
                     operators=parse_roster(settings.wopr_operators),
-                    default_engine=default_engine)
+                    default_engine=default_engine,
+                    executive_dir=settings.executive_dir)
     gtw_hub = GtwRoomHub(store, runner, catalog, locks)
     systems = load_systems(settings.systems_dir)
     # The dial-in phone book (systems) and the full program registry (programs)

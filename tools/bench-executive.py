@@ -11,18 +11,25 @@ a spawn cost discovered after the whole executive exists is discovered too late.
 This is that measurement, kept in the tree so it can be re-run. It measures
 three things through the real harness classes, not a mock of them:
 
-  A  a bridge turn today   Router.handle("STATUS") — decided in Python, no
-                           subprocess at all. The cheapest turn there is.
-  B  a game turn today     Router.handle("<move>") on tictactoe — two core
-                           spawns, the human's move and W.O.P.R.'s own reply.
-                           The most expensive ordinary turn there is.
+  A  a bridge turn         Router.handle("STATUS") — the cheapest turn there
+                           is. Before the executive landed this cost nothing
+                           at all: it was decided in Python with no
+                           subprocess. It is now one executive spawn.
+  B  a game turn           Router.handle("<move>") on tictactoe — the most
+                           expensive ordinary turn there is. Two core spawns
+                           (the human's move, then W.O.P.R.'s own reply) and
+                           three executive spawns: the one that asks for the
+                           first move, the one that is resumed with it and asks
+                           for the second, and the one that prints the answer.
   C  one executive spawn   SystemRunner.run("wopr", ...) against the built
                            wopr binary, carrying the frame the executive
                            really receives: STATE, INPUT, and a full FACTS
                            block (spec E7 sends the facts every turn).
 
-The projected per-turn cost is A+C for a bridge turn and B+C for a game turn:
-the executive spawns once per turn either way.
+Run before the executive existed, A and B were the baseline and the projection
+was A+C and B+C. Run after, A and B are the real thing and C is the isolated
+cost of the piece that was added — so the same tool answers "what will this
+cost" and "what did it cost", and the two can be compared.
 
     tools/bench-executive.py [iterations]     # default 300
 
@@ -55,29 +62,38 @@ WARM = 20
 # stored game row, and the four session facts. This is what rides in on every
 # turn, so it is what the measurement pays for.
 FACTS_LINES = [
-    "GAME FALKENS-MAZE PLACEHOLDER FALKEN'S MAZE",
-    "GAME BLACKJACK PLACEHOLDER BLACK JACK",
-    "GAME GIN-RUMMY IMPLEMENTED GIN RUMMY",
-    "GAME HEARTS IMPLEMENTED HEARTS",
-    "GAME BRIDGE PLACEHOLDER BRIDGE",
-    "GAME CHECKERS IMPLEMENTED CHECKERS",
-    "GAME CHESS PLACEHOLDER CHESS",
-    "GAME POKER IMPLEMENTED POKER",
-    "GAME FIGHTER-COMBAT PLACEHOLDER FIGHTER COMBAT",
-    "GAME GUERRILLA PLACEHOLDER GUERRILLA ENGAGEMENT",
-    "GAME DESERT-WARFARE PLACEHOLDER DESERT WARFARE",
-    "GAME AIR-TO-GROUND PLACEHOLDER AIR-TO-GROUND ACTIONS",
-    "GAME THEATER-TACTICAL PLACEHOLDER THEATERWIDE TACTICAL WARFARE",
-    "GAME THEATER-BIOTOXIC PLACEHOLDER THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE",
-    "GAME TICTACTOE IMPLEMENTED TIC-TAC-TOE",
-    "GAME GTW IMPLEMENTED GLOBAL THERMONUCLEAR WAR",
-    "GAMEROW TICTACTOE PLAYING 4",
+    "SURFACE home-terminal",
+    "ROOM -",
     "DEFCON 5",
-    "CLEARANCE 0",
-    "SURFACE HOME-TERMINAL",
+    "CLEARANCE 5",
+    "GAMEROW tictactoe PLAYING 4 core",
+    "GAME falkens-maze PLACEHOLDER RECITED FALKEN'S MAZE",
+    "GAME blackjack IMPLEMENTED RECITED BLACK JACK",
+    "GAME gin-rummy IMPLEMENTED RECITED GIN RUMMY",
+    "GAME hearts IMPLEMENTED RECITED HEARTS",
+    "SELFRES hearts",
+    "GAME bridge PLACEHOLDER RECITED BRIDGE",
+    "GAME checkers IMPLEMENTED RECITED CHECKERS",
+    "GAME chess PLACEHOLDER RECITED CHESS",
+    "GAME poker IMPLEMENTED RECITED POKER",
+    "GAME fighter-combat PLACEHOLDER RECITED FIGHTER COMBAT",
+    "GAME guerrilla PLACEHOLDER RECITED GUERRILLA ENGAGEMENT",
+    "GAME desert-warfare PLACEHOLDER RECITED DESERT WARFARE",
+    "GAME air-to-ground PLACEHOLDER RECITED AIR-TO-GROUND ACTIONS",
+    "GAME theater-tactical PLACEHOLDER RECITED THEATERWIDE TACTICAL WARFARE",
+    "GAME theater-biotoxic PLACEHOLDER RECITED THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE",
+    "GAME tictactoe IMPLEMENTED UNLISTED TIC-TAC-TOE",
+    "ABBREV tictactoe TTT",
+    "SYNTAX tictactoe 0|1|2 players, X|O, cell 1-9, observe, yes|no",
+    "INTERP tictactoe core core",
+    "INTERP tictactoe heuristic daniel",
+    "GAME gtw IMPLEMENTED TRAILING GLOBAL THERMONUCLEAR WAR",
+    "ABBREV gtw GTW",
 ]
 FACTS = "\n".join(FACTS_LINES)
-STATE = "MODE JOSHUA\nBACKDOOR 1\nFAILURES 0\nTURNS 7"
+STATE = "\n".join(["MODE JOSHUA - - BACKDOOR", "PARENT JOSHUA", "BACKDOOR 1",
+                   "PENDING -", "FAILURES 0", "TURNS 7", "PHASE -",
+                   "PA1 -", "PA2 -"])
 
 
 def stats(samples: list[float]) -> str:
@@ -103,7 +119,7 @@ async def main() -> int:
 
     session = await store.create_session("home-terminal", "modem-1200", None)
     sid = session.id
-    router.open_backdoor(sid)
+    await router.open_backdoor(sid)
 
     # A — a turn the bridge answers by itself.
     for _ in range(WARM):
@@ -163,14 +179,14 @@ async def main() -> int:
         _sr.build_system_request = _build
 
     print()
-    print("A  bridge turn today   (no spawn)      ", stats(a))
-    print("B  game turn today     (2 core spawns) ", stats(b))
-    print("C  executive spawn     (wopr)          ", stats(c))
+    print("A  a bridge turn      ", stats(a))
+    print("B  a game turn        ", stats(b))
+    print("C  one executive spawn", stats(c))
     print()
-    print("projected bridge turn  A+C   mean %6.2f ms"
-          % ((statistics.mean(a) + statistics.mean(c)) * 1000))
-    print("projected game turn    B+C   mean %6.2f ms"
-          % ((statistics.mean(b) + statistics.mean(c)) * 1000))
+    one = statistics.mean(c)
+    print("one executive spawn is %5.2f ms; a bridge turn is one of them, and a"
+          % (one * 1000))
+    print("game turn is three — the line, W.O.P.R.'s own reply, and the answer.")
     print()
     return 0
 

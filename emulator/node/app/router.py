@@ -741,7 +741,13 @@ class _Turn:
 # ---------------------------------------------------------------------------
 
 def _find_executive_root(runner: CoreRunner) -> Path:
-    """Where `wopr/harness/bin/wopr` lives, for this runner."""
+    """Where `wopr/harness/bin/wopr` lives, when nobody said.
+
+    Production says: `Settings.executive_dir` (`BRIDGE_EXECUTIVE_DIR`) is
+    passed in from `main.py`. This is for everyone else — a test that builds a
+    synthetic `games/` directory should still find the real executive rather
+    than have to know where it is.
+    """
     bin_dir = getattr(getattr(runner, "cfg", None), "bin_dir", None)
     candidates = []
     if bin_dir is not None:
