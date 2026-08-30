@@ -10,9 +10,11 @@ from pathlib import Path
 def _pack_root() -> Path:
     """The pack root — up out of app/, node/ and emulator/.
 
-    Layout: <pack>/emulator/node/app/config.py, with the program trees
-    (games/, systems/, joshua/) at <pack>/. The programs no longer arrive via
-    tools/import-programs.sh into build/pack; they are siblings of emulator/.
+    Layout: <pack>/emulator/node/app/config.py, with the program trees at
+    <pack>/ — one per category pack.json declares (tools/categories.sh lists
+    them; this docstring does not, so it cannot go stale). The programs no
+    longer arrive via tools/import-programs.sh into build/pack; they are
+    siblings of emulator/.
     """
     return Path(__file__).resolve().parent.parent.parent.parent
 
