@@ -1,9 +1,11 @@
 """The federation's shape, as declared by the pack.
 
 Networks are global and few, so they live in pack.json. Node declarations live
-with the program that is the node (its harness/manifest.json), except for
-composite hosts that have no period source yet — those wait in pack.json's
-`nodes` section until someone writes them.
+with the program that is the node (its harness/manifest.json) — every one of
+them, now that the executive is a program (`wopr/harness/manifest.json`). A
+pack.json `nodes` section is still read as a waiting room for a node that has
+no period source yet; this pack's is empty, and the validator warns about any
+entry a pack puts there.
 
 This module only loads and shapes. Every rejection rule lives in
 topology_validate.py, so the rules can be read as a list.
@@ -90,6 +92,16 @@ def _node_from(node_id: str, title: str, block: dict, source: str,
     )
 
 
+def _program_manifests(pack_root: Path, data: dict) -> list[Path]:
+    """Every program manifest, at the depths the pack contract uses:
+    `<cat>/harness` (joshua, wopr, norad), `<cat>/<id>/harness` (games,
+    systems), `<cat>/<id>/<interpretation>/harness` (tictactoe). Bounded to the
+    categories pack.json declares, so `emulator/` can never be swept in."""
+    cats = sorted({p["path"].split("/")[0] for p in data.get("programs", [])})
+    return [m for c in cats for depth in ("harness", "*/harness", "*/*/harness")
+            for m in sorted(pack_root.glob(f"{c}/{depth}/manifest.json"))]
+
+
 def load_nodes(pack_root: Path) -> dict[str, NodeDecl]:
     """Node declarations from program manifests, plus the pack.json waiting room.
 
@@ -98,8 +110,9 @@ def load_nodes(pack_root: Path) -> dict[str, NodeDecl]:
     WOPR runs for you.
     """
     out: dict[str, NodeDecl] = {}
+    data = json.loads((pack_root / "pack.json").read_text())
 
-    for manifest in sorted(pack_root.glob("*/*/harness/manifest.json")):
+    for manifest in _program_manifests(pack_root, data):
         m = json.loads(manifest.read_text())
         block = m.get("node")
         if block is None:
@@ -109,7 +122,6 @@ def load_nodes(pack_root: Path) -> dict[str, NodeDecl]:
             m.get("protocol", "SYSTEM/1"),
         )
 
-    data = json.loads((pack_root / "pack.json").read_text())
     for node_id, block in data.get("nodes", {}).items():
         out[node_id] = _node_from(
             node_id, block.get("title", node_id), block, "pack.json", "SYSTEM/1",

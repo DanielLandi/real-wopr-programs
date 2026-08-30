@@ -16,9 +16,10 @@ CALL is dialled over a relay rather than answered in-process.
 
 Scope note: a node whose id is itself a program (school, airline, school-db …)
 serves that program directly, which is the common case and the whole of the
-school/school-db split. A *composite* host — one that only mounts others, like
-WOPR — needs the router, and that wiring lands with the WOPR executive
-(DanielLandi/real-wopr#112) rather than being faked here.
+school/school-db split. A *composite* host — one that mounts others, like
+WOPR — needs the router: the bridge (main.py) gathers the executive's facts and
+executes its calls, and that is where WOPR is served. `wopr up` skips it here
+rather than faking it.
 """
 
 from __future__ import annotations

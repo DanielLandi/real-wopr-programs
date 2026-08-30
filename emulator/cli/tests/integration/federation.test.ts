@@ -137,7 +137,7 @@ test("the federation, end to end", async (t) => {
                     "airline", "pactel", "protovision", "reference", "umb"]) {
     assert.ok(fed.nodes.has(id), `${id} was not started`);
   }
-  // WOPR mounts others and needs the router; it is skipped, not faked.
+  // WOPR mounts others and needs the router (the bridge); it is skipped, not faked.
   assert.equal(fed.nodes.has("wopr"), false);
 });
 
@@ -205,9 +205,9 @@ test("the federation, end to end", async (t) => {
     // on norad, and the same program answers on both.
     //
     // WOPR is meant to be *the* dual-homed machine — a bedroom phone line on
-    // one side, the missiles on the other — but it has no period source yet,
-    // so it is skipped rather than faked (#112). reference proves the runtime
-    // can carry it.
+    // one side, the missiles on the other — and its manifest says so, but it
+    // is a composite host the bridge serves, so `up` skips it rather than
+    // fakes it. reference proves the runtime can carry it.
     const overPhone = await dialTracked(relays.pstn, "(311) 555-0101");
     const a = await until(overPhone, "REFERENCE SYSTEM READY");
     overPhone.hangUp();

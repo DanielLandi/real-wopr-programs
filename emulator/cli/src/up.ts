@@ -87,7 +87,7 @@ export async function up(
   const out = opts.out ?? process.stdout;
 
   // A mis-declared federation fails where it is declared, not halfway through a
-  // call. Warnings are printed and do not block — that is what keeps the
+  // call. Warnings are printed and do not block — that is what keeps a
   // composite-host waiting room visible rather than comfortable.
   const errors = errorsOf(topo);
   for (const w of warningsOf(topo)) out.write(`warning ${w.code}: ${w.message}\n`);
@@ -128,10 +128,12 @@ export async function up(
     writeFileSync(relaysFile(packRoot), JSON.stringify(published, null, 2) + "\n");
 
     for (const node of Object.values(topo.nodes)) {
-      // A composite host mounts others and needs the router; the node host
-      // serves a node that is itself a program. Skip rather than pretend.
-      if (node.source === "pack.json") {
-        out.write(`  node  ${node.id.padEnd(14)} skipped — no period source yet (#112)\n`);
+      // A composite host mounts others and needs the router — the bridge,
+      // emulator/node/app/main.py, which gathers the executive's facts and
+      // executes its calls. The node host serves a node that is itself a
+      // program, and nothing else. Skip rather than pretend.
+      if (node.mounts.length > 0) {
+        out.write(`  node  ${node.id.padEnd(14)} skipped — a composite host; the bridge serves it\n`);
         continue;
       }
       const args = ["-m", "app.noderun", "--pack", packRoot, "--node", node.id];

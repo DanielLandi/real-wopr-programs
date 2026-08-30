@@ -92,7 +92,11 @@ does not use.
 and keeps the terminal, `EXEC` gives the terminal away.
 
 **A program with no `node` block is not a node** — it is somebody's mount. The games are
-mounts: `GTW` is not something you dial, it is something W.O.P.R. runs for you.
+mounts: `GTW` is not something you dial, it is something W.O.P.R. runs for you. The other end
+of that is `wopr/harness/manifest.json`, which declares the composite host itself: a phone
+number on `pstn`, a hostname on `norad`, `mounts` for the games, Joshua and the console, and
+`reference` as a peer. Every node in this pack declares itself this way; `pack.json` holds
+only the networks.
 
 A node's declaration is checked before anything runs: unknown networks, duplicate addresses,
 unknown or unreachable peers, undeclared `EXEC` targets, empty mount globs and cycles are all
@@ -106,6 +110,19 @@ the connection monitor that owns a terminal session. It has the same layout as a
 golden-tested and packaged like one. What makes it different is only what it decides: the front
 door, what the terminal is attached to, the reserved words, and W.O.P.R.'s own voice. It speaks
 SYSTEM/1 and reaches the games and the dialogue processor with `CALL`.
+
+## The operator console
+
+`norad/` is the fifth category and also holds one program: **NORAD operations**, the console a
+`norad-terminal` session is attached to once its roster logon is accepted. It is observational —
+it displays what W.O.P.R. is doing (`SITREP`, `TRACKS`, `EVENTS`), commands the machine
+(`SET DEFCON n`), and refuses to `CEASE RANDOM FUNCTION` while a simulation runs — and it never
+attaches to a game, so it never loses those instruments. Joshua is not present there. The
+executive hands it each line with `CALL norad` and prints its answer; the console in turn asks the
+host for the three things it cannot do alone (`radar`, `journal`, `defcon`). Its language is
+Fortran, with the approximation stated at the top of `norad/main.f90`: JOVIAL J73 is the
+historically correct language for NORAD command and control, and no maintained compiler for it
+handles character data.
 
 ## Wire protocols
 

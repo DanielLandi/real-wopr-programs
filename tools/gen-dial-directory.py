@@ -19,9 +19,9 @@ from pathlib import Path
 PACK_ROOT = Path(__file__).resolve().parent.parent
 
 KIND_BY_TOP = {"games": "game", "systems": "system", "joshua": "joshua",
-               "wopr": "executive"}
+               "wopr": "executive", "norad": "console"}
 PROTOCOL_BY_KIND = {"game": "WOPR/1", "system": "SYSTEM/1", "joshua": "SYSTEM/1",
-                    "executive": "SYSTEM/1"}
+                    "executive": "SYSTEM/1", "console": "SYSTEM/1"}
 
 
 # Every depth the pack contract puts a harness at: <cat>/harness (joshua, wopr),

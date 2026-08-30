@@ -137,10 +137,11 @@ def test_the_real_pack_topology_is_valid():
     assert errors(problems) == [], [p.message for p in errors(problems)]
 
 
-def test_the_real_pack_warns_only_about_wopr_waiting_for_period_source():
+def test_the_real_pack_has_nothing_to_warn_about():
+    # The waiting room used to hold WOPR, and the one warning was about it.
     t = load_topology(PACK)
     pack = json.loads((PACK / "pack.json").read_text())
     programs = {p["id"] for p in pack["programs"]}
     paths = {p["id"]: p["path"] for p in pack["programs"]}
     warnings = [p for p in validate(t, programs, paths) if p.level == "warning"]
-    assert [(w.code, "wopr" in w.message) for w in warnings] == [("composite-host", True)]
+    assert warnings == []
