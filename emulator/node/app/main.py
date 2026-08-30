@@ -29,7 +29,7 @@ from .gtwhub import GtwRoomHub
 from .joshua import ClaudeJoshua, Joshua, LispJoshua, ScriptedJoshua
 from .operators import parse_roster
 from .rooms import RoomLocks
-from .router import Router
+from .router import ExecutiveUnavailable, Router
 from .runner import CoreRunner, RunnerConfig
 from .session_turn import run_session_turn
 from .store import make_store, normalize_room_code
@@ -184,6 +184,15 @@ def build_engines(settings, catalog, budget=None) -> dict[str, "Joshua"]:
                               settings.joshua_timeout_s)
         engines[METERED_ENGINE] = MeteredJoshua(claude, budget) if budget else claude
     return engines
+
+
+def _fault_cause(exc: BaseException) -> str:
+    """The EVENTS-row word for why a system turn failed."""
+    if isinstance(exc, SystemBusy):
+        return "busy"
+    if isinstance(exc, SystemTimeout):
+        return "timeout"
+    return "fault"
 
 
 def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
@@ -480,6 +489,32 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             seq += 1
             return json.dumps(env)
 
+        async def drop_line(cause: str, exc: BaseException, at: str) -> None:
+            """A fault the visitor cannot act on: log it, leave an EVENTS row,
+            close the socket cleanly.
+
+            One policy for both paths that can hit it — a system-bound session
+            whose binary is missing, and a terminal turn whose executive is
+            (#99). The visitor sees a hang-up either way; a clean close means
+            the comms layer announces NO CARRIER as it does for any other
+            drop, rather than the socket dying with a 500 that no terminal
+            can render. What must NOT be lost is the operator's view: the
+            log line names the binary, and the EVENTS row makes the drop
+            visible in session history, where before neither path left one.
+            Loud-in-the-transport was the alternative, and was rejected: a
+            deploy that ships source without a binary (real-wopr#206) would
+            fire this on every turn of every session, and a 500 storm is
+            harder to read than one row per line that says why.
+            """
+            payload = {"event": "line-dropped", "cause": cause, "at": at,
+                       "detail": str(exc)}
+            if session.system_id is not None:
+                payload["system"] = session.system_id
+            log.warning("%s %s failed, dropping line: %r",
+                        session.system_id or "executive", at, exc)
+            await store.log_event(session_id, "route", "system", payload)
+            await ws.close()
+
         # The system speaks first (fidelity-notes.md §1): terminals get the
         # film's LOGON: prompt as soon as the line is up. A system-bound
         # session instead dials straight into that system's own greeting.
@@ -492,9 +527,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     timeout_for=_timeout_for(programs),
                     execs_for=_execs_for(programs))
             except (SystemFault, SystemTimeout, SystemBusy) as exc:
-                log.warning("system %s CONNECT failed, dropping line: %r",
-                            session.system_id, exc)
-                await ws.close()
+                await drop_line(_fault_cause(exc), exc, "CONNECT")
                 return
             await store.set_system_state(session_id, encode_stack(resp.frames))
             # Event-log parity with the router path: a system session must be
@@ -612,9 +645,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                             timeout_for=_timeout_for(programs),
                             execs_for=_execs_for(programs))
                     except (SystemFault, SystemTimeout, SystemBusy) as exc:
-                        log.warning("system %s INPUT failed, dropping line: %r",
-                                    session.system_id, exc)
-                        await ws.close()
+                        await drop_line(_fault_cause(exc), exc, "INPUT")
                         return
                     await store.set_system_state(session_id, encode_stack(resp.frames))
                     await store.log_event(session_id, "route", "system",
@@ -645,7 +676,14 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                                                "observer": "gtw"})
                     continue
 
-                result = await router.handle(session_id, message)
+                try:
+                    result = await router.handle(session_id, message)
+                except ExecutiveUnavailable as exc:
+                    # Busy and slow were answered in character inside the
+                    # router; this is the executive being absent or
+                    # unparseable, which is a deployment fault (router.py).
+                    await drop_line("executive-unavailable", exc, "INPUT")
+                    return
                 if result.seeks and seeks is None:
                     seeks = result.seeks
                 await ws.send_text(envelope("output", f"\n{result.text}\n"))

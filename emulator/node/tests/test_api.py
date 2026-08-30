@@ -520,3 +520,66 @@ def test_a_system_sign_off_does_not_announce_the_drop_itself(client, monkeypatch
         # The line still drops, and the system's own parting words still arrive.
         assert any(f["kind"] == "output" and "PANAMAC OFF" in f["payload"] for f in frames), \
             "sign_off=%s: %r" % (sign_off, frames)
+
+
+# --- a fault the visitor cannot act on drops the line cleanly (#99) ----------
+#
+# Two adjacent paths in ws_session answer the same question: what to do when
+# the period binary behind a turn is missing or will not parse. The system-bound
+# path always logged and closed; the executive path let ExecutiveUnavailable
+# escape, closing the socket with a 500. They now agree — clean drop, one log
+# line, one EVENTS row — and these tests pin the agreement from both sides.
+
+def _drop_events(client, sid):
+    return [e for e in client.app_store.events
+            if e["session_id"] == sid and e["payload"].get("event") == "line-dropped"]
+
+
+def test_ws_a_missing_executive_drops_the_line_cleanly_and_leaves_an_event(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    from app.systemrunner import SystemFault
+
+    async def missing(*args, **kwargs):
+        raise SystemFault(None, "no binary for system 'wopr'")
+
+    client.app.state.router._exec.run = missing
+    body = make_session(client)
+    sid, token = body["session_id"], body["token"]
+    with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        assert "LOGON:" in json.loads(ws.receive_text())["payload"]
+        ws.send_text(ws_envelope(sid, "HELLO"))
+        # A clean close, not a server-side exception surfacing through the
+        # socket: TestClient re-raises anything that escapes the endpoint.
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_text()
+        assert exc.value.code == 1000
+
+    rows = _drop_events(client, sid)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "route" and rows[0]["actor"] == "system"
+    assert rows[0]["payload"]["cause"] == "executive-unavailable"
+    assert "no binary for system 'wopr'" in rows[0]["payload"]["detail"]
+
+
+def test_ws_a_system_that_cannot_connect_drops_the_line_and_leaves_an_event(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    from app.systemrunner import SystemFault
+
+    async def missing(*args, **kwargs):
+        raise SystemFault(None, "no binary for system 'reference'")
+
+    client.app.state.system_runner.run = missing
+    r = client.post("/api/session", json={"surface": "home-terminal", "system": "reference"})
+    sid, token = r.json()["session_id"], r.json()["token"]
+    with client.websocket_connect(f"/ws/session/{sid}?token={token}") as ws:
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_text()
+        assert exc.value.code == 1000
+
+    rows = _drop_events(client, sid)
+    assert len(rows) == 1
+    assert rows[0]["payload"]["system"] == "reference"
+    assert rows[0]["payload"]["cause"] == "fault"
+    assert rows[0]["payload"]["at"] == "CONNECT"
