@@ -370,6 +370,17 @@ contains
    subroutine take_line()
       character(len=LL) :: raw, up
 
+      ! A new line from the terminal abandons any continuation still
+      ! recorded in the COMMAREA. One can be left there when the host
+      ! could not reach the peer at all -- a pool with nothing free, a
+      ! core that never came back -- and the answer never arrived. The
+      ! turn it belonged to is over either way, and a stale PHASE would
+      ! otherwise be resumed into by the NEXT turn's reply.
+      st_phase = '-'
+      st_pa1 = '-'
+      st_pa2 = '-'
+      st_nhold = 0
+
       raw = trim(adjustl(rq_input))
       up = upcase(raw)
 

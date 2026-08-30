@@ -139,3 +139,68 @@ def test_a_clearance_code_never_rides_in_the_facts_block():
     assert "HAS NORAD-3" in out
     # The executive asks; it does not carry a roster of its own to check.
     assert "TIGERTEAM" not in SOURCE
+
+
+# --- when the machine cannot reach its own executive ------------------------
+
+def test_a_saturated_pool_is_answered_in_character_not_by_a_dead_socket():
+    """A busy or slow executive is transient and was always said in character.
+
+    Before phase 2 a saturated core pool printed ALL WOPR PROCESSORS
+    COMMITTED and the line stayed up. The executive being on every turn must
+    not turn that into a dropped session — only a *missing* or unparseable
+    executive is a deployment fault worth failing loudly on.
+    """
+    import asyncio
+
+    from app.games import load_catalog
+    from app.joshua import ScriptedJoshua
+    from app.router import ExecutiveUnavailable, Router
+    from app.runner import CoreRunner, RunnerConfig
+    from app.store import MemoryStore
+    from app.systemrunner import SystemBusy, SystemFault, SystemTimeout
+
+    async def turn_with(failure: Exception):
+        store = MemoryStore()
+        catalog = load_catalog(REPO / "games")
+        runner = CoreRunner(RunnerConfig(bin_dir=REPO / "games"))
+        joshua = ScriptedJoshua({g.id: g.title for g in catalog.values()
+                                 if g.status == "implemented"})
+        router = Router(runner, store, {"scripted": joshua}, catalog)
+        session = await store.create_session("home-terminal", "dialup-300", None)
+
+        async def refuse(*args, **kwargs):
+            raise failure
+
+        router._exec.run = refuse
+        return await router.handle(session.id, "HELLO")
+
+    busy = asyncio.run(turn_with(SystemBusy("pool full")))
+    assert busy.text == R.CORE_BUSY_TEXT
+    assert busy.prompt == ">"
+
+    slow = asyncio.run(turn_with(SystemTimeout("no answer")))
+    assert slow.text == R.CORE_TIMEOUT_TEXT
+
+    # A missing binary is not transient and must not be dressed up as one.
+    try:
+        asyncio.run(turn_with(SystemFault(None, "no binary for system 'wopr'")))
+    except ExecutiveUnavailable:
+        pass
+    else:                                        # pragma: no cover
+        raise AssertionError("a missing executive must fail loudly")
+
+
+@needs_executive
+def test_a_new_line_abandons_a_continuation_that_never_got_its_answer():
+    # Pinned byte-exact by wopr/harness/tests/15-*, and here because the
+    # consequence is the one that matters: the NEXT turn's reply must not be
+    # resumed into a stale phase.
+    out = run_executive(
+        ["MODE GAME tictactoe - BACKDOOR", "PARENT JOSHUA", "BACKDOOR 1",
+         "PENDING -", "FAILURES 0", "TURNS 3", "PHASE MOVE2", "PA1 tictactoe",
+         "PA2 -", "HOLD 1", " X | . | ."],
+        "STATUS", ["SURFACE home-terminal", "GAMEROW tictactoe PLAYING 4 core"])
+    assert "PHASE -" in out
+    assert "HOLD" not in out
+    assert "SIMULATION: TICTACTOE TURN 4" in out

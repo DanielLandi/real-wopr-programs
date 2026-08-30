@@ -127,12 +127,27 @@ class RouteResult:
 
 
 class ExecutiveUnavailable(RuntimeError):
-    """The executive could not be spawned or did not answer in the protocol.
+    """The executive is not there, or did not answer in the protocol.
 
     Raised rather than papered over: a bridge that quietly fell back to
     deciding routing in Python would be a second, undocumented executive with
-    its own behaviour, and nobody would find out until the two disagreed.
+    its own behaviour, and nobody would find out until the two disagreed. A
+    missing or unparseable executive is a deployment fault and should read
+    like one.
+
+    Note what this is NOT: a saturated pool or a slow spawn. Those are
+    ordinary and transient, they were answered in character before the
+    executive existed, and they are answered in character below.
     """
+
+
+class _ExecutiveBusy(Exception):
+    """Transient: no slot, or no answer in time. Carries what to say."""
+
+    def __init__(self, text: str, reason: str):
+        super().__init__(reason)
+        self.text = text
+        self.reason = reason
 
 
 class Router:
@@ -375,36 +390,70 @@ class _Turn:
         was_backdoor = self.r._header(self.sid).backdoor
 
         try:
-            reply: Reply | None = None
-            for _ in range(MAX_CALL_DEPTH + 1):
-                resp = await self._spawn(raw if reply is None else None, facts, reply)
-                self.r._state[self.sid] = resp.state
-                if resp.call is None:
-                    if self.r._header(self.sid).backdoor and not was_backdoor:
-                        # The backdoor is the executive's decision; the host
-                        # learns of it from the header, and has to, because the
-                        # session becomes authenticated by it and Joshua's
-                        # history needs the greeting he just gave — joshua.py
-                        # reads `last_assistant` and would otherwise repeat it.
-                        self.r._authenticated.add(self.sid)
-                        self.r._joshua_history.setdefault(self.sid, []).append(
-                            {"role": "assistant", "content": BACKDOOR_GREETING})
-                        self._set_detail({"backdoor": True})
-                    return RouteResult(text=resp.display, route=self.route,
-                                       detail=self.detail,
-                                       prompt=resp.prompt or ">", seeks=self.seeks)
-                reply = await self._execute(resp.call.peer, resp.call.payload)
-            raise ExecutiveUnavailable(
-                f"executive chained more than {MAX_CALL_DEPTH} calls in one turn")
+            return await self._loop(raw, facts, was_backdoor)
+        except _ExecutiveBusy as exc:
+            # The machine could not get to its own executive. Said in
+            # character, the way a busy core has always been said, and the
+            # COMMAREA is left exactly as it was — the next line the terminal
+            # sends abandons the continuation this turn never finished.
+            await self.r.store.log_event(self.sid, "error", "system",
+                                         {"executive": exc.reason})
+            return RouteResult(text=exc.text, route="bridge",
+                               detail={"error": exc.reason},
+                               prompt=self._prompt_from_state())
         finally:
             await self._unlock()
+
+    def _prompt_from_state(self) -> str:
+        """The prompt for a turn that never reached the executive.
+
+        Derived from the header the last completed turn left behind, so a
+        player whose move hit a busy pool keeps `[TTT]>` rather than being
+        silently dropped back to a bare `>`.
+        """
+        head = self.r._header(self.sid)
+        if head.mode == GAME:
+            game = self.r.catalog.get(head.program)
+            tag = (game.abbrev if game and game.abbrev else head.program)
+            return f"[{tag.upper()}]>"
+        if head.mode == NORAD_OPS:
+            return "[NORAD]>"
+        return ">"
+
+    async def _loop(self, raw: str, facts: str, was_backdoor: bool) -> RouteResult:
+        """Spawn, and keep spawning for as long as it asks for something."""
+        reply: Reply | None = None
+        for _ in range(MAX_CALL_DEPTH + 1):
+            resp = await self._spawn(raw if reply is None else None, facts, reply)
+            self.r._state[self.sid] = resp.state
+            if resp.call is None:
+                if self.r._header(self.sid).backdoor and not was_backdoor:
+                    # The backdoor is the executive's decision; the host learns
+                    # of it from the header, and has to, because the session
+                    # becomes authenticated by it and Joshua's history needs
+                    # the greeting he just gave — joshua.py reads
+                    # `last_assistant` and would otherwise repeat it.
+                    self.r._authenticated.add(self.sid)
+                    self.r._joshua_history.setdefault(self.sid, []).append(
+                        {"role": "assistant", "content": BACKDOOR_GREETING})
+                    self._set_detail({"backdoor": True})
+                return RouteResult(text=resp.display, route=self.route,
+                                   detail=self.detail,
+                                   prompt=resp.prompt or ">", seeks=self.seeks)
+            reply = await self._execute(resp.call.peer, resp.call.payload)
+        raise ExecutiveUnavailable(
+            f"executive chained more than {MAX_CALL_DEPTH} calls in one turn")
 
     async def _spawn(self, user_input: str | None, facts: str,
                      reply: Reply | None):
         try:
             return await self.r._exec.run("wopr", "INPUT", self.r._state.get(self.sid),
                                           user_input, reply=reply, facts=facts)
-        except (SystemFault, SystemTimeout, SystemBusy) as exc:
+        except SystemBusy as exc:
+            raise _ExecutiveBusy(CORE_BUSY_TEXT, f"busy: {exc}") from exc
+        except SystemTimeout as exc:
+            raise _ExecutiveBusy(CORE_TIMEOUT_TEXT, f"timeout: {exc}") from exc
+        except SystemFault as exc:
             raise ExecutiveUnavailable(f"executive did not answer: {exc}") from exc
 
     # -- the room lock --------------------------------------------------------
