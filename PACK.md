@@ -98,12 +98,22 @@ A node's declaration is checked before anything runs: unknown networks, duplicat
 unknown or unreachable peers, undeclared `EXEC` targets, empty mount globs and cycles are all
 rejected.
 
+## The executive
+
+`wopr/` is the pack's fourth category and holds exactly one program: **the W.O.P.R. executive**,
+the connection monitor that owns a terminal session. It has the same layout as any other program
+— source at the top, `harness/{manifest.json,build.sh,tests/}` beside it — and is built,
+golden-tested and packaged like one. What makes it different is only what it decides: the front
+door, what the terminal is attached to, the reserved words, and W.O.P.R.'s own voice. It speaks
+SYSTEM/1 and reaches the games and the dialogue processor with `CALL`.
+
 ## Wire protocols
 
 A program speaks exactly one line-oriented ASCII protocol, named in `pack.json`:
 
 - **WOPR/1** — the games. `WOPR/1 <id> <NEW|MOVE|QUERY>` in; opaque state + display + status out.
-- **SYSTEM/1** — the dial-in systems. `SYSTEM/1 <id> <CONNECT|INPUT>` in; state + display out.
+- **SYSTEM/1** — the dial-in systems and the executive. `SYSTEM/1 <id> <CONNECT|INPUT>` in;
+  state + display out.
 - **JOSHUA/1** — the dialogue engine. A `CHAT` frame carrying the conversation `HISTORY` in; a
   reply out.
 
@@ -143,6 +153,27 @@ nothing else running, and a golden fixture just carries a canned `REPLY`.
 
 `systems/school-db` is the worked example — the school district's records as a separate
 program, reached over the local bus rather than a phone line.
+
+### Telling a program what it cannot know
+
+A SYSTEM/1 request may carry one optional `FACTS` block, after `INPUT` and
+before any `REPLY`:
+
+```
+FACTS 4
+GAME GTW IMPLEMENTED TRAILING GLOBAL THERMONUCLEAR WAR
+GAMEROW GTW PLAYING 4
+DEFCON 5
+SURFACE HOME-TERMINAL
+```
+
+Card images, counted like `STATE`, carrying what the program cannot know for
+itself: durable state that other surfaces share and can change behind its back.
+They are sent **every turn** rather than seeded once, so a program never decides
+from a cached copy of something that has since moved, and stays a pure function
+of `(frame, STATE)`. The block's contents are between the host and that one
+program; a program that ignores it parses exactly as it did before the block
+existed.
 
 ### Asking the user for something
 

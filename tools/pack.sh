@@ -8,5 +8,5 @@ cd "$(dirname "$0")/.."
 mkdir -p dist
 tar --exclude='*/harness/bin' --exclude='./dist' --exclude='./.git' \
     -czf dist/real-wopr-programs.woprpack \
-    pack.json PACK.md games systems joshua
+    pack.json PACK.md games systems joshua wopr
 echo "packed: dist/real-wopr-programs.woprpack"

@@ -6,7 +6,7 @@ absent without stopping the others.
 
 | Language | Programs | Tool | macOS (Homebrew) | Debian / Ubuntu |
 |---|---|---|---|---|
-| Fortran | all `games/` | `gfortran` | `brew install gcc` | `apt install gfortran` |
+| Fortran | all `games/`, `wopr/` | `gfortran` | `brew install gcc` | `apt install gfortran` |
 | Common Lisp | `joshua/` | `sbcl` | `brew install sbcl` | `apt install sbcl` |
 | COBOL | `airline`, `reference`, `umb` | `cobc` (GnuCOBOL) | `brew install gnucobol` | `apt install gnucobol` |
 | C | `pactel` | `cc` / `gcc` | Xcode Command Line Tools | `apt install gcc` |

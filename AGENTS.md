@@ -1,8 +1,9 @@
 # real-wopr-programs
 
 The WOPR Program Pack: the period-language programs behind [realwopr.ai](https://realwopr.ai)
-— Fortran games (`games/`), the Lisp Joshua (`joshua/`), the SYSTEM/1 systems (`systems/`) —
-plus the modern harness that runs them (`emulator/`). A clone is self-sufficient; `emulator/README.md`
+— Fortran games (`games/`), the Lisp Joshua (`joshua/`), the SYSTEM/1 systems (`systems/`),
+and the Fortran executive that decides what your terminal is talking to (`wopr/`) — plus the
+modern harness that runs them (`emulator/`). A clone is self-sufficient; `emulator/README.md`
 has the run commands.
 
 **Read `CONTRIBUTING.md` before touching a program.** It carries the rules that silently break
@@ -26,7 +27,7 @@ tier vocabulary.
 ```bash
 make build                 # all categories
 make test                  # all golden fixtures
-tools/test.sh games        # or: joshua | systems
+tools/test.sh games        # or: joshua | systems | wopr
 tools/behavior.sh          # tictactoe self-play + GTW convergence
 ```
 

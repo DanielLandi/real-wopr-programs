@@ -30,7 +30,7 @@ reporting path.
 
 ## Which half are you changing?
 
-**A program** (`games/`, `systems/`, `joshua/`) — stay in period. Fortran within F77/F90
+**A program** (`games/`, `systems/`, `joshua/`, `wopr/`) — stay in period. Fortran within F77/F90
 constructs, Lisp within CLtL1-era forms, no modern conveniences. Golden fixtures are the test
 suite and must reproduce byte-exact. Document approximations rather than hiding them.
 
@@ -40,6 +40,20 @@ period constraints apply; the harness is a modern emulator and says so.
 The line matters: the harness must never reach inside a program. It speaks `WOPR/1`,
 `SYSTEM/1` and `JOSHUA/1`, and treats every `STATE` block as opaque.
 
+**One documented exception**, and only one: `wopr/`, the executive, is a program the harness
+*is the I/O of* — the same relationship [PACK.md](./PACK.md) already describes for a mount's
+`CALL` payload, whose first line the harness reads. The executive's `STATE` block opens with a
+header line the harness reads and nothing else:
+
+```
+MODE <FRONT-DOOR|JOSHUA|GAME|NORAD-OPS> <program|-> <PENDING|-> <BACKDOOR|->
+```
+
+That is what tells a reconnecting terminal whether it is still at the front door and must be
+re-greeted, and what makes the harness write `[REDACTED]` into the event log instead of an
+operator's access code. Everything below that line is the executive's own business, and no
+other program's `STATE` is read at all.
+
 ## The contract: golden fixtures
 
 Each program's `harness/tests/` holds golden fixtures — `NN-name.in` paired with `NN-name.out`.
@@ -48,6 +62,7 @@ binary. Fixtures whose name contains `error` must exit non-zero (a well-formed p
 
 ```
 make test                                      # every program
+tools/test.sh wopr                             # one category: games | systems | joshua | wopr
 games/hearts/harness/build.sh                  # build one program
 games/hearts/harness/bin/hearts < games/hearts/harness/tests/01-new.in
 ```
