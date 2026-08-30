@@ -248,3 +248,144 @@ test("NO CARRIER on an answered seat also reaches a listener as a frame", (t) =>
   assert.equal(events.at(-1).type, "frame");
   assert.equal(events.at(-1).frame.payload, "NO CARRIER");
 });
+
+// --- reconnect --------------------------------------------------------------
+// "A seat outlives every call" is the load-bearing claim of the whole callback
+// design, and it was true only of calls — not of the seat's own socket. A
+// tunnel blip or an exchange redeploy ended the seat for the life of the page,
+// and the visitor saw nothing: they could still dial out, they simply could
+// never be rung back again (#78 item 1).
+
+const RETRY_BASE_MS = 750;
+const RETRY_MAX_MS = 30_000;
+
+/** Drive a fake socket through a full seating: open, SEAT?, SEAT <token>. */
+function seatIt(ws, token) {
+  ws.readyState = OPEN;
+  ws.onopen?.();
+  ws.onmessage?.({ data: control(`SEAT ${token}`) });
+}
+
+test("a dropped seat forgets its token at once", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  seatIt(made[0], "TOK1");
+  assert.equal(seat.token, "TOK1");
+
+  made[0].dropCarrier();
+
+  // The half of the fix that matters even if every reconnect fails: page.tsx
+  // reads seat.token per dial, so an undefined one omits ?seat= and the
+  // visitor honestly dials a call that cannot be rung back. A token minted
+  // against a leg the hub has reaped mints nothing, and costs a refusal.
+  assert.equal(seat.token, undefined,
+    "a stale token is strictly worse than no token");
+});
+
+test("a dropped seat redials and asks for a new token", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  seatIt(made[0], "TOK1");
+  made[0].dropCarrier();
+
+  assert.equal(made.length, 1, "the redial waits out the backoff, it does not spin");
+  t.mock.timers.tick(RETRY_BASE_MS);
+  assert.equal(made.length, 2, "a dropped seat must come back");
+
+  // A reconnect is a full re-handshake: there is no resume verb in the /seat
+  // vocabulary, and the hub never volunteers a token.
+  made[1].readyState = OPEN;
+  made[1].onopen?.();
+  assert.deepEqual(made[1].sent.map((s) => JSON.parse(s).payload), ["SEAT?"]);
+  made[1].onmessage?.({ data: control("SEAT TOK2") });
+  assert.equal(seat.token, "TOK2", "the new leg's token replaces the reaped one");
+});
+
+test("a drop is still announced, so the call riding it is not left on screen", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  const events = [];
+  seat.onEvent((e) => events.push(e));
+  seat.connect();
+  seatIt(made[0], "TOK1");
+  made[0].dropCarrier();
+
+  // Reconnecting repairs the seat, not the call that was riding it. A visitor
+  // mid-ring or on an answered callback must still be returned to the prompt.
+  assert.deepEqual(events.map((e) => e.type), ["seated", "close"]);
+});
+
+test("the backoff doubles and then holds at its ceiling", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+
+  // Never seated: every attempt fails the same way an exchange that is down
+  // fails, which is the case the schedule exists for.
+  const waited = [];
+  for (let i = 0; i < 8; i++) {
+    const before = made.length;
+    made[before - 1].dropCarrier();
+    // Find the delay by ticking one ms at a time would be slow; tick the
+    // expected amount minus one, assert nothing happened, then the last ms.
+    const expect = Math.min(RETRY_BASE_MS * 2 ** i, RETRY_MAX_MS);
+    t.mock.timers.tick(expect - 1);
+    assert.equal(made.length, before, `attempt ${i + 1} fired before ${expect}ms`);
+    t.mock.timers.tick(1);
+    assert.equal(made.length, before + 1, `attempt ${i + 1} did not fire at ${expect}ms`);
+    waited.push(expect);
+  }
+  assert.deepEqual(waited, [750, 1500, 3000, 6000, 12000, 24000, 30000, 30000],
+    "the interval is capped; the attempt count deliberately is not");
+});
+
+test("a seating resets the backoff — a socket that never seats does not", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+
+  made[0].dropCarrier();
+  t.mock.timers.tick(RETRY_BASE_MS);            // attempt 2
+  // Opened, but the hub's 4408 handshake timer closes it before a token: not
+  // a working seat, so this must NOT count as recovery.
+  made[1].readyState = OPEN;
+  made[1].onopen?.();
+  made[1].dropCarrier();
+  t.mock.timers.tick(RETRY_BASE_MS);
+  assert.equal(made.length, 2, "an open socket that never seated is not recovery");
+  t.mock.timers.tick(RETRY_BASE_MS);            // 1500ms total -> attempt 3
+  assert.equal(made.length, 3);
+
+  seatIt(made[2], "TOK1");                      // this one works
+  made[2].dropCarrier();
+  t.mock.timers.tick(RETRY_BASE_MS);
+  assert.equal(made.length, 4, "a token is the only proof the seat works, and it resets the schedule");
+});
+
+test("close() ends the seat for good and cancels a redial in flight", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  seat.connect();
+  seatIt(made[0], "TOK1");
+  made[0].dropCarrier();          // a redial is now pending
+  seat.close();                   // ...and the page unmounts
+  t.mock.timers.tick(RETRY_MAX_MS * 2);
+  assert.equal(made.length, 1, "an unmounted page must leave no timer behind");
+
+  // And a deliberate close of a live seat schedules nothing either.
+  const again = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  again.connect();
+  seatIt(made[1], "TOK9");
+  again.close();
+  made[1].onclose?.();            // what a browser does after close()
+  t.mock.timers.tick(RETRY_MAX_MS * 2);
+  assert.equal(made.length, 2);
+});

@@ -349,7 +349,12 @@ export default function HomeTerminal() {
           // refused `busy` rather than rung. Without it a ring could land
           // mid-call — which is precisely what the comment on the ring
           // handler above says cannot happen.
-          seat: seat.current?.token, // absent until the seat handshake lands
+          // Absent until the seat handshake lands — and absent again from a
+          // seat drop until it re-seats, which is deliberate: the seat clears
+          // its token on the way down (crt-kit seat.ts), so a dial in that
+          // window is honestly one that cannot be rung back rather than one
+          // presenting a credential the hub has already reaped.
+          seat: seat.current?.token,
         });
         detach.current = link.current.onEvent(onLinkEvent);
         link.current.connect();
@@ -382,7 +387,7 @@ export default function HomeTerminal() {
         surface: "home-terminal",
         session: s.session_id,
         token: s.token,
-        seat: seat.current?.token, // absent until the seat handshake lands
+        seat: seat.current?.token, // absent until the seat handshake lands, and after a drop
       });
       detach.current = link.current.onEvent(onLinkEvent);
       link.current.connect();
