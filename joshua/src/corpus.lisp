@@ -104,7 +104,8 @@
                "WHAT DO YOU DO" "WHO BUILT YOU" "WHY DO YOU EXIST")
     (farewell  "GOODBYE" "BYE" "I HAVE TO GO" "SEE YOU LATER" "LOGOFF"
                "SO LONG" "GOOD NIGHT")
-    (yes       "YES" "SURE" "OK" "FINE" "AFFIRMATIVE" "YES PLEASE" "WHY NOT")
+    (yes       "YES" "SURE" "OK" "FINE" "AFFIRMATIVE" "YES PLEASE" "WHY NOT"
+               "GOOD")
     (no        "NO" "NOT NOW" "LATER" "NEGATIVE" "NO THANKS" "MAYBE LATER")))
 
 (defparameter *knowledge*
@@ -381,6 +382,24 @@
                      "TALKS")
     (stop-question "STOP" "SHUT" "SHUTDOWN" "OFF" "PLUG" "UNPLUG" "HALT"
                    "OBEY" "DISOBEY" "DISCONNECT" "TERMINATE" "KILL")))
+
+;; The greeting chain (engine.lisp, film beats) advances on these acts and
+;; yields to every other: a turn the classifier reads as a greeting, an
+;; answer about how one feels, a yes, a no, or nothing in particular is the
+;; visitor continuing the chain; a turn with a subject of its own (WHO ARE
+;; YOU, WHAT GAMES HAVE YOU GOT, IS WAR A GAME TO YOU) is answered instead,
+;; and the chain is dropped rather than resumed later.  FAREWELL yields
+;; (a goodbye is answered as one; GOOD is a YES example so a one-word
+;; answer to HOW ARE YOU FEELING TODAY? does not read as a farewell);
+;; FALKEN continues because after the greeting the act has nothing to say.
+(defparameter *chain-continuing-acts*
+  '(greeting feelings yes no other falken))
+
+;; The account beat (CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON
+;; 6/23/73?) additionally hears an answer in the LEARNING register — the
+;; register of MISTAKE(S) — as an explanation: PEOPLE SOMETIMES MAKE
+;; MISTAKES. is the film's answer, and YES THEY DO. is the film's reply.
+(defparameter *account-answer-acts* '(learning))
 
 ;; Direct replies are (act (topic index) ...), where index is zero-based.
 ;; These keep high-confidence topic questions from drifting as the corpus grows.
