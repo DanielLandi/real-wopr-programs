@@ -10,7 +10,8 @@ import asyncio
 import pytest
 
 from app.main import DEFAULT_LINKS
-from app.store import GLOBAL_ROOM_KEY, GameState, MemoryStore
+from app.store import (EVENT_ACTORS, EVENT_KINDS, EXCHANGE_JOSHUAS, GAME_STATUSES,
+                       GLOBAL_ROOM_KEY, GameState, MemoryStore)
 
 import pgharness  # sibling test module (pytest prepends tests/ to sys.path; no tests package exists)
 
@@ -74,6 +75,81 @@ def test_every_default_link_surface_mints(store):
             assert got is not None, f"{surface}: minted session did not read back"
             assert got.surface == surface
             assert got.link_profile == profile
+
+    asyncio.run(flow())
+
+
+def test_every_event_kind_and_actor_logs(store):
+    """Every kind and actor the bridge logs must survive `event_logs`' two
+    CHECK constraints as the migrations left them. Same shape as the surface
+    test above (#91): the sets are iterated, not restated, so the day
+    somebody adds a kind to `EVENT_KINDS` and not to a migration, the
+    Postgres leg of this test is the thing that says so."""
+    async def flow():
+        s = await store.create_session("home-terminal", "dialup-300", None)
+        for kind in sorted(EVENT_KINDS):
+            await store.log_event(s.id, kind, "system", {"kind": kind})
+        for actor in sorted(EVENT_ACTORS):
+            await store.log_event(s.id, "route", actor, {"actor": actor})
+        events = await store.get_recent_events(s.id, limit=100)
+        assert {e["kind"] for e in events} == set(EVENT_KINDS)
+        assert {e["actor"] for e in events} == set(EVENT_ACTORS)
+
+    asyncio.run(flow())
+
+
+def test_every_game_status_upserts(store):
+    """Every status the bridge can write — the wire's, plus its own QUIT —
+    must survive `game_states_status_check`. Read back with
+    `playing_only=False`: a finished game is exactly the case."""
+    async def flow():
+        for status in sorted(GAME_STATUSES):
+            s = await store.create_session("home-terminal", "dialup-300", None)
+            await store.upsert_game(GameState(
+                session_id=s.id, game_id=f"g-{status.lower()}", state="S", status=status))
+            got = await store.get_latest_game(f"g-{status.lower()}", playing_only=False)
+            assert got is not None, f"{status}: upserted game did not read back"
+            assert got.status == status
+
+    asyncio.run(flow())
+
+
+def test_every_exchange_joshua_registers(store):
+    """Every reconstruction of Joshua the register API offers must survive
+    `exchanges.joshua`'s CHECK — the column the issue (#91) expected to bite
+    next, because engine names are the kind of thing that gets added."""
+    async def flow():
+        for joshua in sorted(EXCHANGE_JOSHUAS):
+            ok = await store.register_exchange(
+                id=f"x-{joshua}", name=f"Exchange {joshua}", region="Nowhere",
+                api="https://x.example", link="wss://x.example", joshua=joshua,
+                operator=None)
+            assert ok is True, f"{joshua}: registration refused"
+
+    asyncio.run(flow())
+
+
+def test_a_value_outside_the_enumeration_is_refused(store):
+    """The guard has to fire, not just the happy path pass. Postgres refuses
+    with its CHECK; MemoryStore refuses with ValueError — the point being that
+    a call site inventing a new kind fails the in-memory suite, which is the
+    suite everything runs, rather than Neon."""
+    import asyncpg
+
+    refused = (ValueError, asyncpg.exceptions.CheckViolationError)
+
+    async def flow():
+        s = await store.create_session("home-terminal", "dialup-300", None)
+        with pytest.raises(refused):
+            await store.log_event(s.id, "telemetry", "system", {})
+        with pytest.raises(refused):
+            await store.log_event(s.id, "route", "operator", {})
+        with pytest.raises(refused):
+            await store.upsert_game(GameState(session_id=s.id, game_id="g", state="S", status="ABORT"))
+        with pytest.raises(refused):
+            await store.register_exchange(
+                id="x-bogus", name="Bogus", region="Nowhere", api="https://x.example",
+                link="wss://x.example", joshua="hal9000", operator=None)
 
     asyncio.run(flow())
 
