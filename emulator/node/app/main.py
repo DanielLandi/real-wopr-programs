@@ -552,7 +552,7 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
             # ANSWERED, where the far end dialled in and must knock like anyone
             # else.
             await ws.send_text(
-                envelope("output", f"\n{router.open_backdoor(session_id)}\n"))
+                envelope("output", f"\n{await router.open_backdoor(session_id)}\n"))
 
         try:
             while True:

@@ -4,5 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p bin
-gfortran -std=f2008 -O2 -o "bin/wopr" ../main.f90
+# -I.. so the INCLUDE of the generated scenario table resolves next
+# to the source rather than next to this script.
+gfortran -std=f2008 -O2 -I.. -o "bin/wopr" ../main.f90
 echo "built wopr -> harness/bin/wopr"

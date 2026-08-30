@@ -60,7 +60,8 @@ class SystemResponse:
 
 
 def build_system_request(system_id: str, command: str, state: str | None,
-                         user_input: str | None, reply: Reply | None = None) -> str:
+                         user_input: str | None, reply: Reply | None = None,
+                         facts: str | None = None) -> str:
     lines = [f"{PROTO_SYSTEM} {system_id} {command}"]
     state_lines = state.split("\n") if state else []
     lines.append(f"STATE {len(state_lines)}")
@@ -72,6 +73,19 @@ def build_system_request(system_id: str, command: str, state: str | None,
         # the frame. Flatten embedded newlines to spaces.
         user_input = user_input.replace("\r", " ").replace("\n", " ")
         lines.append(f"INPUT {user_input}")
+    if facts is not None:
+        # Card-image lines carrying what a program cannot know for itself and
+        # must not cache: the catalog, the stored game row, DEFCON, the
+        # clearance floor, the surface. All of them are durable, shared with
+        # other surfaces, and mutable behind the program's back — DEFCON has
+        # an HTTP endpoint, the room hub advances games on its own ticks — so
+        # they are sent every turn rather than seeded once, and the program
+        # stays a pure function of (frame, STATE). Counted like STATE. A
+        # program that ignores the block parses exactly as it did before it
+        # existed, which is how CALL/REPLY and PROMPT arrived too.
+        fact_lines = facts.split("\n") if facts else []
+        lines.append(f"FACTS {len(fact_lines)}")
+        lines.extend(fact_lines)
     if reply is not None:
         # The answer to the CALL the program made last turn. Counted like STATE
         # so the program reads exactly as many lines as were sent.
