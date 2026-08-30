@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CRTScreen, StatusPanel, WoprLink, endpointFromQuery, type LinkEvent } from "@real-wopr/crt-kit";
 import { FeedAssembler, type GtwFeed } from "./feed";
+import { CODE, CODE_SLOTS, agitation, bits, lockin } from "./lockin";
 import { boardAt, gamesCompleted, GAMES, NOWIN_VERDICT, type Board } from "./selfplay";
 
 const ROOM_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -34,28 +35,9 @@ function roomCodeFromLocation(): { code?: string; malformed?: string } {
 
 const TICK_MS = 300;
 
-// The launch code WOPR brute-forces in the film — a documented production
-// detail on the cabinet's readout, reproduced as a label, not dialogue.
-const CODE = "CPE 1704 TKS";
+// The code, its lock order and the lock-in derivation live in app/lockin.ts
+// so the S13 reveal order is testable without a browser.
 const CODE_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-// How many of the code's 10 characters are locked at each DEFCON.
-const LOCKS_BY_DEFCON: Record<number, number> = { 5: 0, 4: 2, 3: 5, 2: 8, 1: 10 };
-
-/** Deterministic avalanche hash — the panel's only source of "randomness". */
-function bits(a: number, b: number, c: number): number {
-  let h = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 2246822519)) >>> 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
-  return (h ^ (h >>> 16)) >>> 0;
-}
-
-// Indices of the code's non-space characters, in the scattered order the
-// brute force locks them (fixed permutation, film-style non-sequential).
-const CODE_SLOTS = CODE.split("")
-  .map((ch, i) => ({ ch, i }))
-  .filter((s) => s.ch !== " ")
-  .map((s) => s.i)
-  .sort((a, b) => bits(a, 0, 777) - bits(b, 0, 777));
 
 const LAMP_COLORS = ["#ffb000", "#ffb000", "#ffb000", "#ffb000", "#ffb000", "#ffb000", "#ff4040", "#ff4040", "#33ff66", "#e8e8d0"];
 
@@ -358,12 +340,10 @@ export default function WoprPanel() {
   if (demoStart !== null && !live && demo === null) setDemoStart(null);
   const feed = live ?? demo;
 
-  const defcon = feed?.defcon ?? 5;
-  const aborted = feed?.status === "NO-WIN";
-  const locked = aborted ? CODE_SLOTS.length : LOCKS_BY_DEFCON[defcon] ?? 0;
+  const lock = lockin(feed);
+  const { defcon, aborted, locked } = lock;
   // Lamp agitation: epochs advance faster and more lamps burn as DEFCON falls.
-  const epoch = Math.floor(tick / Math.max(1, defcon - (aborted ? 2 : 0)));
-  const density = 16 + (5 - defcon) * 14 + (aborted ? 20 : 0);
+  const { epoch, density } = agitation(lock, tick);
 
   // The lesson's tally counts from the moment the routine reached NO-WIN, not
   // from page load, so a visitor who arrives mid-crisis still sees it start at
