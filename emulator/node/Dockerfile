@@ -55,8 +55,14 @@ RUN printf 'SYSTEM/1 pactel CONNECT\nSTATE 0\nEND\n' \
 RUN printf 'SYSTEM/1 wopr INPUT\nSTATE 0\nINPUT JOSHUA\nFACTS 1\nSURFACE home-terminal\nEND\n' \
       | /opt/wopr/pack/wopr/harness/bin/wopr | grep -q 'GREETINGS PROFESSOR FALKEN.'
 
+# Every *_DIR the bridge reads must point into the copied pack: config.py falls
+# back to the source tree (/app) otherwise, where no binary exists, and the
+# bridge drops every line with "no binary for system 'wopr'" (the executive
+# went unpinned here from #98 until the probe in real-wopr#228 found it).
+# tests/test_dockerfile_env.py holds this ENV block to config.py's key list.
 ENV BRIDGE_GAMES_DIR=/opt/wopr/pack/games \
     BRIDGE_SYSTEMS_DIR=/opt/wopr/pack/systems \
+    BRIDGE_EXECUTIVE_DIR=/opt/wopr/pack \
     BRIDGE_JOSHUA_LISP_BIN=/opt/wopr/pack/joshua/harness/bin/joshua
 
 EXPOSE 8000
