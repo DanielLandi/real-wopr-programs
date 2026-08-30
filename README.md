@@ -6,7 +6,7 @@ in a language of its era.
 
 This repository holds **both halves**, and keeps them visibly apart:
 
-- The **programs** — `wopr/`, `games/`, `systems/`, `joshua/` — are period source. Fortran, COBOL,
+- The **programs** — `wopr/`, `norad/`, `games/`, `systems/`, `joshua/` — are period source. Fortran, COBOL,
   BASIC, 6502 assembly, CLtL1-era Lisp. They are the reason to be here.
 - The **harness** — `emulator/` — is a modern Python/TypeScript runtime that hosts those
   programs on a modern computer. It is openly modern and does not pretend otherwise.
@@ -21,6 +21,8 @@ the whole machine, and `git clone` gets you both.
 | `games/` | tictactoe, gtw, blackjack, checkers, falkens-maze, gin-rummy, hearts, poker | Fortran | WOPR/1 |
 | `systems/` | airline (Pan Am), school (Seattle), protovision, pactel (Pacific Telephone), reference, umb (Union Marine Bank) | COBOL, BASIC, 6502 asm, C | SYSTEM/1 |
 | `joshua/` | the Falken Dialogue Processor | Common Lisp | JOSHUA/1 |
+| `wopr/` | the W.O.P.R. executive — the connection monitor that owns a terminal session | Fortran | SYSTEM/1 |
+| `norad/` | NORAD operations — the operator console (SITREP, TRACKS, EVENTS, SET DEFCON) | Fortran | SYSTEM/1 |
 
 Every program is a self-contained subprocess: it reads one request frame on standard input
 and writes one response frame on standard output. Nothing talks over a network; nothing keeps

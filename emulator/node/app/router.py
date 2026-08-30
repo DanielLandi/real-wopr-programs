@@ -19,10 +19,10 @@ resumed with the REPLY. Four kinds of peer arrive here:
               code — the two questions whose answers must never ride in FACTS,
               because a clearance code in a frame every turn is a clearance
               code in every log.
-  norad       the operator console: SITREP, TRACKS, EVENTS, SET DEFCON, and
-              CEASE RANDOM FUNCTION. Phase 3 lifts this into a program of its
-              own; until then it is a handler behind a CALL, which is exactly
-              the seam that phase will cut along.
+  norad       the operator console, `norad/main.f90` — a program of its own
+              (phase 3). The host spawns it with the console's own FACTS and
+              answers the three things it cannot do alone: `radar` (the war
+              game's picture), `journal` (the event log), `defcon` (the store).
 
 The room lock is taken lazily, on the first game CALL of a turn, and held to
 the end of it. A move is two calls — the human's, then W.O.P.R.'s own — and
@@ -31,14 +31,13 @@ they have to be one atomic exchange against the room's row.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .attachment import Attachment, FRONT_DOOR, GAME, JOSHUA, NORAD_OPS
 from .games import CATALOG_ORDER, UNLISTED, Game, interpretation_dir
-from .gtwfeed import display_to_feed, tracks_text
+from .gtwfeed import display_to_feed
 from .joshua import Joshua
 from .operators import Operator
 from .rooms import RoomLocks, room_key
@@ -58,9 +57,8 @@ from .systemwire import MAX_CALL_DEPTH, Reply
 # what they say, so a drift between the two is a test failure rather than a
 # silent divergence.
 #
-# `UNRECOGNIZED_DIRECTIVE`, `CHANGES_LOCKED_OUT` and `CEASE_RANDOM_FUNCTION`
-# are different: the operator console is still answered here, so those are
-# live constants, not copies.
+# The console's lines are the same kind of copy: `norad/main.f90` owns them,
+# and the same test cross-checks that source.
 # ---------------------------------------------------------------------------
 LOGON_REJECTION = ("INDENTIFICATION NOT RECOGNIZED BY SYSTEM"
                    "\n--CONNECTION TERMINATED--")
@@ -85,9 +83,14 @@ UNRECOGNIZED_DIRECTIVE = "UNRECOGNIZED DIRECTIVE"
 # The answer to CEASE RANDOM FUNCTION at the NORAD console: you cannot stop it.
 CHANGES_LOCKED_OUT = "     >>> CHANGES LOCKED OUT <<<"
 CEASE_RANDOM_FUNCTION = "CEASE RANDOM FUNCTION"
+CLEARANCE_DENIED = "CLEARANCE DENIED"
+NO_ACTIVE_TRACKS = "NO ACTIVE TRACKS"
+NO_EVENTS_LOGGED = "NO EVENTS LOGGED"
 
 LOGON_LOCK_LIMIT = 3
-_SET_DEFCON = re.compile(r"^SET DEFCON ([1-5])$")
+#: How many event-log lines the console reads back. The console asks for the
+#: number itself (`RECENT <n>`); this is the ceiling the host will honour.
+JOURNAL_LIMIT = 10
 
 #: The one line of the executive's STATE block the host reads:
 #: ``MODE <mode> <program|-> <PENDING|-> <BACKDOOR|->``. Everything below it is
@@ -697,66 +700,90 @@ class _Turn:
     # -- the operator console -------------------------------------------------
 
     async def _norad(self, line: str) -> Reply:
-        """The NORAD operator console. Joshua is not present here.
+        """The NORAD operator console — `norad/main.f90`, run here.
 
-        Phase 3 lifts this into a program of its own; it is a handler behind a
-        CALL until then, which is exactly where that cut will be made.
+        Joshua is not present at the console, and neither is any decision:
+        the program decides what SITREP says, whether CEASE RANDOM FUNCTION
+        is locked out, whether an operator's clearance reaches the DEFCON
+        they asked for. This host gathers the console's facts, spawns it,
+        and answers the three things it asks for by CALL.
         """
-        text, detail = await self._norad_text(line)
-        self._set_detail(detail)
-        return _ok("norad", _display(text))
+        facts = await self._console_facts()
+        state: str | None = None
+        reply: Reply | None = None
+        user_input: str | None = line
+        for _ in range(MAX_CALL_DEPTH + 1):
+            try:
+                resp = await self.r._exec.run("norad", "INPUT", state, user_input,
+                                              reply=reply, facts=facts)
+            except SystemTimeout as exc:
+                await self.r.store.log_event(self.sid, "error", "system",
+                                             {"console": f"timeout: {exc}"})
+                self._set_detail({"error": "timeout"})
+                return _timeout("norad")
+            except (SystemBusy, SystemFault) as exc:
+                await self.r.store.log_event(self.sid, "error", "system",
+                                             {"console": str(exc)})
+                self._set_detail({"error": str(exc)})
+                return _fail("norad", ["FAULT", str(exc)])
+            state = resp.state
+            if resp.call is None:
+                return _ok("norad", _display(resp.display))
+            reply = await self._console_service(resp.call.peer, resp.call.payload)
+            user_input = None
+        return _fail("norad", ["FAULT", "console chained too many calls"])
 
-    async def _norad_text(self, upper: str) -> tuple[str, dict[str, Any]]:
+    async def _console_facts(self) -> str:
+        """What the console cannot know for itself, every turn: who is logged
+        on and at what clearance, DEFCON, the conference, the link, and the
+        room's game row — the same row TRACKS, SITREP and the executive read."""
         session = await self.r.store.get_session(self.sid)
-        active = await self.r._active_game(self.sid, self.room)
-        if upper == "SITREP":
-            level = await self.r.store.get_clearance_level(
-                session.user_id if session else None)
-            defcon = session.defcon if session else 5
-            sim = (f"SIMULATION: {active.game_id.upper()} TURN {active.turn}"
-                   if active else "SIMULATION: IDLE")
-            room = session.room_code if session and session.room_code else "NONE"
-            link = session.link_profile.upper() if session else "UNKNOWN"
-            callsign = session.user_id if session else "UNKNOWN"
-            return (f"SITREP {callsign} LEVEL {level}\nDEFCON {defcon}\n{sim}\n"
-                    f"CONFERENCE: {room}\nLINK: {link}"), {}
-        if upper == "TRACKS":
-            return await self._tracks(active)
-        if upper == "EVENTS":
-            return await self._events()
-        if upper == CEASE_RANDOM_FUNCTION and active is not None:
-            # The film's whole argument, at the console. `active` is the room's
-            # latest *playing* game, the same view TRACKS and SITREP get, so any
-            # live simulation locks changes out — the film had tic-tac-toe on
-            # screen while the launch routine ran, so what is displayed is
-            # beside the point. With nothing running there is nothing to cease,
-            # and the line falls through to UNRECOGNIZED DIRECTIVE below.
-            return CHANGES_LOCKED_OUT, {"cease": "locked"}
-        m = _SET_DEFCON.match(upper)
-        if m:
-            return await self._set_defcon(session, int(m.group(1)))
-        # NORAD staff not knowing the backdoor is the plot: without it they get
-        # the terse machine, never Joshua.
-        return UNRECOGNIZED_DIRECTIVE, {}
+        level = await self.r.store.get_clearance_level(
+            session.user_id if session else None)
+        lines = [
+            f"CALLSIGN {session.user_id if session else 'UNKNOWN'}",
+            f"CLEARANCE {level}",
+            f"DEFCON {session.defcon if session else 5}",
+            f"ROOM {(session.room_code if session else None) or '-'}",
+            f"LINK {session.link_profile if session else 'UNKNOWN'}",
+        ]
+        row = await self.r._active_game(self.sid, self.room)
+        if row is not None:
+            lines.append(f"GAMEROW {row.game_id} {row.status} {row.turn} {row.interpretation}")
+        return "\n".join(lines)
 
-    async def _tracks(self, active: GameState | None) -> tuple[str, dict[str, Any]]:
+    async def _console_service(self, peer: str, payload: str) -> Reply:
+        verb, _, arg = payload.strip().partition(" ")
+        if peer == "radar":
+            return await self._radar()
+        if peer == "journal":
+            return await self._journal(min(int(arg or JOURNAL_LIMIT), JOURNAL_LIMIT))
+        if peer == "defcon":
+            return await self._defcon(int(arg))
+        return _fail(peer, ["FAULT", f"the console asked for {peer!r}, which the host does not serve"])
+
+    async def _radar(self) -> Reply:
+        """The war's picture: the room's GTW row, read through its own core
+        under the room lock, and handed over as the feed the Big Board
+        renders — as card images. The console formats the table."""
+        active = await self.r._active_game(self.sid, self.room)
         if active is None or active.game_id != "gtw":
-            return "NO ACTIVE TRACKS", {}
+            return _ok("radar", ["NONE"])
         game = self.r.catalog.get("gtw")
         await self._lock()
         resp = await self._core("gtw", "QUERY", active.state, None,
                                 game.timeout_s if game else None, None)
         if isinstance(resp, Reply):
-            # The console gets the same in-character lines a player would.
-            return _reply_error_text(resp), self.detail
+            # The console gets the same in-character lines a player would;
+            # it says them itself, from the same failure shapes.
+            return resp
         feed = display_to_feed(resp.display, active.status)
-        return tracks_text(feed), {"game": "gtw"}
+        self._set_detail({"game": "gtw"})
+        return _ok("radar", _feed_cards(feed))
 
-    async def _events(self) -> tuple[str, dict[str, Any]]:
-        rows = await self.r.store.get_recent_events(self.sid, limit=10)
-        if not rows:
-            return "NO EVENTS LOGGED", {}
-        lines = []
+    async def _journal(self, limit: int) -> Reply:
+        rows = await self.r.store.get_recent_events(self.sid, limit=limit)
+        cards = []
         for r in rows:
             payload = r.get("payload", {})
             summary = ""
@@ -770,18 +797,15 @@ class _Turn:
                 if key in payload:
                     summary = f"{key} {payload[key]}"
                     break
-            lines.append(f"{r['kind'].upper():<8}{r['actor'].upper():<8}{summary.upper()[:44]}")
-        return "\n".join(lines), {}
+            cards.append(f"EVENT {r['kind']} {r['actor']} {summary}".rstrip())
+        return _ok("journal", cards)
 
-    async def _set_defcon(self, session, level: int) -> tuple[str, dict[str, Any]]:
-        clearance = await self.r.store.get_clearance_level(
-            session.user_id if session else None)
-        # Same rule as POST /api/session/{id}/defcon: 1 is most privileged, you
-        # may only command at or above your numeric floor.
-        if level < clearance:
-            return "CLEARANCE DENIED", {"defcon": level, "denied": True}
+    async def _defcon(self, level: int) -> Reply:
+        """The console has already checked the operator's clearance; the
+        host's part is the store."""
         await self.r.store.set_defcon(self.sid, level)
-        return f"DEFCON {level} SET", {"defcon": level}
+        self._set_detail({"defcon": level})
+        return _ok("defcon", [f"SET {level}"])
 
 
 # ---------------------------------------------------------------------------
@@ -825,21 +849,22 @@ def _timeout(peer: str) -> Reply:
     return Reply(peer=peer, status="TIMEOUT", payload="")
 
 
-def _reply_error_text(reply: Reply) -> str:
-    """What a failed core call would look like on the teletype.
-
-    Only the console needs this: the executive speaks for itself everywhere
-    else, and the console is still answered here until phase 3 moves it.
-    """
-    lines = reply.payload.split("\n") if reply.payload else []
-    kind = lines[0] if lines else ""
-    if reply.status == "TIMEOUT":
-        return CORE_TIMEOUT_TEXT
-    if kind == "BUSY":
-        return CORE_BUSY_TEXT
-    if kind == "REFUSED":
-        reason = lines[1] if len(lines) > 1 else ""
-        return f"{IMPROPER_REQUEST}\n\n{reason}" if reason else IMPROPER_REQUEST
-    if kind == "INTERP":
-        return f"UNKNOWN INTERPRETATION: {(lines[1] if len(lines) > 1 else '').upper()}"
-    return f"ERROR: {lines[1] if len(lines) > 1 else kind}"
+def _feed_cards(feed: dict[str, Any]) -> list[str]:
+    """The GTW feed as the console reads it: one card per fact, per track,
+    per target, per event. Positions are `x y`; progress is the feed's own
+    number, which the console shows to two places."""
+    cards = [f"CLOCK {feed['clock']}", f"DEFCON {feed['defcon']}"]
+    for t in feed.get("aircraft") or []:
+        cards.append(f"AC {t['id']} {t['side']} {t['from'][0]} {t['from'][1]} "
+                     f"{t['to'][0]} {t['to'][1]} {t['progress']}")
+    for t in feed.get("ships") or []:
+        cards.append(f"SHIP {t['id']} {t['side']} {t['from'][0]} {t['from'][1]} "
+                     f"{t['to'][0]} {t['to'][1]} {t['progress']}")
+    for m in feed.get("missiles") or []:
+        cards.append(f"MSL {m['from'][0]} {m['from'][1]} {m['to'][0]} {m['to'][1]} "
+                     f"{m['progress']}")
+    for t in feed.get("targetStates") or []:
+        cards.append(f"TARGET {t['name']} {t['status']}")
+    for line in feed.get("events") or []:
+        cards.append(f"EVENT {line}")
+    return cards

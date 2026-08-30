@@ -30,7 +30,7 @@ reporting path.
 
 ## Which half are you changing?
 
-**A program** (`games/`, `systems/`, `joshua/`, `wopr/`) — stay in period. Fortran within F77/F90
+**A program** (`games/`, `systems/`, `joshua/`, `wopr/`, `norad/`) — stay in period. Fortran within F77/F90
 constructs, Lisp within CLtL1-era forms, no modern conveniences. Golden fixtures are the test
 suite and must reproduce byte-exact. Document approximations rather than hiding them.
 

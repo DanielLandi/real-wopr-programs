@@ -1,6 +1,6 @@
 # emulator/ — the modern harness
 
-The folders above this one (`wopr/`, `games/`, `systems/`, `joshua/`) hold **programs**:
+The folders above this one (`wopr/`, `norad/`, `games/`, `systems/`, `joshua/`) hold **programs**:
 period source, written the way it was written in 1983, tested by byte-exact
 golden fixtures.
 

@@ -107,6 +107,19 @@ golden-tested and packaged like one. What makes it different is only what it dec
 door, what the terminal is attached to, the reserved words, and W.O.P.R.'s own voice. It speaks
 SYSTEM/1 and reaches the games and the dialogue processor with `CALL`.
 
+## The operator console
+
+`norad/` is the fifth category and also holds one program: **NORAD operations**, the console a
+`norad-terminal` session is attached to once its roster logon is accepted. It is observational —
+it displays what W.O.P.R. is doing (`SITREP`, `TRACKS`, `EVENTS`), commands the machine
+(`SET DEFCON n`), and refuses to `CEASE RANDOM FUNCTION` while a simulation runs — and it never
+attaches to a game, so it never loses those instruments. Joshua is not present there. The
+executive hands it each line with `CALL norad` and prints its answer; the console in turn asks the
+host for the three things it cannot do alone (`radar`, `journal`, `defcon`). Its language is
+Fortran, with the approximation stated at the top of `norad/main.f90`: JOVIAL J73 is the
+historically correct language for NORAD command and control, and no maintained compiler for it
+handles character data.
+
 ## Wire protocols
 
 A program speaks exactly one line-oriented ASCII protocol, named in `pack.json`:

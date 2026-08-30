@@ -1,7 +1,9 @@
-"""The seam between the executive and its host.
+"""The seam between the executive and its host — and the console's.
 
 `wopr/main.f90` owns the routing decisions; this module's `router.py` runs it
-and executes what it asks for. Two things need holding down at that seam:
+and executes what it asks for. `norad/main.f90` owns the operator console's
+decisions the same way, and the same host runs it. Three things need holding
+down at that seam:
 
 1. **The voice.** W.O.P.R.'s lines are string constants in the Fortran, and
    `router.py` keeps copies only so the Python suites have a vocabulary to
@@ -13,6 +15,11 @@ and executes what it asks for. Two things need holding down at that seam:
    what decides whether a reconnecting terminal is re-greeted, whether an
    access code is redacted before it reaches the event log, and when a session
    becomes authenticated.
+
+3. **The radar table.** `gtwfeed.tracks_text` is the Python rendering the
+   console's TRACKS readout was translated from. It is kept as the oracle:
+   the built console, handed the same feed as cards, must print exactly what
+   it prints.
 """
 
 from pathlib import Path
@@ -21,13 +28,18 @@ import subprocess
 import pytest
 
 from app import router as R
+from app.gtwfeed import display_to_feed, tracks_text
 
 REPO = Path(__file__).resolve().parents[3]
 SOURCE = (REPO / "wopr" / "main.f90").read_text()
 EXEC = REPO / "wopr" / "harness" / "bin" / "wopr"
+CONSOLE_SOURCE = (REPO / "norad" / "main.f90").read_text()
+CONSOLE = REPO / "norad" / "harness" / "bin" / "norad"
 
 needs_executive = pytest.mark.skipif(
     not EXEC.exists(), reason="executive not built (run wopr/harness/build.sh)")
+needs_console = pytest.mark.skipif(
+    not CONSOLE.exists(), reason="console not built (run norad/harness/build.sh)")
 
 
 # Every line of W.O.P.R.'s voice that router.py still names, and the Fortran
@@ -63,12 +75,93 @@ def test_the_lockout_limit_is_the_same_number_on_both_sides():
     assert f"LOGON_LOCK_LIMIT = {R.LOGON_LOCK_LIMIT}" in SOURCE
 
 
-def test_the_console_lines_are_the_hosts_and_are_not_in_the_executive():
-    # Phase 3 moves the operator tier into a program of its own. Until then
-    # the console is answered by the host, and duplicating its words into the
-    # executive would make that move ambiguous.
-    for line in (R.UNRECOGNIZED_DIRECTIVE, R.CHANGES_LOCKED_OUT):
+# The console's voice, the same way: `norad/main.f90` owns these, and the
+# copies in router.py exist for the Python suites to assert against.
+CONSOLE_VOICE = [
+    R.UNRECOGNIZED_DIRECTIVE,
+    R.CHANGES_LOCKED_OUT,
+    R.CEASE_RANDOM_FUNCTION,
+    R.CLEARANCE_DENIED,
+    R.NO_ACTIVE_TRACKS,
+    R.NO_EVENTS_LOGGED,
+    # A failed radar call is said in the executive's words, from the same
+    # failure shapes — so those lines live in both programs, verbatim.
+    R.CORE_TIMEOUT_TEXT,
+    R.CORE_BUSY_TEXT,
+    *R.IMPROPER_REQUEST.split("\n"),
+]
+
+
+@pytest.mark.parametrize("line", CONSOLE_VOICE)
+def test_the_console_still_says_what_the_harness_claims_it_says(line):
+    assert f"'{line}'" in CONSOLE_SOURCE, line
+
+
+def test_the_console_lines_are_the_consoles_and_are_not_in_the_executive():
+    # The operator tier is a program of its own (phase 3). The executive
+    # hands it the line and prints its answer; it does not know the words.
+    for line in (R.UNRECOGNIZED_DIRECTIVE, R.CHANGES_LOCKED_OUT, R.CLEARANCE_DENIED):
         assert line not in SOURCE, line
+
+
+def test_the_journal_limit_is_the_same_number_on_both_sides():
+    assert f"JOURNAL_LINES = {R.JOURNAL_LIMIT}" in CONSOLE_SOURCE
+
+
+# --- the radar table --------------------------------------------------------
+
+def run_console(state: list[str], user_input: str | None = None,
+                facts: list[str] | None = None, reply: list[str] | None = None) -> str:
+    frame = ["SYSTEM/1 norad INPUT", f"STATE {len(state)}", *state]
+    if user_input is not None:
+        frame.append(f"INPUT {user_input}")
+    facts = facts if facts is not None else ["CALLSIGN NORAD-3", "CLEARANCE 3"]
+    frame += [f"FACTS {len(facts)}", *facts]
+    if reply is not None:
+        frame += reply
+    frame.append("END")
+    return subprocess.run([str(CONSOLE)], input="\n".join(frame) + "\n",
+                          capture_output=True, text=True).stdout
+
+
+def display_of(output: str) -> str:
+    lines = output.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("DISPLAY "):
+            n = int(line.split()[1])
+            return "\n".join(lines[i + 1:i + 1 + n])
+    raise AssertionError(f"no DISPLAY block in {output!r}")
+
+
+RADAR_DISPLAYS = [
+    "ZULU --:--  DEFCON 5\n",
+    ("ZULU 00:30  DEFCON 2\n"
+     "UNITED STATES  ARSENAL 20  CITIES LOST 0\n"
+     "SOVIET UNION   ARSENAL 19  CITIES LOST 1\n"
+     "TRK WASHINGTON MOSCOW -77 39 37 56 0.40\n"
+     "HIT LENINGRAD\n"),
+    # E12's picture: DEFCON 2 puts aircraft and ships up, two missiles fly,
+    # and the clock's minutes set every track's progress.
+    ("ZULU 00:06  DEFCON 2\n"
+     "TRK NOVOSIBIRSK LASVEGAS 83 55 -115 36 0.20\n"
+     "TRK NEWYORK LENINGRAD -74 41 30 60 0.10\n"),
+    # More events than the readout shows, and a city hit twice.
+    ("ZULU 00:45  DEFCON 1\n"
+     "TRK MOSCOW WASHINGTON 37 56 -77 39 0.95\n"
+     "HIT LENINGRAD\nHIT LENINGRAD\nHIT SEATTLE\n"
+     "EXCHANGE COMPLETE\nWINNER: NONE\nESTIMATED CASUALTIES 120 MILLION\n"),
+]
+
+
+@needs_console
+@pytest.mark.parametrize("display", RADAR_DISPLAYS)
+def test_the_console_prints_the_radar_table_the_python_printed(display):
+    feed = display_to_feed(display, "PLAYING")
+    cards = R._feed_cards(feed)
+    out = run_console(["PHASE RADAR", "PA1 -"],
+                      facts=["CALLSIGN NORAD-3", "CLEARANCE 3", "GAMEROW gtw PLAYING 4 core"],
+                      reply=[f"REPLY radar OK {len(cards)}", *cards])
+    assert display_of(out) == tracks_text(feed)
 
 
 # --- the STATE header ------------------------------------------------------

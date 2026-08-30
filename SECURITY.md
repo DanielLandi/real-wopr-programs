@@ -17,7 +17,7 @@ reproduce — are not security reports. Open those as normal issues.
 
 ## Scope
 
-In scope: the period programs (`wopr/`, `games/`, `systems/`, `joshua/`) and the harness
+In scope: the period programs (`wopr/`, `norad/`, `games/`, `systems/`, `joshua/`) and the harness
 that hosts them (`emulator/`), including the wire protocols between them.
 
 Out of scope: the deployed exchange's infrastructure, and anything about the
