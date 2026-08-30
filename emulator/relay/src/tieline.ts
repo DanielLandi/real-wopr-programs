@@ -49,6 +49,16 @@ export interface TielineOpts {
    *  session id is the visitor's own — minted against this host's bridge
    *  through the hub's REST relay — which is why it identifies the leg. */
   onVisitorSeat?: (session: string, handle: string) => void;
+  /** The trunk is down FOR GOOD: a terminal refusal (LINE REFUSED — the slot
+   *  is taken, the world reserved, no circuits, the far end is a peer) or a
+   *  REGISTER the hub cannot read (LINE NOT ACCEPTED). The tie line has
+   *  already stopped and said so on stderr when this fires; `reason` is the
+   *  hub's own words, upper-cased, as printed. What the PROCESS does about it
+   *  is deliberately not decided here (#86): this module is imported by the
+   *  test suite and by a relay that serves a local stack, so it never exits.
+   *  The entrypoint that owns the process holds the policy — `main.ts` keeps
+   *  the relay serving locally, the tieline CLI sets a failing exit code. */
+  onFatal?: (reason: string) => void;
 }
 
 /** A call this host placed. There is deliberately no `send`: the caller's own
@@ -338,7 +348,9 @@ export function startTieline(opts: TielineOpts): {
       if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462
           || closeCode === 4463) {
         stopped = true;
-        console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
+        const why = reason.toString().toUpperCase() || "SWITCHBOARD REFUSED";
+        console.error(`LINE REFUSED — ${why}`);
+        opts.onFatal?.(why);
       } else if (closeCode === 4400 && !everAssigned) {
         // The hub could not even read our REGISTER — an off-roster slot, a
         // world that is not a number or NEW. That verdict is deterministic:
@@ -353,10 +365,9 @@ export function startTieline(opts: TielineOpts): {
         // TIELINE_SLOT/TIELINE_WORLD, which were fine. Post-ASSIGNED it is an
         // outage like any other: fall through to the backoff retry.
         stopped = true;
-        console.error(
-          `LINE NOT ACCEPTED — ${reason.toString().toUpperCase() || "MALFORMED REGISTER"}` +
-          ` — CHECK TIELINE_SLOT AND TIELINE_WORLD`,
-        );
+        const why = reason.toString().toUpperCase() || "MALFORMED REGISTER";
+        console.error(`LINE NOT ACCEPTED — ${why} — CHECK TIELINE_SLOT AND TIELINE_WORLD`);
+        opts.onFatal?.(why);
       }
       retry();
     });
@@ -488,6 +499,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       onAssigned: (exchange, world, slot) => {
         console.log(tielineUpBanner(exchange, world, slot));
       },
+      // The policy for a standalone tie line (#86): it fronts nothing of its
+      // own, so once the trunk is refused for good there is nothing left to
+      // serve. Let the event loop drain and leave a failing status behind for
+      // whatever supervises it. A hosted tie line's policy is main.ts's.
+      onFatal: () => { process.exitCode = 1; },
     });
   }
 }
