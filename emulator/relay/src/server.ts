@@ -27,6 +27,68 @@ import { startTieline, tielineFromEnv, tielineUpBanner,
  *  buffer worth filling on purpose. */
 const SEAT_HELD_MAX_BYTES = TRUNK_MAX_FRAME_BYTES * 4;
 
+/** How long the session lookup a `/link` dial begins with (#80) may take
+ *  before the dial is refused. It is a GET on the internal network to the
+ *  same host the leg is about to open a WebSocket to — ordinarily a
+ *  millisecond, against a dial ritual that is 6–9 seconds of DIALING /
+ *  RINGING / HANDSHAKE by design. Three seconds is therefore "the bridge is
+ *  not answering", not "the bridge is busy". */
+const SESSION_LOOKUP_TIMEOUT_MS = 3_000;
+
+/** What the bridge says a session's surface is, or why it could not say.
+ *  `unknown` and `unavailable` are kept apart because they are different
+ *  stories for whoever reads the closed line: a stale session id, versus a
+ *  bridge that is not answering. */
+type StoredSurface =
+  | { ok: true; surface: string }
+  | { ok: false; why: "unknown" | "unavailable" };
+
+/** Ask the bridge which surface a session actually is (#80).
+ *
+ *  `/link` used to take the surface from the query string and pace by it, so
+ *  a visitor could mint an ordinary `home-terminal` session — no credential
+ *  needed, that is the front door — and then dial
+ *  `?surface=trunk-caller` to be paced at profile `off`: baud 0, no shaping.
+ *  #74/#79 closed the mint; the dial needs the same session to be the
+ *  authority for pacing that it already is for the backdoor, the room and
+ *  the engine. `GET /api/session/{id}` is the bridge's existing answer to
+ *  exactly that question.
+ *
+ *  Module scope, and given the bridge's HTTP base rather than closing over
+ *  it, so it is a plain function of its inputs — the same reason
+ *  `seededPort` lives out here.
+ *
+ *  Bounded and total: every failure — a dead socket, a timeout, a 5xx, a
+ *  body that is not what the contract says — comes back as `unavailable`,
+ *  and the caller refuses the dial. Failing OPEN here would mean an outage
+ *  of the bridge's HTTP face silently disables the check while its WebSocket
+ *  face keeps serving, which is the shape of the bug this closes. */
+async function fetchSessionSurface(bridgeHttp: string, session: string,
+                                   internalToken: string): Promise<StoredSurface> {
+  let res: Response;
+  try {
+    res = await fetch(`${bridgeHttp}/api/session/${encodeURIComponent(session)}`, {
+      // The bridge does not require this today. It is sent because the relay
+      // already presents it to this host on the session socket, and so the
+      // endpoint can be closed to strangers later without a second change
+      // here. Empty means the header is OMITTED, never sent blank.
+      headers: internalToken ? { "x-wopr-internal-token": internalToken } : {},
+      signal: AbortSignal.timeout(SESSION_LOOKUP_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, why: "unavailable" };
+  }
+  if (res.status === 404) return { ok: false, why: "unknown" };
+  if (!res.ok) return { ok: false, why: "unavailable" };
+  try {
+    const body = await res.json() as { surface?: unknown };
+    if (typeof body.surface !== "string") return { ok: false, why: "unavailable" };
+    return { ok: true, surface: body.surface };
+  } catch {
+    return { ok: false, why: "unavailable" };
+  }
+}
+
 export interface ServerOpts {
   port?: number;
   bridgeUrl?: string;
@@ -228,6 +290,11 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   const port = opts.port ?? Number(process.env.COMMS_PORT ?? 8081);
   const bridgeUrl = opts.bridgeUrl ?? process.env.BRIDGE_WS_URL ?? "ws://bridge:8000";
   const internalToken = opts.internalToken ?? process.env.BRIDGE_INTERNAL_TOKEN ?? "";
+  // The same host, its REST face. `bridgeUrl` is a WEBSOCKET url
+  // (`ws://bridge:8000`) — `openLocalLeg` has minted over the HTTP face of it
+  // since #72 by exactly this substitution, and the `/link` session lookup
+  // (#80) now reads over it too. `wss` becomes `https` by the same rule.
+  const bridgeHttpBase = bridgeUrl.replace(/^ws/, "http").replace(/\/$/, "");
   const handshakeOpts: HandshakeOpts = {
     failRate: Number(process.env.COMMS_FAIL_RATE ?? 0),
     ...opts.handshake,
@@ -561,15 +628,84 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     target.handleUpgrade(req, socket, head, (ws) => target.emit("connection", ws, req));
   });
 
-  linkWss.on("connection", (client, req) => {
+  // Opening a `/link` leg starts with an asynchronous step since #80 — the
+  // session lookup below — so the body lives in a function rather than
+  // directly in the listener.
+  const openLink = async (client: WebSocket, req: IncomingMessage) => {
     const url = new URL(req.url ?? "/link", "http://comms.invalid");
     const surface = url.searchParams.get("surface") ?? "";
     const session = url.searchParams.get("session") ?? "";
     const token = url.searchParams.get("token") ?? "";
 
-    const resolved = resolveLink(config, surface);
-    if (!resolved || !session) {
+    // The claim is checked against this relay's own configuration FIRST, so a
+    // surface that could never be honoured is still refused exactly as it was,
+    // without troubling the bridge with a request on behalf of a typo.
+    const claimed = resolveLink(config, surface);
+    if (!claimed || !session) {
       client.close(4400, "unknown surface or missing session");
+      return;
+    }
+
+    // The query string says which surface this dial CLAIMS to be; the bridge
+    // knows which surface the session IS. Pacing is the last property of a
+    // session the relay decided from a string the caller typed, and #74's
+    // residual (#80) is what that cost: a `home-terminal` session dialled as
+    // `?surface=trunk-caller` was paced at profile `off` — baud 0, the only
+    // server-side shaping there is, and for the `claude` engine the only
+    // thing bounding token spend per connection.
+    //
+    // A mismatch is REFUSED, never quietly corrected to the stored surface's
+    // profile: a caller asking for a surface that is not theirs is doing
+    // something wrong, and so is a surface app whose mint and dial disagree.
+    // Both deserve to be told, in the same words #79's 401 tells a mint.
+    //
+    // The socket is paused across the await: the listeners that buffer what a
+    // client says before CONNECTED are wired further down, and a frame that
+    // arrives in the meantime would otherwise be parsed and dropped with
+    // nobody listening.
+    client.pause();
+    /** Refuse a dial that is still paused for the lookup.
+     *
+     *  Resume first, and not as a tidiness: closing a WebSocket is a frame the
+     *  client sends BACK, and a paused socket never reads it — the line would
+     *  sit half-closed until ws's 30-second close timer destroyed it, so the
+     *  caller would see a hang where a refusal was sent. Nothing is listening
+     *  for messages at this point, so resuming discards whatever the caller
+     *  said rather than delivering it into a leg that is being refused. */
+    const refuse = (code: number, reason: string) => {
+      client.resume();
+      client.close(code, reason);
+    };
+    const stored = await fetchSessionSurface(bridgeHttpBase, session, internalToken);
+    // The visitor may have gone while the lookup was in flight — a window that
+    // did not exist while this handler was synchronous, when a `close` could
+    // only ever arrive after its listeners were wired.
+    //
+    // A clean hang-up is safe without this: the pause above defers the close
+    // frame until `resume()`, by which time the listeners exist. What this
+    // catches is the socket dying outright — a reset, not a close frame, which
+    // pausing does not defer. That `close` fires with nobody listening, and
+    // building the leg anyway would run dial(), open an upstream socket to the
+    // bridge, and leave nothing behind that could ever tear it down.
+    if (client.readyState !== WebSocket.OPEN) { client.resume(); return; }
+    if (!stored.ok) {
+      if (stored.why === "unknown") refuse(4404, "unknown session");
+      else refuse(4503, "session lookup failed");
+      return;
+    }
+    if (stored.surface !== surface) {
+      refuse(4403, "surface does not match session");
+      return;
+    }
+    // Resolved from the STORED surface rather than from the claim. They are
+    // the same string by the line above; which one the profile comes from is
+    // what a later edit reads as the authority.
+    const resolved = resolveLink(config, stored.surface);
+    if (!resolved) {
+      // Unreachable — `stored.surface` is the string `claimed` resolved from —
+      // and stated as a refusal rather than a `!` so that if it ever becomes
+      // reachable it is a closed line and not a crashed leg.
+      refuse(4400, "unknown surface or missing session");
       return;
     }
     const { name: linkName, profile, authenticName } = resolved;
@@ -715,7 +851,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
           (state, detail) => down.send({ kind: "handshake", payload: `${state} ${detail}`.trim() }),
           handshakeOpts,
         );
-        if (ok) connectUpstream();
+        // `!closed` because the ritual is long — 6 to 9 seconds of it in
+        // authentic mode — and a visitor who hangs up part way through has
+        // already run teardown(), which found no upstream to close because
+        // there was none yet. Connecting one now would leave a bridge socket
+        // that nothing can ever tear down: teardown is once-only, and the
+        // client whose close would have called it is gone.
+        if (ok && !closed) connectUpstream();
         // On failure the line stays open; the surface may send a control DIAL to retry (§4).
       } finally {
         dialing = false;
@@ -752,7 +894,21 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     client.on("close", () => teardown());
     client.on("error", () => teardown(1011, "client error"));
 
+    // Everything this leg needs to hear a client is now wired; whatever
+    // arrived during the lookup is delivered here rather than lost.
+    client.resume();
     void dial();
+  };
+
+  linkWss.on("connection", (client, req) => {
+    void openLink(client, req).catch((err) => {
+      // openLink's own failure paths all close the line; this is the
+      // belt-and-braces one, because an async listener that rejects would
+      // otherwise take the whole relay down with an unhandled rejection.
+      console.error("link: opening a leg failed:",
+                    err instanceof Error ? err.message : err);
+      try { client.close(1011, "link error"); } catch { /* already gone */ }
+    });
   });
 
   trunkWss.on("connection", (host) => {

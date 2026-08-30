@@ -11,6 +11,7 @@ import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 import type { TrunkFrame } from "../src/trunk.ts";
 import { SeatRegistry } from "../src/seats.ts";
+import { answerSessionLookup, lookupBridge } from "./fake-bridge.ts";
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -155,11 +156,22 @@ function startStubComms(): Promise<{
 }
 
 /** A minimal fake bridge implementing the WS side of api-contract.md: echoes
- *  every reassembled input back as one output frame. */
+ *  every reassembled input back as one output frame.
+ *
+ *  It answers `GET /api/session/{id}` too, because since #80 a `/link` dial
+ *  asks which surface the session is before it paces anything — a bridge that
+ *  cannot say refuses the dial `4503`. Every session it is asked about is a
+ *  `home-terminal` one: these tests dial with a hand-written id and are about
+ *  the ritual, not about who minted what. */
 function fakeBridge(): Promise<{ port: number; close: () => void; seen: string[] }> {
   return new Promise((resolve) => {
     const seen: string[] = [];
-    const wss = new WebSocketServer({ port: 0 });
+    const httpServer = http.createServer((req, res) => {
+      if (answerSessionLookup(req, res, () => "home-terminal")) return;
+      res.writeHead(500);
+      res.end();
+    });
+    const wss = new WebSocketServer({ server: httpServer });
     wss.on("connection", (ws, req) => {
       const buffer: Envelope[] = [];
       ws.on("message", (data) => {
@@ -176,10 +188,10 @@ function fakeBridge(): Promise<{ port: number; close: () => void; seen: string[]
       });
       void req;
     });
-    wss.on("listening", () => {
+    httpServer.listen(0, () => {
       resolve({
-        port: (wss.address() as { port: number }).port,
-        close: () => wss.close(),
+        port: (httpServer.address() as { port: number }).port,
+        close: () => { for (const c of wss.clients) c.terminate(); httpServer.close(); },
         seen,
       });
     });
@@ -267,10 +279,11 @@ test("toggle: fast mode runs the identical client code, instant connect, same by
 
 test("redundant control DIAL while connected is ignored (no second upstream socket)", async () => {
   let connections = 0;
-  const wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", () => { connections += 1; });
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const bridgePort = (wss.address() as { port: number }).port;
+  // The fake bridge answers the session lookup as well as the socket: since
+  // #80 a `/link` dial asks which surface the session IS before it paces
+  // anything, and a bridge that cannot say refuses the dial.
+  const bridge = await lookupBridge("home-terminal", () => { connections += 1; });
+  const bridgePort = bridge.port;
 
   const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
   config.mode = "fast";
@@ -309,17 +322,17 @@ test("redundant control DIAL while connected is ignored (no second upstream sock
   } finally {
     ws.close();
     await server.close();
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await bridge.close();
   }
 });
 
 test("upstream drop delivers NO CARRIER on the line BEFORE the client socket closes (issue #88)", async () => {
   // A bridge that accepts the session then immediately drops it, reproducing
   // the silent line-drop: the queued NO CARRIER used to die in down.close().
-  const wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (ws) => ws.close());
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const bridgePort = (wss.address() as { port: number }).port;
+  // Answering the session lookup as well as the socket is what a fake bridge
+  // has to do since #80 — see fake-bridge.ts.
+  const bridge = await lookupBridge("home-terminal", (ws: WebSocket) => ws.close());
+  const bridgePort = bridge.port;
 
   const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
   config.mode = "fast"; // the drop, not the ritual, is under test
@@ -364,7 +377,7 @@ test("upstream drop delivers NO CARRIER on the line BEFORE the client socket clo
   } finally {
     ws.close();
     await server.close();
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await bridge.close();
   }
 });
 
@@ -375,16 +388,14 @@ test("a system's parting words survive the close at 300 baud (issue #62)", async
   // teardown()'s down.close() used to discard the whole paced queue, so the
   // visitor saw the line drop with no parting words at all.
   const display = "\nPANAMAC OFF\n";
-  const wss = new WebSocketServer({ port: 0 });
-  wss.on("connection", (ws) => {
+  const bridge = await lookupBridge("home-terminal", (ws: WebSocket) => {
     ws.send(encodeEnvelope({
       v: 1, session: "s", seq: 0, kind: "output",
       link: "dialup-300", payload: display, eom: true,
     }));
     ws.close();
   });
-  await new Promise<void>((resolve) => wss.once("listening", resolve));
-  const bridgePort = (wss.address() as { port: number }).port;
+  const bridgePort = bridge.port;
 
   // The real 300-baud line: ~30 chars/s, so this display takes ~0.4s to reach
   // the surface — far longer than the close takes to arrive behind it.
@@ -431,7 +442,7 @@ test("a system's parting words survive the close at 300 baud (issue #62)", async
   } finally {
     ws.close();
     await server.close();
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await bridge.close();
   }
 });
 
@@ -1534,16 +1545,25 @@ function fullBridge(): Promise<{
 }> {
   const seen: string[] = [];
   const sessions: string[] = [];
+  // What each minted id's surface is, for the lookup a `/link` dial makes
+  // before it paces (#80). A session id it never minted — the direct dials in
+  // these tests write their own — reads as `home-terminal`, the surface those
+  // dials claim.
+  const minted = new Map<string, string>();
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       if (req.method === "POST" && req.url === "/api/session") {
-        sessions.push(Buffer.concat(chunks).toString());
+        const body = Buffer.concat(chunks).toString();
+        sessions.push(body);
+        const id = `s${sessions.length}`;
+        minted.set(id, (JSON.parse(body || "{}") as { surface?: string }).surface ?? "");
         res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ session_id: `s${sessions.length}`, token: "t" }));
+        res.end(JSON.stringify({ session_id: id, token: "t" }));
         return;
       }
+      if (answerSessionLookup(req, res, (id) => minted.get(id) ?? "home-terminal")) return;
       res.writeHead(500);
       res.end();
     });

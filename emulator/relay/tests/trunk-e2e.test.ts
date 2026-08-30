@@ -28,6 +28,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { startServer } from "../src/server.ts";
+import { answerSessionLookup } from "./fake-bridge.ts";
 import { startTieline } from "../src/tieline.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
@@ -65,6 +66,9 @@ async function startStubBridge(): Promise<{
   close: () => Promise<void>;
 }> {
   const sessionPosts: string[] = [];
+  // Which surface this bridge minted the session with, for the lookup a
+  // `/link` dial now makes before it paces anything (#80).
+  let mintedSurface = "home-terminal";
   const connections: Array<{ url: string; internalToken: string | undefined; received: string[] }> = [];
 
   const server = http.createServer((req, res) => {
@@ -72,11 +76,14 @@ async function startStubBridge(): Promise<{
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       if (req.method === "POST" && req.url === "/api/session") {
-        sessionPosts.push(Buffer.concat(chunks).toString());
+        const body = Buffer.concat(chunks).toString();
+        sessionPosts.push(body);
+        mintedSurface = (JSON.parse(body || "{}") as { surface?: string }).surface ?? "";
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ session_id: SESSION, token: TOKEN }));
         return;
       }
+      if (answerSessionLookup(req, res, (id) => id === SESSION ? mintedSurface : undefined)) return;
       res.writeHead(500);
       res.end();
     });
