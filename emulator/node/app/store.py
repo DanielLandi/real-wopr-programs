@@ -297,6 +297,18 @@ class MemoryStore:
         return True
 
 
+#: The journal read behind `PostgresStore.get_recent_events`: a session's own
+#: rows plus the exchange's (`session_id is null`, #88) under one limit. Named
+#: so tests/test_store_contract.py can EXPLAIN the exact statement the store
+#: runs — the `is null` arm is served by `event_logs_session_idx` (a btree
+#: indexes NULL and scans `IS NULL` as an index condition), which is why #117's
+#: proposed partial index on the null rows was not added.
+RECENT_EVENTS_SQL = (
+    "select session_id, ts, kind, actor, payload from event_logs"
+    " where session_id = $1::uuid or session_id is null"
+    " order by ts desc, id desc limit $2")
+
+
 class PostgresStore:
     """Plain Postgres (Neon in production) via asyncpg.
 
@@ -416,11 +428,7 @@ class PostgresStore:
         if uid is None:  # unknown id: no rows (MemoryStore parity)
             return []
         pool = await self._pool_or_connect()
-        rows = await pool.fetch(
-            "select session_id, ts, kind, actor, payload from event_logs"
-            " where session_id = $1::uuid or session_id is null"
-            " order by ts desc, id desc limit $2",
-            uid, limit)
+        rows = await pool.fetch(RECENT_EVENTS_SQL, uid, limit)
         out = [{"session_id": None if r["session_id"] is None else str(r["session_id"]),
                 "ts": r["ts"].isoformat(),
                 "kind": r["kind"], "actor": r["actor"], "payload": r["payload"]}
