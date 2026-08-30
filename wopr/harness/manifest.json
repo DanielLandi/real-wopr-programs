@@ -1,0 +1,9 @@
+{
+  "id": "wopr",
+  "title": "W.O.P.R.",
+  "binary": "wopr",
+  "language": "fortran",
+  "summary": "War Operation Plan Response — the connection monitor that owns a terminal session.",
+  "timeout_s": 5,
+  "memory_budget_kb": 4096
+}

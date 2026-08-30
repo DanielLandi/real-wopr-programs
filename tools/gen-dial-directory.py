@@ -18,8 +18,10 @@ from pathlib import Path
 
 PACK_ROOT = Path(__file__).resolve().parent.parent
 
-KIND_BY_TOP = {"games": "game", "systems": "system", "joshua": "joshua"}
-PROTOCOL_BY_KIND = {"game": "WOPR/1", "system": "SYSTEM/1", "joshua": "SYSTEM/1"}
+KIND_BY_TOP = {"games": "game", "systems": "system", "joshua": "joshua",
+               "wopr": "executive"}
+PROTOCOL_BY_KIND = {"game": "WOPR/1", "system": "SYSTEM/1", "joshua": "SYSTEM/1",
+                    "executive": "SYSTEM/1"}
 
 
 def _manifest_paths(pack_root: Path) -> list[Path]:
@@ -27,7 +29,8 @@ def _manifest_paths(pack_root: Path) -> list[Path]:
     return (sorted(pack_root.glob("games/*/harness/manifest.json"))
             + sorted(pack_root.glob("games/*/*/harness/manifest.json"))
             + sorted(pack_root.glob("systems/*/harness/manifest.json"))
-            + sorted(pack_root.glob("joshua/harness/manifest.json")))
+            + sorted(pack_root.glob("joshua/harness/manifest.json"))
+            + sorted(pack_root.glob("wopr/harness/manifest.json")))
 
 
 def collect_programs(pack_root: Path) -> list[dict]:

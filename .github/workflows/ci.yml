@@ -28,6 +28,7 @@ jobs:
               for m in glob.glob("games/*/harness/manifest.json")
                      + glob.glob("systems/*/harness/manifest.json")
                      + glob.glob("joshua/harness/manifest.json")
+                     + glob.glob("wopr/harness/manifest.json")
           }
           missing = on_disk - idx
           if missing:
