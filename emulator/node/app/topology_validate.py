@@ -2,9 +2,10 @@
 
 Kept apart from topology.py so the rules can be read and tested one at a time.
 The supervisor refuses to start when errors() is non-empty; warnings are printed
-and do not block — the composite-host warning exists to keep a pack.json `nodes`
-waiting room visible rather than comfortable. This pack's is empty: the
-executive declares itself in `wopr/harness/manifest.json` like every other node.
+and do not block. A node is declared in its program's harness/manifest.json and
+nowhere else — the pack.json `nodes` waiting room that once held the executive
+is gone, and `pack-nodes` rejects a pack that brings the key back, so it cannot
+quietly return.
 """
 
 from __future__ import annotations
@@ -81,16 +82,20 @@ def _find_cycle(nodes: dict[str, NodeDecl]) -> list[str] | None:
 
 
 def validate(t: Topology, program_ids: set[str],
-             program_paths: dict[str, str] | None = None) -> list[Problem]:
+             program_paths: dict[str, str] | None = None,
+             pack: dict | None = None) -> list[Problem]:
+    """`pack` is the parsed pack.json, when the caller has it; the rules that
+    are about the index rather than the shape it describes live here too."""
     problems: list[Problem] = []
     program_paths = program_paths or {pid: pid for pid in program_ids}
 
+    if pack is not None and "nodes" in pack:
+        problems.append(Problem("error", "pack-nodes",
+            "pack.json declares `nodes` — a node is declared in its program's "
+            "harness/manifest.json; the pack.json waiting room is gone"))
+
     seen: dict[tuple[str, str], str] = {}
     for node in t.nodes.values():
-        if node.source == "pack.json":
-            problems.append(Problem("warning", "composite-host",
-                f"{node.id}: declared in pack.json — it has no period source yet"))
-
         for net_name, addr in node.networks.items():
             net = t.networks.get(net_name)
             if net is None:

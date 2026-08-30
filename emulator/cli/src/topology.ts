@@ -26,7 +26,6 @@ export interface NodeDesc {
   peers: string[];
   state: "ephemeral" | "persistent";
   callable_by: string[] | null;
-  source: "manifest" | "pack.json";
 }
 
 export interface Problem {
