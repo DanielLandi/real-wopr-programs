@@ -141,7 +141,11 @@ class Store(Protocol):
     async def set_system_state(self, session_id: str, state: str) -> None: ...
     async def list_exchanges(self) -> list[dict[str, Any]]: ...
     async def register_exchange(self, id: str, name: str, region: str, api: str,
-                                link: str, joshua: str, operator: str | None) -> bool: ...
+                                link: str, joshua: str, operator: str | None) -> bool:
+        """False when the book already holds this `id` — or this endpoint
+        (`normalize_api`) under another id, the rule 0004's unique index
+        enforces in Postgres."""
+        ...
     async def exchange_id_for_api(self, api: str) -> str | None:
         """The id already holding this endpoint (approved or pending), or None.
         Matched on `normalize_api`, so a trailing slash or a capital in the
@@ -316,6 +320,12 @@ class MemoryStore:
         if joshua not in EXCHANGE_JOSHUAS:
             raise ValueError(f"joshua {joshua!r} violates exchanges.joshua CHECK")
         if id in self.exchanges:
+            return False
+        # Mirror of `exchanges_api_normalized_key` (db/migrations/0004): one
+        # row per normalized api. On Postgres the index refuses the insert;
+        # the same call must fail the same way on the store the tests run.
+        if any(normalize_api(e["api"]) == normalize_api(api)
+               for e in self.exchanges.values()):
             return False
         self.exchanges[id] = {"id": id, "name": name, "region": region,
                               "api": api, "link": link, "joshua": joshua,
@@ -602,11 +612,21 @@ class PostgresStore:
 
     async def register_exchange(self, id: str, name: str, region: str, api: str,
                                 link: str, joshua: str, operator: str | None) -> bool:
+        import asyncpg  # [prod] extra; this store cannot exist without it
+
         pool = await self._pool_or_connect()
-        inserted = await pool.fetchval(
-            "insert into exchanges (id, name, region, api, link, joshua, operator)"
-            " values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing returning id",
-            id, name, region, api, link, joshua, operator)
+        try:
+            inserted = await pool.fetchval(
+                "insert into exchanges (id, name, region, api, link, joshua, operator)"
+                " values ($1,$2,$3,$4,$5,$6,$7) on conflict (id) do nothing returning id",
+                id, name, region, api, link, joshua, operator)
+        except asyncpg.UniqueViolationError:
+            # `exchanges_api_normalized_key` (db/migrations/0004): the book
+            # already holds this endpoint under another id. The route's #142
+            # guard answers first in the common case; this catch is the race
+            # window between guard and insert, folded into the same False the
+            # id conflict returns rather than surfacing as a 500.
+            return False
         return inserted is not None
 
     async def exchange_id_for_api(self, api: str) -> str | None:
