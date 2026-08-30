@@ -91,6 +91,19 @@ async function fetchSessionSurface(bridgeHttp: string, session: string,
 
 export interface ServerOpts {
   port?: number;
+  /** The address to bind. Defaults to every address, which is what a deployed
+   *  relay wants.
+   *
+   *  It is worth setting to `127.0.0.1` whenever the port is ephemeral
+   *  (`port: 0`), as every test here does. A `listen(0)` with no address binds
+   *  the IPv6 wildcard, and the kernel will hand out a port number that
+   *  another process already holds on IPv4 127.0.0.1 — the two are different
+   *  sockets. A `ws://127.0.0.1:<port>` dial then reaches the stranger, not
+   *  this relay, and the failure is a lost dial (`socket hang up`, `connect
+   *  ETIMEDOUT`), not a slow one (#151, #125; first caught in #114 with
+   *  Tailscale as the stranger). Binding the family the dial uses makes the
+   *  port genuinely ours: the kernel picks one free on 127.0.0.1. */
+  host?: string;
   bridgeUrl?: string;
   internalToken?: string;
   config?: CommsConfig;
@@ -1416,7 +1429,9 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     res.end();
   }
 
-  await new Promise<void>((resolve) => httpServer.listen(port, resolve));
+  await new Promise<void>((resolve) => (opts.host === undefined
+    ? httpServer.listen(port, resolve)
+    : httpServer.listen(port, opts.host, resolve)));
   const actualPort = (httpServer.address() as { port: number }).port;
   if (!publicBase) publicBase = `http://localhost:${actualPort}`;
 

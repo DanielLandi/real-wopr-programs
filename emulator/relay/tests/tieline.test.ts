@@ -10,7 +10,7 @@ import http from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { WebSocket, WebSocketServer } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer, LOOPBACK } from "./loopback.ts";
 import { startTieline, type PlacedCall } from "../src/tieline.ts";
 import { encodeEnvelope } from "../src/envelope.ts";
 
@@ -20,6 +20,18 @@ function connect(url: string): Promise<WebSocket> {
     ws.once("open", () => resolve(ws));
     ws.once("error", reject);
   });
+}
+
+/** The port a stub is really listening on. `address()` is `null` until the
+ *  bind completes, and naming a host (which these stubs now do — see
+ *  loopback.ts) makes `listen()` resolve the address first, so the bind no
+ *  longer lands in the same tick as the constructor. Reading `address()`
+ *  straight after `new WebSocketServer(...)` was only ever working by that
+ *  accident. Safe to call after the `listening` event too: it waits only if
+ *  there is nothing to read yet. */
+async function listeningPort(wss: WebSocketServer): Promise<number> {
+  if (!wss.address()) await new Promise<void>((r) => wss.once("listening", () => r()));
+  return (wss.address() as { port: number }).port;
 }
 
 /** Poll `check` until it is true or `timeoutMs` elapses — an effect observed
@@ -63,7 +75,7 @@ function httpJson(
 async function startStubComms(): Promise<{
   port: number; onDial?: (url: string) => void; close: () => Promise<void>;
 }> {
-  const wss = new WebSocketServer({ port: 0 });
+  const wss = new WebSocketServer({ port: 0, host: LOOPBACK });
   const self = {
     port: 0,
     onDial: undefined as ((url: string) => void) | undefined,
@@ -124,7 +136,7 @@ async function startStubBridge(opts?: {
       res.end();
     });
   });
-  await new Promise<void>((resolve) => server.listen(0, resolve));
+  await new Promise<void>((resolve) => server.listen(0, LOOPBACK, resolve));
   const port = (server.address() as { port: number }).port;
   return {
     port,
@@ -219,7 +231,7 @@ test("tieline: a disallowed REQUEST path is refused host-side without touching t
   const comms = await startStubComms();
   const bridge = await startStubBridge();
 
-  const fakeHub = new WebSocketServer({ port: 0 });
+  const fakeHub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const responses: Array<{ t: string; rid: number; status: number; body: string }> = [];
   let resolveResponse!: () => void;
   const gotResponse = new Promise<void>((resolve) => { resolveResponse = resolve; });
@@ -236,8 +248,7 @@ test("tieline: a disallowed REQUEST path is refused host-side without touching t
       }
     });
   });
-  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
-  const hubPort = (fakeHub.address() as { port: number }).port;
+  const hubPort = await listeningPort(fakeHub);
 
   const tieline = startTieline({
     hubUrl: `ws://127.0.0.1:${hubPort}`,
@@ -358,7 +369,7 @@ test("tieline: a 4400 AFTER the placement is an outage, not a verdict", { timeou
   console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
 
   let connections = 0;
-  const fakeHub = new WebSocketServer({ port: 0 });
+  const fakeHub = new WebSocketServer({ port: 0, host: LOOPBACK });
   fakeHub.on("connection", (ws) => {
     connections += 1;
     ws.on("message", (data) => {
@@ -368,8 +379,7 @@ test("tieline: a 4400 AFTER the placement is an outage, not a verdict", { timeou
       setTimeout(() => ws.close(4400, "malformed trunk frame"), 20);
     });
   });
-  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
-  const hubPort = (fakeHub.address() as { port: number }).port;
+  const hubPort = await listeningPort(fakeHub);
 
   let assignedCalls = 0;
   const tie = startTieline({
@@ -566,7 +576,7 @@ test("tieline CLI: HOME is refused before dialling, and is not offered as a choi
 // ---- place() and inbound origin (Task 5) -----------------------------------
 
 test("tieline: place() resolves with the hub's PLACED, and rejects nothing", async () => {
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   hub.on("connection", (ws) => {
     ws.on("message", (data) => {
       const f = JSON.parse(data.toString());
@@ -579,8 +589,7 @@ test("tieline: place() resolves with the hub's PLACED, and rejects nothing", asy
       }
     });
   });
-  await new Promise<void>((r) => hub.once("listening", () => r()));
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
 
   const seenOrigins: unknown[] = [];
   const tie = startTieline({
@@ -602,7 +611,7 @@ test("tieline: place() resolves with the hub's PLACED, and rejects nothing", asy
 });
 
 test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   hub.on("connection", (ws) => {
     ws.on("message", (data) => {
       if (JSON.parse(data.toString()).t !== "REGISTER") return;
@@ -611,8 +620,7 @@ test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
                                origin: { world: 1, slot: "PANAM" } }));
     });
   });
-  await new Promise<void>((r) => hub.once("listening", () => r()));
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
 
   const seen: unknown[] = [];
   const tie = startTieline({
@@ -637,7 +645,7 @@ test("tieline: an inbound OPEN hands its origin to onOpen", async () => {
 test("tieline: an OPEN from a machine opens a local leg, not a query dial", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge();
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const dialled: string[] = [];
   comms.onDial = (url: string) => dialled.push(url);
   let hostSocket: WebSocket | undefined;
@@ -646,7 +654,7 @@ test("tieline: an OPEN from a machine opens a local leg, not a query dial", asyn
     ws.on("message", () => {});
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
     joshua: "period", reconnect: false,
@@ -670,7 +678,7 @@ test("tieline: an OPEN from a machine opens a local leg, not a query dial", asyn
 test("tieline: an OPEN from a seat still pastes the hub's query", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge();
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const dialled: string[] = [];
   comms.onDial = (url: string) => dialled.push(url);
   let hostSocket: WebSocket | undefined;
@@ -679,7 +687,7 @@ test("tieline: an OPEN from a seat still pastes the hub's query", async () => {
     ws.on("message", () => {});
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
     joshua: "period", reconnect: false,
@@ -711,7 +719,7 @@ test("tieline: a hub CLOSE that arrives while a machine call's mint is in flight
   // that window deterministically instead of by luck.
   const comms = await startStubComms();
   const bridge = await startStubBridge({ sessionDelayMs: 200 });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   let hostSocket: WebSocket | undefined;
   const fromTieline: Array<{ t: string; chan?: number }> = [];
   hub.on("connection", (ws) => {
@@ -719,7 +727,7 @@ test("tieline: a hub CLOSE that arrives while a machine call's mint is in flight
     ws.on("message", (data) => { fromTieline.push(JSON.parse(data.toString())); });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
@@ -772,7 +780,7 @@ test("tieline: a dropped hub connection cancels an in-flight machine mint before
   // new call reuses.
   const comms = await startStubComms();
   const bridge = await startStubBridge({ sessionDelayMs: 300 });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const connections: WebSocket[] = [];
   const framesBySocket = new Map<WebSocket, Array<{ t: string; chan?: number }>>();
   hub.on("connection", (ws) => {
@@ -782,7 +790,7 @@ test("tieline: a dropped hub connection cancels an in-flight machine mint before
     ws.on("message", (data) => { seen.push(JSON.parse(data.toString())); });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
     joshua: "period", reconnect: true,
@@ -832,7 +840,7 @@ test("tieline: a dropped hub connection cancels an in-flight machine mint before
 test("tieline: a placed call attaches a local leg and can be hung up", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge();
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const dialled: string[] = [];
   const fromHost: string[] = [];
   comms.onDial = (url: string) => dialled.push(url);
@@ -846,7 +854,7 @@ test("tieline: a placed call attaches a local leg and can be hung up", async () 
     });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
@@ -877,7 +885,7 @@ test("tieline: a placed call attaches a local leg and can be hung up", async () 
 test("tieline: the placer is told when the callee hangs up", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge();
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   let hostSocket: WebSocket | undefined;
   hub.on("connection", (ws) => {
     hostSocket = ws;
@@ -887,7 +895,7 @@ test("tieline: the placer is told when the callee hangs up", async () => {
     });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
@@ -917,7 +925,7 @@ test("tieline: a hub CLOSE that arrives while a placed call's attach is in fligh
   // inside that window deterministically instead of by luck.
   const comms = await startStubComms();
   const bridge = await startStubBridge({ sessionDelayMs: 200 });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   let hostSocket: WebSocket | undefined;
   const fromTieline: Array<{ t: string; chan?: number }> = [];
   hub.on("connection", (ws) => {
@@ -929,7 +937,7 @@ test("tieline: a hub CLOSE that arrives while a placed call's attach is in fligh
     });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
@@ -987,7 +995,7 @@ test("tieline: a hub CLOSE that arrives while a placed call's attach is in fligh
 test("tieline: a refused mint on an inbound machine call frees the hub's channel", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge({ fail: true });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   let hostSocket: WebSocket | undefined;
   const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
   hub.on("connection", (ws) => {
@@ -995,7 +1003,7 @@ test("tieline: a refused mint on an inbound machine call frees the hub's channel
     ws.on("message", (data) => { fromTieline.push(JSON.parse(data.toString())); });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
     joshua: "period", reconnect: false,
@@ -1018,7 +1026,7 @@ test("tieline: a refused mint on an inbound machine call frees the hub's channel
 test("tieline: a refused mint on a call this host placed frees the hub's channel", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge({ fail: true });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
   hub.on("connection", (ws) => {
     ws.on("message", (data) => {
@@ -1028,7 +1036,7 @@ test("tieline: a refused mint on a call this host placed frees the hub's channel
     });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
     joshua: "period", reconnect: false,
@@ -1106,7 +1114,7 @@ test("tieline: a peer whose bridge is down refuses each call rather than wedging
 test("tieline: a refused mint on a call this host placed tells the host, once", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge({ fail: true });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   const fromTieline: Array<{ t: string; chan?: number; reason?: string }> = [];
   hub.on("connection", (ws) => {
     ws.on("message", (data) => {
@@ -1116,7 +1124,7 @@ test("tieline: a refused mint on a call this host placed tells the host, once", 
     });
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
     hubUrl: `ws://127.0.0.1:${port}`, name: "A EXCH", region: "SEATTLE US",
@@ -1151,13 +1159,13 @@ test("tieline: a refused mint on a call this host placed tells the host, once", 
 test("tieline: a refused mint on an inbound machine call closes the onOpen it fired", async () => {
   const comms = await startStubComms();
   const bridge = await startStubBridge({ fail: true });
-  const hub = new WebSocketServer({ port: 0 });
+  const hub = new WebSocketServer({ port: 0, host: LOOPBACK });
   let hostSocket: WebSocket | undefined;
   hub.on("connection", (ws) => {
     hostSocket = ws;
     ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "ABC234", world: 1, slot: "WOPR" }));
   });
-  const port = (hub.address() as { port: number }).port;
+  const port = await listeningPort(hub);
   const opened: number[] = [];
   const closed: Array<{ chan: number; reason?: string }> = [];
   const t = startTieline({
@@ -1191,7 +1199,7 @@ test("tieline: a machine call's local leg carries the internal token (#74)", asy
   const comms = await startStubComms();
   const bridge = await startStubBridge();
 
-  const fakeHub = new WebSocketServer({ port: 0 });
+  const fakeHub = new WebSocketServer({ port: 0, host: LOOPBACK });
   fakeHub.on("connection", (ws) => {
     ws.on("message", (data) => {
       const f = JSON.parse(data.toString());
@@ -1203,8 +1211,7 @@ test("tieline: a machine call's local leg carries the internal token (#74)", asy
       }
     });
   });
-  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
-  const hubPort = (fakeHub.address() as { port: number }).port;
+  const hubPort = await listeningPort(fakeHub);
 
   const tieline = startTieline({
     hubUrl: `ws://127.0.0.1:${hubPort}`,

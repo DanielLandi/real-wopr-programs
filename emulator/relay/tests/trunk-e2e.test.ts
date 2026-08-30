@@ -27,7 +27,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer, LOOPBACK } from "./loopback.ts";
 import { answerSessionLookup } from "./fake-bridge.ts";
 import { startTieline } from "../src/tieline.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -117,7 +117,7 @@ async function startStubBridge(): Promise<{
     });
   });
 
-  await new Promise<void>((resolve) => server.listen(0, resolve));
+  await new Promise<void>((resolve) => server.listen(0, LOOPBACK, resolve));
   return {
     port: (server.address() as { port: number }).port,
     sessionPosts,

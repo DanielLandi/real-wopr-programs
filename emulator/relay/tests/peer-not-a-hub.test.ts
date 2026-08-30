@@ -11,7 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer } from "./loopback.ts";
 import { startTieline } from "../src/tieline.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 

@@ -15,6 +15,7 @@
 
 import http from "node:http";
 import { WebSocketServer } from "ws";
+import { LOOPBACK } from "./loopback.ts";
 
 /** Answer the session lookup, or say this was not a lookup at all.
  *
@@ -66,7 +67,7 @@ export function lookupBridge(
   const wss = new WebSocketServer({ server });
   if (onConnection) wss.on("connection", onConnection);
   return new Promise((resolve) => {
-    server.listen(0, () => resolve({
+    server.listen(0, LOOPBACK, () => resolve({
       port: (server.address() as { port: number }).port,
       wss,
       close: () => new Promise<void>((done) => {
