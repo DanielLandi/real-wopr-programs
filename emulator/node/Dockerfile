@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY tools ./tools
 COPY pack.json ./
+# One COPY per category pack.json declares. Docker cannot ask categories.sh
+# which directories those are, so this is the one list-shaped spot left after
+# #100/#104 — and tests/test_dockerfile_pack.py holds it to categories.sh, so a
+# new category that is not copied in fails the suite, not the build.
 COPY games ./games
 COPY systems ./systems
 COPY joshua ./joshua
@@ -32,7 +36,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ".[prod]"
 
-# The built program pack: games/systems/joshua/wopr/norad sources, manifests, and
+# The built program pack: every category's sources, manifests, and
 # binaries in the pack layout (<cat>/<id>/harness/bin/<binary>). The system
 # wrappers (school-mon, school, protovision) resolve their source relative to
 # the binary, so the whole pack tree is copied, not just the binaries.

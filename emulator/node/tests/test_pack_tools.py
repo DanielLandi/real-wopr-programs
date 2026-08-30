@@ -1,4 +1,4 @@
-"""tools/{categories,build,test}.sh learn the pack's categories from pack.json.
+"""tools/{categories,build,test,behavior}.sh learn the pack's categories from pack.json.
 
 They used to restate the list (`games systems joshua wopr`) by hand, the same
 drift surface that bit the engine repo's import script when `wopr/` arrived
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 PACK = Path(__file__).resolve().parents[3]
-TOOLS = ("categories.sh", "build.sh", "test.sh")
+TOOLS = ("categories.sh", "build.sh", "test.sh", "behavior.sh")
 
 
 def _sh(path: Path, body: str) -> None:
@@ -109,3 +109,25 @@ def test_golden_test_still_fails_on_a_wrong_fixture(mini_pack: Path):
     out = run(mini_pack, "test.sh")
     assert out.returncode == 1
     assert "FAIL solo/01-echo" in out.stdout
+
+
+def test_behavior_walks_every_declared_category_and_no_other(mini_pack: Path):
+    # behavior.sh used to glob games/* alone (#104); it now walks the declared
+    # categories at all three depths, and never an undeclared harness.
+    for rel in ("zz/alpha", "zz/beta/core", "solo"):
+        _sh(mini_pack / rel / "harness/selfplay.sh", 'echo "SELFPLAY $0"\n')
+    _sh(mini_pack / "solo/harness/convergence.sh", 'echo "CONVERGE $0"\n')
+    _sh(mini_pack / "emulator/harness/selfplay.sh", 'touch "$(dirname "$0")/BEHAVED"\n')
+    out = run(mini_pack, "behavior.sh")
+    assert out.returncode == 0, out.stdout + out.stderr
+    for rel in ("zz/alpha", "zz/beta/core", "solo"):
+        assert f"== {rel}/harness/selfplay.sh ==" in out.stdout
+    assert "== solo/harness/convergence.sh ==" in out.stdout
+    assert not (mini_pack / "emulator/harness/BEHAVED").exists()
+
+
+def test_behavior_reports_a_failing_check(mini_pack: Path):
+    _sh(mini_pack / "zz/alpha/harness/selfplay.sh", "exit 1\n")
+    out = run(mini_pack, "behavior.sh")
+    assert out.returncode == 1
+    assert "BEHAVIOR FAILED: zz/alpha/harness/selfplay.sh" in out.stderr
