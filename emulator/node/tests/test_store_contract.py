@@ -6,6 +6,8 @@ Async style follows the repo convention: inner `async def flow()` +
 from __future__ import annotations
 
 import asyncio
+import re
+import uuid
 
 import pytest
 
@@ -391,5 +393,49 @@ def test_exchange_approved_row_flows_through_postgres():
         assert set(rows[0].keys()) == {
             "id", "name", "region", "api", "link", "joshua", "operator"}
         store._pool = None
+
+    asyncio.run(flow())
+
+
+@pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
+def test_exchange_rows_are_read_through_the_session_index():
+    """The exchange-row arm of `get_recent_events` (`or session_id is null`,
+    #88) does not bypass `event_logs_session_idx`, as #117 supposed it did:
+    a btree indexes NULL, and Postgres scans `IS NULL` as an index
+    condition on the leading column. So the journal read is a BitmapOr of
+    two scans on the one index the baseline ships, and the partial index
+    #117 proposed would be a second copy of the same access path.
+
+    This is the EXPLAIN that establishes it. The planner is told to price a
+    sequential scan out (`set local enable_seqscan = off`) because on a
+    test-sized table it would otherwise, correctly, just read the heap;
+    what is under test is which index is *eligible* for the `is null` arm,
+    not what wins on ten rows. The statement is the store's own
+    (`RECENT_EVENTS_SQL`), not a copy, so the assertion follows the query
+    if the query moves."""
+    from app.store import RECENT_EVENTS_SQL, PostgresStore
+
+    url = pgharness.pg_url()
+    pgharness.apply_migrations(url)
+    pgharness.truncate_all(url)
+
+    async def flow():
+        store = PostgresStore(url)
+        s = await store.create_session("norad-terminal", "leased-9600", None)
+        for i in range(5):
+            await store.log_event(s.id, "input", "user", {"n": i})
+            await store.log_event(None, "route", "system", {"n": i})
+
+        pool = await store._pool_or_connect()
+        async with pool.acquire() as conn, conn.transaction():
+            await conn.execute("set local enable_seqscan = off")
+            rows = await conn.fetch("explain " + RECENT_EVENTS_SQL, uuid.UUID(s.id), 10)
+        plan = "\n".join(r[0] for r in rows)
+        store._pool = None
+
+        assert "Seq Scan" not in plan, plan
+        assert "Index Cond: (session_id IS NULL)" in plan, plan
+        scans = re.findall(r"Index Scan on (\w+)", plan)
+        assert scans and set(scans) == {"event_logs_session_idx"}, plan
 
     asyncio.run(flow())
