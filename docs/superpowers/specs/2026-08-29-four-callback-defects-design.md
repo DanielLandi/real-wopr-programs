@@ -269,7 +269,7 @@ non-empty column.
 The `node` CI job runs `pip install -e "emulator/node[dev]"`. Both
 `tests/test_joshua_claude.py` and `tests/test_joshua_claude_seeks.py` open with a
 module-level `pytest.importorskip("anthropic")`, so both modules skip on every
-CI run — five tests, including the two that pin `seek_falken` reaching
+CI run — six tests, including the two that pin `seek_falken` reaching
 `JoshuaReply.seeks`, which is the Claude engine's entire contribution to the
 callback.
 
@@ -331,7 +331,7 @@ one layer up.
 - `emulator/node/tests/test_ci_extras.py` — the two structural assertions above.
 - The guard itself, exercised by running the node suite locally both ways: with
   `anthropic` absent and the flag set (must fail loudly, naming the module), and
-  with `anthropic` installed and the flag set (the five Claude tests must run,
+  with `anthropic` installed and the flag set (the six Claude tests must run,
   by name, not skip).
 
 ---

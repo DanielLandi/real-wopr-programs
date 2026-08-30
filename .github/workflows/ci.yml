@@ -53,6 +53,9 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       WOPR_TEST_DATABASE_URL: postgresql://postgres:wopr@localhost:5432/postgres
+      # This job is the one that covers the production engines, so a missing
+      # prod extra must fail it rather than skip quietly (tests/conftest.py).
+      WOPR_REQUIRE_PROD_EXTRAS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Install period toolchains (golden-path tests spawn the real programs)
@@ -65,7 +68,11 @@ jobs:
       - name: Build every program
         run: make build
       - name: Install the node host
-        run: pip install -e "emulator/node[dev]"
+        # `[dev,prod]`, not `[dev]`: `anthropic` is a prod extra, and without it
+        # test_joshua_claude.py and test_joshua_claude_seeks.py skip at import
+        # — five tests, including the Claude engine's whole contribution to the
+        # callback — while the job still reports green (#78).
+        run: pip install -e "emulator/node[dev,prod]"
       - name: Generated artifacts are current
         run: python3 tools/gen-dial-directory.py --check
       - name: Generated data files are current

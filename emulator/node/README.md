@@ -50,3 +50,8 @@ pip install -e ".[dev]"          # + ".[prod]" for postgres/anthropic clients
 pytest                            # program-spawning paths need `make build` at the pack root
 uvicorn app.main:app --port 8000
 ```
+
+Modules gated on a `prod` client skip on a plain `[dev]` install, and say so.
+CI's `node` job installs `[dev,prod]` and sets `WOPR_REQUIRE_PROD_EXTRAS=1`, which
+turns a missing `prod` extra into a refusal to run at all rather than a silent
+skip — set it locally too if you want the same guarantee.
