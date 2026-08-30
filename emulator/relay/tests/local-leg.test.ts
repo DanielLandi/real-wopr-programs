@@ -8,13 +8,20 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { openLocalLeg } from "../src/local-leg.ts";
 import { decodeEnvelope, encodeEnvelope } from "../src/envelope.ts";
+import { Inbox } from "./inbox.ts";
 
 /** A bridge that mints one session, and a comms leg that records the URL it
- *  was dialled on and echoes envelopes the test pushes at it. */
+ *  was dialled on and echoes envelopes the test pushes at it.
+ *
+ *  `dialled` and `received` are inboxes, listening from before the leg under
+ *  test exists: a test waits on the dial, or on the N-th frame, instead of
+ *  sleeping and hoping the loopback round trip fit inside the nap. Under a
+ *  loaded parallel run it did not (#114): the upgrade landed after the
+ *  60 ms nap, and the assertions read an empty list. */
 async function stubs(opts: { mintStatus?: number } = {}): Promise<{
   bridgeUrl: string; commsUrl: string;
-  dialled: string[]; sessionPosts: string[]; sessionHeaders: http.IncomingHttpHeaders[];
-  received: string[];
+  dialled: Inbox<string>; sessionPosts: string[]; sessionHeaders: http.IncomingHttpHeaders[];
+  received: Inbox<string>;
   push: (kind: string, payload: string) => void;
   close: () => Promise<void>;
 }> {
@@ -37,14 +44,14 @@ async function stubs(opts: { mintStatus?: number } = {}): Promise<{
   });
   await new Promise<void>((r) => bridge.listen(0, r));
 
-  const dialled: string[] = [];
-  const received: string[] = [];
+  const dialled = new Inbox<string>();
+  const received = new Inbox<string>();
   const sockets: import("ws").WebSocket[] = [];
   const wss = new WebSocketServer({ port: 0 });
   wss.on("connection", (ws, req) => {
-    dialled.push(req.url ?? "");
     sockets.push(ws);
     ws.on("message", (d) => received.push(d.toString()));
+    dialled.push(req.url ?? "");
   });
   await new Promise<void>((r) => wss.once("listening", r));
 
@@ -65,8 +72,6 @@ async function stubs(opts: { mintStatus?: number } = {}): Promise<{
   };
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 60));
-
 test("local-leg: mints a session and dials /link with it", async () => {
   const s = await stubs();
   try {
@@ -75,13 +80,13 @@ test("local-leg: mints a session and dials /link with it", async () => {
       send: () => {}, close: () => {},
     });
     assert.notEqual(leg, "refused");
-    await settle();
     assert.equal(s.sessionPosts.length, 1);
     assert.match(s.sessionPosts[0], /"surface":"trunk-call"/);
-    assert.equal(s.dialled.length, 1);
-    assert.match(s.dialled[0], /surface=trunk-call/);
-    assert.match(s.dialled[0], /session=S1/);
-    assert.match(s.dialled[0], /token=T1/);
+    const url = await s.dialled.nth(0);
+    assert.equal(s.dialled.all.length, 1);
+    assert.match(url, /surface=trunk-call/);
+    assert.match(url, /session=S1/);
+    assert.match(url, /token=T1/);
   } finally { await s.close(); }
 });
 
@@ -92,8 +97,7 @@ test("local-leg: announces the origin as a control envelope before anything else
       bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
       origin: "world 1 slot PANAM", send: () => {}, close: () => {},
     });
-    await settle();
-    const first = decodeEnvelope(s.received[0]);
+    const first = decodeEnvelope(await s.received.nth(0));
     assert.equal(first.kind, "control");
     assert.equal(first.payload, "ORIGIN world 1 slot PANAM");
   } finally { await s.close(); }
@@ -108,8 +112,7 @@ test("local-leg: buffers what arrives before the socket opens", async () => {
     });
     assert.notEqual(leg, "refused");
     (leg as { deliver: (d: string) => void }).deliver("EARLY");
-    await settle();
-    assert.ok(s.received.includes("EARLY"), "a frame delivered before open must not be lost");
+    assert.equal(await s.received.nth(0), "EARLY", "a frame delivered before open must not be lost");
   } finally { await s.close(); }
 });
 
@@ -143,7 +146,6 @@ test("local-leg: the caller side drops the far end's ritual, the callee side kee
     });
     assert.notEqual(callerLeg, "refused");
     assert.notEqual(calleeLeg, "refused");
-    await settle();
 
     for (const leg of [callerLeg, calleeLeg]) {
       const d = (leg as { deliver: (data: string) => void }).deliver;
@@ -151,15 +153,19 @@ test("local-leg: the caller side drops the far end's ritual, the callee side kee
       d(env("control", "NO CARRIER"));
       d(env("output", "GREETINGS"));
     }
-    await settle();
+    // GREETINGS is the last frame either leg was handed, so once it has
+    // arrived the list is complete: the socket delivers in order, and
+    // nothing was sent after it.
+    await caller.received.nth(0);
+    await callee.received.nth(2);
 
     // The calling program is handed the answer, and nothing of the modem.
-    assert.deepEqual(kindsOf(caller.received), ["output"],
+    assert.deepEqual(kindsOf(caller.received.all), ["output"],
       "a calling program must not be handed the answering modem's ritual");
-    assert.deepEqual(caller.received.map((d) => decodeEnvelope(d).payload), ["GREETINGS"]);
+    assert.deepEqual(caller.received.all.map((d) => decodeEnvelope(d).payload), ["GREETINGS"]);
     // The answering side is not filtered: its own surface runs the ritual, and
     // a visitor relayed onto it must still see every frame of it.
-    assert.deepEqual(kindsOf(callee.received), ["handshake", "control", "output"],
+    assert.deepEqual(kindsOf(callee.received.all), ["handshake", "control", "output"],
       "the callee side must keep everything");
   } finally { await caller.close(); await callee.close(); }
 });
@@ -181,7 +187,6 @@ test("local-leg: filterRitual keeps conversation and drops only the modem", asyn
       filterRitual: true, send: () => {}, close: () => {},
     });
     assert.notEqual(leg, "refused");
-    await settle();
     const d = (leg as { deliver: (data: string) => void }).deliver;
     // The ORIGIN control envelope this leg sends itself is not in play: no
     // `origin` was passed, so everything on the comms socket arrived via
@@ -191,9 +196,11 @@ test("local-leg: filterRitual keeps conversation and drops only the modem", asyn
     d(env("input", "HELLO"));
     d(env("handshake", "CARRIER DETECT"));
     d(env("control", "NO CARRIER"));
-    await settle();
+    // HELLO is the last frame that may cross; the two after it are dropped
+    // synchronously in `deliver`, so nothing can arrive behind it.
+    await s.received.nth(2);
 
-    const got = s.received.map((r) => {
+    const got = s.received.all.map((r) => {
       const e = decodeEnvelope(r);
       return [e.kind, e.payload];
     });
@@ -226,7 +233,7 @@ test("local-leg: frames held before the dial completes are bounded, not unbounde
   // — but "bounded in practice" is not bounded, and this is the same
   // mutual-untrust boundary the hub's held-ring frames are capped at.
   const s = await stubs();
-  const closes: Array<string | undefined> = [];
+  const closes = new Inbox<string | undefined>();
   try {
     const leg = await openLocalLeg({
       bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
@@ -237,10 +244,12 @@ test("local-leg: frames held before the dial completes are bounded, not unbounde
     // of these is held rather than sent.
     const big = "x".repeat(8192);
     for (let i = 0; i < 5; i++) leg.deliver(big);
-    assert.equal(closes[0], "greeting exceeds hold capacity",
+    assert.equal(closes.all[0], "greeting exceeds hold capacity",
                  "past the cap the call is hung up, not grown");
-    await settle();
-    assert.deepEqual(s.received, [], "and nothing held past the cap is ever delivered");
+    // The leg hangs its own socket up on the way out; the second close is the
+    // socket's, and after it nothing can be sent. The list is complete.
+    assert.equal(await closes.nth(1), "local leg closed");
+    assert.deepEqual(s.received.all, [], "and nothing held past the cap is ever delivered");
   } finally {
     await s.close();
   }
@@ -255,8 +264,8 @@ test("local-leg: frames under the cap are still held and flushed on connect", as
     });
     if (leg === "refused") throw new Error("the mint should have succeeded");
     leg.deliver("x".repeat(8192));
-    await settle();
-    assert.equal(s.received.length, 1, "the cap must not cost the ordinary case its buffer");
+    await s.received.nth(0);
+    assert.equal(s.received.all.length, 1, "the cap must not cost the ordinary case its buffer");
   } finally {
     await s.close();
   }
@@ -278,7 +287,6 @@ test("local-leg: sends the internal token on the mint", async () => {
       internalToken: "SECRET", send: () => {}, close: () => {},
     });
     assert.notEqual(leg, "refused");
-    await settle();
     assert.equal(s.sessionHeaders.length, 1);
     assert.equal(s.sessionHeaders[0]["x-wopr-internal-token"], "SECRET");
   } finally { await s.close(); }
@@ -295,7 +303,6 @@ test("local-leg: omits the header entirely when it has no token", async () => {
       bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-call",
       send: () => {}, close: () => {},
     });
-    await settle();
     assert.equal(s.sessionHeaders.length, 1);
     assert.equal("x-wopr-internal-token" in s.sessionHeaders[0], false);
   } finally {
@@ -316,7 +323,6 @@ test("local-leg: falls back to BRIDGE_INTERNAL_TOKEN when given no option", asyn
       bridgeUrl: s.bridgeUrl, commsUrl: s.commsUrl, surface: "trunk-caller",
       send: () => {}, close: () => {},
     });
-    await settle();
     assert.equal(s.sessionHeaders[0]["x-wopr-internal-token"], "FROM-ENV");
   } finally {
     await s.close();
