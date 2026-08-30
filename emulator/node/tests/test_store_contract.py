@@ -11,7 +11,7 @@ import pytest
 
 from app.main import DEFAULT_LINKS
 from app.store import (EVENT_ACTORS, EVENT_KINDS, EXCHANGE_JOSHUAS, GAME_STATUSES,
-                       GLOBAL_ROOM_KEY, GameState, MemoryStore)
+                       GLOBAL_ROOM_KEY, SESSION_SURFACES, GameState, MemoryStore)
 
 import pgharness  # sibling test module (pytest prepends tests/ to sys.path; no tests package exists)
 
@@ -140,6 +140,10 @@ def test_a_value_outside_the_enumeration_is_refused(store):
 
     async def flow():
         s = await store.create_session("home-terminal", "dialup-300", None)
+        # The #73 column itself — the one enumeration the in-memory store
+        # still let through after #110 (#111).
+        with pytest.raises(refused):
+            await store.create_session("teletype-33", "dialup-110", None)
         with pytest.raises(refused):
             await store.log_event(s.id, "telemetry", "system", {})
         with pytest.raises(refused):

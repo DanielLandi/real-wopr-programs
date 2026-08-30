@@ -35,6 +35,15 @@ GLOBAL_ROOM_KEY = "__global__"
 # the migrations as text, and tests/test_store_contract.py writes every value
 # through PostgresStore. MemoryStore refuses anything outside these sets so
 # the in-memory suite fails where Postgres would (#91).
+#
+# `sessions.surface`, the #73 column itself: the surfaces `POST /api/session`
+# will mint (`DEFAULT_LINKS`, main.py). Two copies, because main.py imports
+# this module and the store cannot import it back; test_check_constraints.py
+# pins them equal. Added last of the five (#111) — #110 guarded the other four.
+SESSION_SURFACES = frozenset({
+    "home-terminal", "norad-terminal", "norad-bigboard", "wopr-panel",
+    "trunk-call", "trunk-caller",
+})
 EVENT_KINDS = frozenset({"input", "route", "core", "joshua", "error"})
 EVENT_ACTORS = frozenset({"user", "wopr", "joshua", "system"})
 # The wire's STATUS vocabulary plus QUIT, which no program emits: the bridge
@@ -149,6 +158,10 @@ class MemoryStore:
 
     async def create_session(self, surface: str, link_profile: str, user_id: str | None,
                              room_code: str | None = None, system_id: str | None = None) -> Session:
+        # What sessions_surface_check would refuse, refused here too (#111):
+        # the surface that reached the database untested is the whole of #73.
+        if surface not in SESSION_SURFACES:
+            raise ValueError(f"surface {surface!r} violates sessions.surface CHECK")
         s = Session(
             id=str(uuid.uuid4()),
             surface=surface,
