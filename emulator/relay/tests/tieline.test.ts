@@ -382,9 +382,14 @@ test("tieline: a 4400 AFTER the placement is an outage, not a verdict", { timeou
 
   try {
     // The first backoff is 5s: past it, a tieline that respected the retry path
-    // has redialled and been placed a second time.
+    // has redialled and been placed a second time. Wait for the PLACEMENT, not
+    // the connection: the hub's "connection" event fires a full round trip
+    // before its ASSIGNED reaches the tieline (client open -> REGISTER -> hub
+    // -> ASSIGNED -> onAssigned), and under a loaded parallel run that trip
+    // can outlast a poll tick — polling `connections` and then asserting
+    // `assignedCalls` read the redial as "never placed" ~1 in 6 (#97).
     const deadline = Date.now() + 12_000;
-    while (connections < 2 && Date.now() < deadline) {
+    while (assignedCalls < 2 && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 50));
     }
     assert.ok(connections >= 2, `a post-ASSIGNED 4400 killed a live trunk: ${connections} connection(s)`);
