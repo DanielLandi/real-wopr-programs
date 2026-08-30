@@ -32,12 +32,48 @@ function nextMessage(ws: WebSocket): Promise<string> {
  *  any that do not. A test that just closed a channel and is now waiting on
  *  the NEXT call's OPEN cannot assume that OPEN is the very next frame: the
  *  CLOSE from the channel it just tore down is in flight on the same socket
- *  and can land first. Taking `nextMessage` blind races that ordering. */
+ *  and can land first. Taking `nextMessage` blind races that ordering.
+ *
+ *  The frames are BUFFERED from the first call on, not taken one `once` at a
+ *  time. Two frames that arrive in one TCP read (CLOSE and OPEN, or PLACED
+ *  and CLOSE — routine when the process is slow to read under a loaded
+ *  parallel run) are parsed by ws in one synchronous loop and emitted as two
+ *  back-to-back `message` events, before any microtask runs. A `once`
+ *  listener consumes the first, and the second fires into nobody — the frame
+ *  this test is waiting for is gone, and the wait never ends (#113). */
+const frameQueues = new WeakMap<WebSocket, { frames: any[]; wake: (() => void)[] }>();
 async function nextFrame<T = any>(ws: WebSocket, pred: (f: any) => boolean): Promise<T> {
-  for (;;) {
-    const f = JSON.parse(await nextMessage(ws));
-    if (pred(f)) return f as T;
+  let q = frameQueues.get(ws);
+  if (!q) {
+    q = { frames: [], wake: [] };
+    frameQueues.set(ws, q);
+    const queue = q;
+    ws.on("message", (data) => {
+      queue.frames.push(JSON.parse(data.toString()));
+      for (const w of queue.wake.splice(0)) w();
+    });
   }
+  for (;;) {
+    while (q.frames.length > 0) {
+      const f = q.frames.shift();
+      if (pred(f)) return f as T;
+    }
+    await new Promise<void>((r) => q!.wake.push(r));
+  }
+}
+
+/** A visitor's call to `url`, resolved once BOTH ends know it: the hub's OPEN
+ *  has reached `host` and the visitor's socket is open. The OPEN wait is
+ *  armed before the socket exists, so the frame cannot land unobserved; the
+ *  socket is awaited because the hub sends the OPEN at the upgrade, a round
+ *  trip before the visitor's own `open` — a test that closes the dial the
+ *  moment the host has seen it can close a socket still CONNECTING, and ws
+ *  answers that with an `error` event nobody listens for, which takes the
+ *  test down as an uncaught exception (#82). */
+async function dial(host: WebSocket, url: string): Promise<{ ws: WebSocket; open: any }> {
+  const opened = nextFrame(host, (f) => f.t === "OPEN");
+  const ws = await connect(url);
+  return { ws, open: await opened };
 }
 
 // Sends the seat-leg control handshake: `SEAT?` is answered with `SEAT
@@ -914,10 +950,9 @@ test("seat: the token never crosses the trunk", async () => {
     askSeat(seat);
     const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
 
-    const visitor = new WebSocket(
+    const { ws: visitor, open } = await dial(host,
       `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
-    const open = JSON.parse(await nextMessage(host));
     assert.equal(open.t, "OPEN");
     assert.doesNotMatch(open.query, /seat=/,
       "the seat token is the one credential a foreign host must never see");
@@ -938,9 +973,9 @@ test("seat: a dial carrying a token discloses a handle to the exchange it called
     askSeat(seat);
     const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
 
-    const first = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    const { ws: first, open: open1 } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
-    const open1 = await nextFrame(host, (f) => f.t === "OPEN");
     assert.ok(open1.origin && typeof open1.origin.seat === "string",
       "a machine learns who called by being called");
     first.close();
@@ -948,11 +983,12 @@ test("seat: a dial carrying a token discloses a handle to the exchange it called
     // first.close() -> cleanup -> closeChannel sends the host a CLOSE for
     // chan 1, on the same socket the second call's OPEN is about to arrive
     // on. Which lands first is a race this test must not assume the answer
-    // to — drain until the frame is actually an OPEN, discarding a stray
-    // CLOSE from the call just torn down.
-    const second = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    // to — `dial` drains until the frame is actually an OPEN, discarding a
+    // stray CLOSE from the call just torn down (and keeps both if they
+    // arrive together).
+    const { ws: second, open: open2 } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
-    const open2 = await nextFrame(host, (f) => f.t === "OPEN");
     assert.equal(open2.origin.seat, open1.origin.seat,
       "one seat, one exchange, one handle — across calls");
     second.close(); seat.close();
@@ -975,14 +1011,14 @@ test("seat: a seat's handle for one exchange differs from its handle for another
     askSeat(seat);
     const token = decodeEnvelope(await nextMessage(seat)).payload.split(" ")[1];
 
-    const toPanam = new WebSocket(`ws://127.0.0.1:${server.port}/x/${panam.exchange}/link` +
+    const { ws: toPanam, open: openPanam } = await dial(hostA,
+      `ws://127.0.0.1:${server.port}/x/${panam.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
-    const openPanam = await nextFrame(hostA, (f) => f.t === "OPEN");
     toPanam.close();
 
-    const toProto = new WebSocket(`ws://127.0.0.1:${server.port}/x/${proto.exchange}/link` +
+    const { ws: toProto, open: openProto } = await dial(hostB,
+      `ws://127.0.0.1:${server.port}/x/${proto.exchange}/link` +
       `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
-    const openProto = await nextFrame(hostB, (f) => f.t === "OPEN");
     toProto.close(); seat.close();
 
     assert.notEqual(openPanam.origin.seat, openProto.origin.seat,
@@ -997,9 +1033,9 @@ test("seat: a dial without a token discloses nothing", async () => {
     host.send(JSON.stringify({ t: "REGISTER", v: 1, name: "PAN AM",
       region: "SEATTLE US", joshua: "period", world: 1, slot: "PANAM" }));
     const assigned = JSON.parse(await nextMessage(host));
-    const visitor = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    const { ws: visitor, open } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1`);
-    const open = JSON.parse(await nextMessage(host));
     assert.equal(open.origin, undefined, "a stale tab still gets to phone a machine");
     visitor.close();
   } finally { host.close(); await server.close(); }
@@ -1015,9 +1051,9 @@ test("seat: an unknown or dead token discloses nothing, and the dial still succe
     const assigned = JSON.parse(await nextMessage(host));
 
     // Unknown: a token this hub never minted at all — not merely absent.
-    const unknown = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    const { ws: unknown, open: openUnknown } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S1&token=T1&seat=not-a-real-token`);
-    const openUnknown = await nextFrame(host, (f) => f.t === "OPEN");
     assert.equal(openUnknown.origin, undefined, "an unknown token discloses nothing");
     unknown.close();
 
@@ -1028,9 +1064,9 @@ test("seat: an unknown or dead token discloses nothing, and the dial still succe
     seat.close();
     await waitFor(() => registry.byToken(token) === undefined);
 
-    const dead = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+    const { ws: dead, open: openDead } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
       `?surface=home-terminal&session=S2&token=T2&seat=${token}`);
-    const openDead = await nextFrame(host, (f) => f.t === "OPEN");
     assert.equal(openDead.origin, undefined,
       "a dead token discloses nothing, and a stale tab can still phone a machine");
     dead.close();
@@ -1145,11 +1181,11 @@ async function seatThatCalled(server: RunningServer, host: WebSocket, registry: 
   const id = registry.byToken(token)!.id;
   const said = transcript(seat);
 
-  const dial = new WebSocket(`ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
+  const { ws: call, open } = await dial(host,
+    `ws://127.0.0.1:${server.port}/x/${assigned.exchange}/link` +
     `?surface=home-terminal&session=S1&token=T1&seat=${token}`);
-  const open = await nextFrame(host, (f) => f.t === "OPEN");
   const handle: string = open.origin.seat;
-  dial.close();
+  call.close();
   // The dial held the seat for as long as it was up. Wait for that hold to be
   // released rather than sleeping on it: until it is, the seat is busy for a
   // legitimate reason and the ring under test would be refused.
@@ -1443,7 +1479,7 @@ test("ring: rejecting a ring does not free a seat that is dialling out", async (
   const registry = new SeatRegistry();
   const server = await ringServer(registry);
   const host = await connect(`ws://127.0.0.1:${server.port}/trunk`);
-  let dial: WebSocket | undefined;
+  let outbound: WebSocket | undefined;
   try {
     registerPanAm(host);
     const { handle, seat, id, said, token, exchange } =
@@ -1455,9 +1491,9 @@ test("ring: rejecting a ring does not free a seat that is dialling out", async (
 
     // Mid-ring, the visitor dials out from the same terminal. That is a
     // second, independent hold on the seat.
-    dial = new WebSocket(`ws://127.0.0.1:${server.port}/x/${exchange}/link` +
-      `?surface=home-terminal&session=S9&token=T9&seat=${token}`);
-    await nextFrame(host, (f) => f.t === "OPEN");
+    ({ ws: outbound } = await dial(host,
+      `ws://127.0.0.1:${server.port}/x/${exchange}/link` +
+      `?surface=home-terminal&session=S9&token=T9&seat=${token}`));
     await waitFor(() => registry.leg(id)?.onCall === true);
 
     seatControl(seat, "REJECT");
@@ -1466,10 +1502,10 @@ test("ring: rejecting a ring does not free a seat that is dialling out", async (
     assert.equal(registry.leg(id)?.onCall, true,
       "the outbound dial still holds this seat; the ring never held it at all");
 
-    dial.close();
+    outbound.close();
     await waitFor(() => registry.leg(id)?.onCall === false);
     seat.close();
-  } finally { dial?.close(); host.close(); await server.close(); }
+  } finally { outbound?.close(); host.close(); await server.close(); }
 });
 
 // Control is the seat leg's own vocabulary — what the hub and the terminal say
