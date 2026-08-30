@@ -719,6 +719,16 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
         finally:
             if observer_task is not None:
                 observer_task.cancel()
+            if session.surface == "trunk-caller":
+                # The machine end of a call THIS host placed has closed: the
+                # seat that was rung hung up, and that hang-up crossed every
+                # hop back to here. Journaled against the exchange, not this
+                # session — nobody types EVENTS on a machine leg, so a row on
+                # its own session would be readable from nowhere (#88) — and
+                # from `finally`, so the row is the close itself having
+                # reached the bridge, not a courtesy sent ahead of it (#124).
+                await store.log_event(None, "route", "system",
+                                      {"event": "callback-ended"})
             # The hangup IS the trigger to dial. Until this moment the
             # visitor held their own seat, and a held seat is refused `busy`
             # (relay/src/seats.ts:187) — so this is the first instant the

@@ -361,3 +361,133 @@ test("the callback, end to end: seat -> hub -> trunk -> bridge -> Joshua and bac
     await hub.stop();
   }
 });
+
+// --- the flagship -----------------------------------------------------------
+//
+// The same beat on the deployed topology (#124): one relay that IS the hub
+// and hosts world 1 itself (`TRUNK_LOCAL_WORLD`, the `seededPort` path),
+// with its own bridge behind it. No tie line, no peer: the visitor dials the
+// hub's own `/link`, the bridge places the call at the hub's `/trunk/place`,
+// the switchboard rings the seat and `seededPort.attach()` mints the machine
+// end of the call — the `trunk-caller` leg — into the same bridge.
+//
+//   seat ⇄ hub relay (world 1 seeded) ⇄ bridge ⇄ Joshua
+//
+// One thing the peer walk above could only prove by ringing again: that the
+// seat's hang-up reaches the bridge. Here it is read back from the
+// exchange's journal — the trunk-caller leg's close writes a `callback-ended`
+// row against the exchange (the shelf #88 put the machine's own calls on),
+// and an operator console at the same installation reads it with EVENTS.
+
+test("the callback, flagship: seat -> hub (world 1) -> bridge -> Joshua and back, journaled",
+     { timeout: 120_000 }, async () => {
+  const bridgePort = await freePort();
+  const hubPort = await freePort();
+
+  // The bridge first, as the flagship runs it: its trunk URL is the hub —
+  // the relay in front of it — and its operator roster names the console
+  // that will read the journal at the end.
+  const bridge = await startBridge(bridgePort, {
+    BRIDGE_INTERNAL_TOKEN: INTERNAL_TOKEN,
+    BRIDGE_TRUNK_URL: `http://127.0.0.1:${hubPort}`,
+    WOPR_OPERATORS: "NORAD-3:TIGERTEAM:3",
+  });
+  let hub: (Logged & { port: number }) | undefined;
+  try {
+    // The hub, seeded with world 1: its own WOPR slot, dialled directly.
+    hub = await startRelay("hub", {
+      COMMS_PORT: String(hubPort),
+      BRIDGE_WS_URL: `ws://127.0.0.1:${bridgePort}`,
+      BRIDGE_INTERNAL_TOKEN: INTERNAL_TOKEN,
+      TRUNK_LOCAL_WORLD: JSON.stringify([
+        { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+      ]),
+    });
+    const bridgeHttp = `http://127.0.0.1:${bridgePort}`;
+    const mint = async (surface: string) => {
+      const post = await fetch(`${bridgeHttp}/api/session`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ surface }),
+      });
+      const minted = await post.text();
+      assert.equal(post.status, 201, minted);
+      return JSON.parse(minted) as { session_id: string; token: string };
+    };
+    const dial = (surface: string, s: { session_id: string; token: string }, seat?: string) =>
+      Line.open(`ws://127.0.0.1:${hub!.port}/link?surface=${surface}` +
+                `&session=${encodeURIComponent(s.session_id)}&token=${encodeURIComponent(s.token)}` +
+                (seat ? `&seat=${encodeURIComponent(seat)}` : ""));
+
+    // 1. A seat at the hub; a session minted at the flagship's own bridge,
+    //    dialled on the hub's own front door with the seat token.
+    const seat = await Line.open(`ws://127.0.0.1:${hub.port}/seat?surface=home-terminal`);
+    seat.send("control", "SEAT?");
+    const seatToken = (await seat.until("control", "SEAT ")).split(" ")[1]!;
+    const home = await mint("home-terminal");
+    const visitor = await dial("home-terminal", home, seatToken);
+    await visitor.until("handshake", "CONNECTED");
+    await visitor.until("output", "LOGON:");
+
+    // 2. The dialogue reaches the Falken dossier.
+    visitor.send("input", "JOSHUA", home.session_id);
+    await visitor.until("output", "GREETINGS PROFESSOR FALKEN.");
+    visitor.send("input", "IS FALKEN DEAD?", home.session_id);
+    await visitor.until("output", "GOOSE ISLAND, OREGON 97014");
+
+    // 3./4. The visitor hangs up; the bridge places the call at the hub's own
+    //       switchboard, and the hub's log says so.
+    visitor.close();
+    await hub.until(/^CALLBACK PLACED — CHAN \d+$/, 20_000);
+    assert.ok(!hub.lines.some((l) => l.includes("CALLBACK NOT PLACED")),
+      `a refusal was logged: ${hub.lines.filter((l) => l.includes("CALLBACK")).join(" | ")}`);
+
+    // 5. The hub rings the seat in the name of its own world-1 slot; the seat
+    //    answers.
+    const ring = await seat.until("control", "RING ");
+    assert.equal(ring, "RING CHEYENNE MOUNTAIN");
+    seat.send("control", "ANSWER", seatToken);
+
+    // 6. Frames cross both ways through the seeded port's trunk-caller leg.
+    await seat.until("output", "GREETINGS PROFESSOR FALKEN.");
+    assert.ok(!seat.transcript("output").includes("LOGON:"),
+      "the callback greeted with a front door, not Joshua");
+    seat.send("input", "HELLO", seatToken);
+    const reply = await seat.until("output", "HOW ARE YOU FEELING TODAY?");
+    assert.ok(!reply.includes("--CONNECTION TERMINATED--"),
+      "the typed line was rejected rather than answered");
+
+    // 7. The seat hangs up. The close travels hub channel -> seeded port ->
+    //    the trunk-caller leg's socket -> the bridge's `finally`, which
+    //    journals it against the exchange. An operator console minted AFTER
+    //    the call, with no part in it, reads that row — and until it does,
+    //    the row is the only witness that the hang-up ever arrived.
+    seat.close();
+    const op = await mint("norad-terminal");
+    const console_ = await dial("norad-terminal", op);
+    await console_.until("output", "LOGON:");
+    console_.send("input", "LOGON NORAD-3", op.session_id);
+    await console_.until("output", "ACCESS CODE:");
+    console_.send("input", "TIGERTEAM", op.session_id);
+    await console_.until("output", "CLEARANCE ACCEPTED");
+    let events = "";
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      console_.send("input", "EVENTS", op.session_id);
+      events = await console_.until("output", "", 5_000);
+      if (events.includes("CALLBACK-ENDED")) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.match(events, /ROUTE\s+SYSTEM\s+EVENT CALLBACK-ENDED/,
+      `the trunk-caller leg's close never reached the bridge; EVENTS said: ${events}`);
+    // The console's own rows are its own, and the machine leg's are the
+    // machine leg's (E10): the seat's typed line is not in the exchange's book.
+    assert.ok(!events.includes("TEXT HELLO"), `a machine leg's row leaked: ${events}`);
+    console_.close();
+
+    const bad = hub.lines.filter((l) => /error|failed|refused|NOT PLACED/i.test(l));
+    assert.deepEqual(bad, [], `hub logged: ${bad.join(" | ")}`);
+  } finally {
+    await hub?.stop();
+    await bridge.stop();
+  }
+});
