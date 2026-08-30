@@ -49,6 +49,15 @@
   },
   "programs": [
     {
+      "id": "norad",
+      "kind": "console",
+      "protocol": "SYSTEM/1",
+      "language": "fortran",
+      "title": "NORAD OPERATIONS",
+      "path": "norad",
+      "binary": "norad"
+    },
+    {
       "id": "wopr",
       "kind": "executive",
       "protocol": "SYSTEM/1",

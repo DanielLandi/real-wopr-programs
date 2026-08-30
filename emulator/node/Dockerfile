@@ -19,6 +19,7 @@ COPY games ./games
 COPY systems ./systems
 COPY joshua ./joshua
 COPY wopr ./wopr
+COPY norad ./norad
 RUN tools/build.sh && tools/test.sh
 
 FROM python:3.12-slim
@@ -31,7 +32,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir ".[prod]"
 
-# The built program pack: games/systems/joshua/wopr sources, manifests, and
+# The built program pack: games/systems/joshua/wopr/norad sources, manifests, and
 # binaries in the pack layout (<cat>/<id>/harness/bin/<binary>). The system
 # wrappers (school-mon, school, protovision) resolve their source relative to
 # the binary, so the whole pack tree is copied, not just the binaries.

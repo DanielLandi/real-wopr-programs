@@ -1,0 +1,9 @@
+{
+  "id": "norad",
+  "title": "NORAD OPERATIONS",
+  "binary": "norad",
+  "language": "fortran",
+  "summary": "The NORAD operator console: SITREP, TRACKS, EVENTS, SET DEFCON, and the refusal to cease.",
+  "timeout_s": 5,
+  "memory_budget_kb": 4096
+}

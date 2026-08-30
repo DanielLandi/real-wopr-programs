@@ -25,6 +25,14 @@ three things through the real harness classes, not a mock of them:
                            wopr binary, carrying the frame the executive
                            really receives: STATE, INPUT, and a full FACTS
                            block (spec E7 sends the facts every turn).
+  D  one console spawn     SystemRunner.run("norad", ...) against the built
+                           norad binary, carrying its own FACTS. Phase 3 of
+                           the same spec makes NORAD operations a program of
+                           its own, so every line an operator types is now
+                           TWO spawns: the executive, which hands it to the
+                           console, and the console. A console turn projects
+                           to C + D against the same 15 ms gate phase 2 was
+                           held to.
 
 Run before the executive existed, A and B were the baseline and the projection
 was A+C and B+C. Run after, A and B are the real thing and C is the isolated
@@ -33,8 +41,8 @@ cost" and "what did it cost", and the two can be compared.
 
     tools/bench-executive.py [iterations]     # default 300
 
-Requires: `make build` (or at least wopr/harness/build.sh and the games), and
-the node host importable — `pip install -e "emulator/node[dev]"`.
+Requires: `make build` (or at least wopr/harness/build.sh,
+norad/harness/build.sh and the games), and the node host importable — `pip install -e "emulator/node[dev]"`.
 """
 from __future__ import annotations
 
@@ -95,6 +103,22 @@ STATE = "\n".join(["MODE JOSHUA - - BACKDOOR", "PARENT JOSHUA", "BACKDOOR 1",
                    "PENDING -", "FAILURES 0", "TURNS 7", "PHASE -",
                    "PA1 -", "PA2 -"])
 
+# What the console cannot know for itself: who is logged on, the clearance
+# floor, DEFCON, the conference, the link, and the room's game row.
+CONSOLE_FACTS_LINES = [
+    "CALLSIGN NORAD-3",
+    "CLEARANCE 3",
+    "DEFCON 5",
+    "ROOM ALPHA",
+    "LINK leased-9600",
+    "GAMEROW gtw PLAYING 4 core",
+]
+CONSOLE_FACTS = "\n".join(CONSOLE_FACTS_LINES)
+
+# The gate. A turn that projects above this is a reason to stop and change the
+# approach (a persistent process), not a number to note and move past.
+GATE_MS = 15.0
+
 
 def stats(samples: list[float]) -> str:
     s = sorted(samples)
@@ -108,6 +132,10 @@ async def main() -> int:
     binary = REPO / "wopr" / "harness" / "bin" / "wopr"
     if not binary.exists():
         print(f"no executive binary at {binary} — run wopr/harness/build.sh", file=sys.stderr)
+        return 2
+    console = REPO / "norad" / "harness" / "bin" / "norad"
+    if not console.exists():
+        print(f"no console binary at {console} — run norad/harness/build.sh", file=sys.stderr)
         return 2
 
     store = MemoryStore()
@@ -178,15 +206,38 @@ async def main() -> int:
     finally:
         _sr.build_system_request = _build
 
+    # D — one console spawn, carrying the console's own FACTS. The codec has
+    # grown a `facts` argument since C was first measured, so no splice.
+    crun = SystemRunner(
+        SystemRunnerConfig(systems_dir=REPO),
+        systems={"norad": System(id="norad", title="NORAD OPERATIONS",
+                                 language="fortran", binary="norad", number="")},
+    )
+    for _ in range(WARM):
+        await crun.run("norad", "INPUT", None, "SITREP", facts=CONSOLE_FACTS)
+    d: list[float] = []
+    for _ in range(N):
+        t = time.perf_counter()
+        await crun.run("norad", "INPUT", None, "SITREP", facts=CONSOLE_FACTS)
+        d.append(time.perf_counter() - t)
+
     print()
     print("A  a bridge turn      ", stats(a))
     print("B  a game turn        ", stats(b))
     print("C  one executive spawn", stats(c))
+    print("D  one console spawn  ", stats(d))
     print()
     one = statistics.mean(c)
     print("one executive spawn is %5.2f ms; a bridge turn is one of them, and a"
           % (one * 1000))
     print("game turn is three — the line, W.O.P.R.'s own reply, and the answer.")
+    console_turn = statistics.mean(c) + statistics.mean(d)
+    print()
+    print("projected console turn  C+D   mean %5.2f ms   (gate %4.1f ms)"
+          % (console_turn * 1000, GATE_MS))
+    if console_turn * 1000 > GATE_MS:
+        print("OVER THE GATE: a console turn must not spawn per line at this cost")
+        return 1
     print()
     return 0
 
