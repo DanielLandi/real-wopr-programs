@@ -27,6 +27,7 @@ emulator/relay/
 │   ├── node-proto.ts   # NODE/1 — nodes register their lines outbound; calls ride back
 │   ├── trunk.ts        # TRUNK/1 — the exchange-to-exchange switchboard hub
 │   └── tieline.ts      # host side of TRUNK/1: one outbound trunk to a hub
+│                       #   (hosted inside server.ts when TRUNK_HUB_URL is set)
 ├── tests/              # node:test — throughput, parity, toggle, FSM, federation, e2e
 └── tools/              # dev-bridge-stub.ts (dev-only canned node host)
 ```

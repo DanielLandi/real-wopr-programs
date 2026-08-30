@@ -18,6 +18,8 @@ import { Switchboard, decodeTrunkFrame, restAllowed, TRUNK_MAX_FRAME_BYTES,
          type TrunkPort } from "./trunk.ts";
 import { openLocalLeg, type LocalLeg } from "./local-leg.ts";
 import { SeatRegistry } from "./seats.ts";
+import { startTieline, tielineFromEnv, tielineUpBanner,
+         type TielineOpts } from "./tieline.ts";
 
 /** How much a caller may say into a line that is still ringing before the hub
  *  hangs up on it. Four frames at the trunk's per-frame cap: enough for a
@@ -79,10 +81,28 @@ export interface ServerOpts {
      *  has to hold the same registry instance the server uses internally. */
     registry?: SeatRegistry;
   };
+  /** Run this relay as a federated PEER: hold a tie line out to the hub, in
+   *  this process, and place every call over it (#75).
+   *
+   *  The local endpoints are not settable — a hosted tie line's local comms is
+   *  the relay it runs inside, and its local bridge is that relay's own
+   *  `bridgeUrl`. Nor is the internal token: it is the one `startServer`
+   *  resolved. Wiring any of the three to something else would be a tie line
+   *  fronting a stack other than the one it is inside, which is what
+   *  `npm run tieline` is for.
+   *
+   *  Omitted, the environment decides: a non-empty `TRUNK_HUB_URL` means a
+   *  peer, anything else means a plain relay or a hub. A relay with a seeded
+   *  local world is a HUB and refuses to hold a tie line either way (§3.4 of
+   *  the federated-callback design). */
+  tieline?: Omit<TielineOpts, "localComms" | "localBridge" | "internalToken" | "onVisitorSeat">;
 }
 
 export interface RunningServer {
   port: number;
+  /** Present when this relay is a peer — see `ServerOpts.tieline`. `undefined`
+   *  on a hub, on the flagship, and on any relay with no trunk out. */
+  tieline?: { assigned: () => boolean };
   close: () => Promise<void>;
 }
 
@@ -280,6 +300,48 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // exchange did not earn identically to an unknown one, so the operator would
   // see nothing but `seat-gone` and conclude visitors were hanging up.
   const homeSlot = opts.seats?.homeSlot ?? "WOPR";
+
+  // Seat handles minted by ANOTHER installation's registry — the hub's — for a
+  // visitor relayed down this relay's tie line (#75). They are not ours to
+  // resolve: `seats` here has never heard of them, and `SeatRegistry.resolve`
+  // would refuse one exactly as it refuses an invented one. All this relay does
+  // is hand the handle to the program the visitor reached, so that program can
+  // ask the hub to ring back.
+  //
+  // Keyed by the visitor's session id, which the tie line reads out of the
+  // query the hub forwarded, and which the `/link` that arrives microseconds
+  // later carries. Never on a wire, never in a URL: this is one process passing
+  // a string to itself, which is the reason the tie line is hosted here at all.
+  //
+  // ONE-SHOT, with a TTL. The entry exists to be consumed by the single leg it
+  // was registered for; re-reading it would let a stale handle re-arm a
+  // callback for a call that already ended, and an entry nobody comes to claim
+  // (a local `/link` that failed to open) must not accumulate on a relay that
+  // runs for weeks. The cap bounds a flapping trunk; the TTL bounds a quiet one.
+  const relayedSeats = new Map<string, { handle: string; at: number }>();
+  const RELAYED_SEAT_TTL_MS = 60_000;
+  const RELAYED_SEAT_MAX = 256;
+  const rememberRelayedSeat = (session: string, handle: string): void => {
+    const cutoff = Date.now() - RELAYED_SEAT_TTL_MS;
+    for (const [k, v] of relayedSeats) if (v.at < cutoff) relayedSeats.delete(k);
+    // Still full after the sweep: drop the oldest (insertion order is age
+    // order, since an entry is written once and never updated in place).
+    while (relayedSeats.size >= RELAYED_SEAT_MAX) {
+      const oldest = relayedSeats.keys().next().value;
+      if (oldest === undefined) break;
+      relayedSeats.delete(oldest);
+    }
+    relayedSeats.set(session, { handle, at: Date.now() });
+  };
+  /** Take the relayed handle registered for `session`, if it is still fresh.
+   *  Takes it in every case — an expired entry is consumed too, not left to be
+   *  swept later. */
+  const takeRelayedSeat = (session: string): string | undefined => {
+    const entry = relayedSeats.get(session);
+    if (!entry) return undefined;
+    relayedSeats.delete(session);
+    return Date.now() - entry.at <= RELAYED_SEAT_TTL_MS ? entry.handle : undefined;
+  };
 
   // The seat's side of a ring. The hub paces it, because the ANSWERING end
   // paces: the shaper below runs at the profile the seat declared when it
@@ -540,6 +602,16 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       }
     }
     if (seatLeg) seats.hold(seatLeg.id);
+
+    // No local seat, but this leg may still be a visitor relayed down this
+    // relay's own tie line, whose handle the HUB minted (#75). Disclose it the
+    // same way and by the same rule — first thing on the session — so a peer's
+    // program is told who called in exactly the words the flagship's is.
+    //
+    // Nothing is held or released for it: the hold, the ring window and the
+    // registry all live at the hub, where the seat actually is. This relay is
+    // only the messenger.
+    if (!handle && session) handle = takeRelayedSeat(session);
 
     // One shaper per direction; seq is monotonic per direction (§5).
     const down = new LinkShaper(profile, linkName, session, (e: Envelope) => {
@@ -954,6 +1026,27 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // places as, so the port attached is always the exchange that placed.
   let homePort: (TrunkPort & { attach(chan: number): void }) | undefined;
 
+  // A peer's trunk out, held in this process so that `POST /trunk/place` can
+  // reach it (#75). Assigned after listen(), because a hosted tie line's local
+  // comms is this very server and it needs the port it actually bound.
+  let tieline: ReturnType<typeof startTieline> | undefined;
+
+  /** Refuse a placement, and say so where a human is looking.
+   *
+   *  The split is the point. `busy` and `seat-gone` are truthful outcomes of a
+   *  real call — the person is talking to someone else, or hung up between the
+   *  intention and the placement — so they are logged and not shouted. A
+   *  `reason` given here instead names a CONFIGURATION or CONNECTIVITY fault,
+   *  something the operator can fix, and goes to stderr. What none of them are
+   *  any more is silent: a callback that does not happen used to leave no
+   *  trace outside the bridge's info log (#75). */
+  const answerRefusal = (res: ServerResponse, refused: string, loud?: string): void => {
+    if (loud) console.error(loud);
+    else console.log(`CALLBACK NOT PLACED — ${refused.toUpperCase()}`);
+    res.writeHead(409, { "content-type": "application/json" });
+    res.end(JSON.stringify({ refused }));
+  };
+
   /** Body reader for the routes below — NOT the `/x/<code>` REST relay just
    *  above, which reads inline for a reason specific to it (relaying, not
    *  parsing, so it forwards the raw bytes rather than JSON.parse-ing them).
@@ -1050,11 +1143,6 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
         res.writeHead(400, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "malformed body" })); return;
       }
-      const from = switchboard.seededCode(homeSlot);
-      if (!from) {
-        res.writeHead(409, { "content-type": "application/json" });
-        res.end(JSON.stringify({ refused: "offline" })); return;
-      }
       const target = want.seat !== undefined
         ? { seat: want.seat }
         : { slot: want.slot ?? "", world: want.world };
@@ -1064,16 +1152,50 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
       // not silently pass through as some other type Set.has() would just
       // say "no" to — coerce to the one shape the check understands.
       const on = typeof want.on === "number" ? want.on : undefined;
+
+      // A PEER has no switchboard worth asking (#75). Nothing registers with
+      // it, `seededCode` answers undefined for every slot, and — the part that
+      // cannot be configured around — the visitor's handle was minted by the
+      // HUB against THIS exchange's code, so the tie line is the only end in
+      // the world that can present the code the handle was scoped to. The
+      // one-hop cap rides along unchanged; the hub applies it as it would to
+      // any other host's PLACE.
+      if (tieline) {
+        const placed = await tieline.place(target as CallTarget, on);
+        if (typeof placed === "string") {
+          answerRefusal(res, placed, placed === "offline"
+            ? "CALLBACK NOT PLACED — TIE LINE DOWN — THE TRUNK IS NOT UP"
+            : undefined);
+        } else {
+          console.log(`CALLBACK PLACED — CHAN ${placed.chan}`);
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ chan: placed.chan }));
+        }
+        return;
+      }
+
+      const from = switchboard.seededCode(homeSlot);
+      if (!from) {
+        // Neither a hub (no seeded world 1) nor a peer (no tie line). This
+        // relay cannot place a call at all, and until #75 it said so to
+        // nobody: the bridge logged the refusal at info and dropped the
+        // intention, silently and forever. It is a configuration fault, not a
+        // call outcome, so it goes where an operator is already looking.
+        answerRefusal(res, "offline",
+          "CALLBACK NOT PLACED — NO TRUNK — THIS RELAY HAS NEITHER A SEEDED " +
+          "LOCAL WORLD NOR A TIE LINE (SET TRUNK_HUB_URL TO HOST A SLOT)");
+        return;
+      }
       const r = switchboard.placeCall(from, target as CallTarget, on);
       if (typeof r === "string") {
-        res.writeHead(409, { "content-type": "application/json" });
-        res.end(JSON.stringify({ refused: r }));
+        answerRefusal(res, r);
       } else {
         // The target got its OPEN from placeCall itself; the placer's own end
         // is an internal peerPort with no program on the other side of it —
         // attach() is what gives the flagship's own line something to talk
         // with.
         homePort?.attach(r.chan);
+        console.log(`CALLBACK PLACED — CHAN ${r.chan}`);
         res.writeHead(201, { "content-type": "application/json" });
         res.end(JSON.stringify({ chan: r.chan }));
       }
@@ -1104,11 +1226,52 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     if (seed.slot === homeSlot) homePort = p;
   }
 
+  // The tie line that makes this relay a federated peer (#75). Started here,
+  // after listen(), for two reasons: its local comms is this server (so it
+  // needs `actualPort`, which is 0 until now under an ephemeral port), and a
+  // trunk that registered before the relay could answer a relayed call would
+  // advertise a slot that is not yet answering.
+  //
+  // A HUB IS NEVER A PEER. A relay with a seeded world 1 is the switchboard,
+  // and a switchboard that dialled a tie line would register with a hub —
+  // itself, in the deployed topology, since `TRUNK_HUB_URL`'s default is the
+  // flagship's own address — and then route its own callbacks out through that
+  // loop. The variable means nothing to the relay today, so a stray copy of it
+  // in a hub's environment is exactly the kind of quiet misconfiguration this
+  // issue is about. Refuse, and say why.
+  const tielineOpts: ServerOpts["tieline"] = opts.tieline ?? (() => {
+    if (!process.env.TRUNK_HUB_URL) return undefined;
+    const parsed = tielineFromEnv();
+    if (!parsed.ok) { console.error(`TIE LINE NOT DIALLED — ${parsed.error}`); return undefined; }
+    return parsed.opts;
+  })();
+  if (tielineOpts && trunkLocalWorld.length > 0) {
+    console.error("TIE LINE IGNORED — THIS RELAY IS A HUB (TRUNK_LOCAL_WORLD IS SET)");
+  } else if (tielineOpts) {
+    tieline = startTieline({
+      ...tielineOpts,
+      localComms: commsUrl,
+      // `bridgeUrl` is a WEBSOCKET url; the tie line mints its local legs over
+      // HTTP against the same host, exactly as `seededPort` above does.
+      localBridge: bridgeUrl.replace(/^ws/, "http"),
+      internalToken,
+      // A relayed visitor's seat handle, minted by the hub against this
+      // exchange's code. Handed to `/link` by session id — see `relayedSeats`.
+      onVisitorSeat: rememberRelayedSeat,
+      onAssigned: (exchange, world, slot) => {
+        console.log(tielineUpBanner(exchange, world, slot));
+        tielineOpts.onAssigned?.(exchange, world, slot);
+      },
+    });
+  }
+
   return {
     port: actualPort,
+    tieline: tieline && { assigned: tieline.assigned },
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(trunkPing);
+        tieline?.stop();
         // A seeded slot's local legs (and any in-flight mint) are this
         // process's own bridge sessions — close them, or a test's next
         // server start can race a lingering /link dial against a stub bridge
