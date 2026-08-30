@@ -196,7 +196,13 @@ def _fault_cause(exc: BaseException) -> str:
 
 
 def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
-    """App factory; tests inject fakes for store/engines/runner."""
+    """App factory; tests inject fakes for store/engines/runner.
+
+    This is the module's only way to get an app: there is no module-level
+    instance, so importing `app.main` reads no environment, warns about no
+    missing token and opens no store (#84). Servers name the factory —
+    `uvicorn app.main:create_app --factory`.
+    """
     settings = settings or load_settings()
     if not settings.internal_token:
         # Loud once, at startup, rather than once per refusal: POST
@@ -714,6 +720,3 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                     log.info("callback: %s -> %s", seeks, outcome)
 
     return app
-
-
-app = create_app()

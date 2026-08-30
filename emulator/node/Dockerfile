@@ -60,6 +60,8 @@ ENV BRIDGE_GAMES_DIR=/opt/wopr/pack/games \
     BRIDGE_JOSHUA_LISP_BIN=/opt/wopr/pack/joshua/harness/bin/joshua
 
 EXPOSE 8000
+# --factory: `app.main` exposes create_app() and no module-level instance, so
+# nothing is built from the environment until the server asks (#84).
 # --loop asyncio: uvloop's libuv socketpair stdio breaks the GnuCOBOL systems'
 # stdin (defense in depth alongside the loop-agnostic SystemRunner).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--loop", "asyncio"]

@@ -56,7 +56,7 @@ cd emulator/node
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"          # + ".[prod]" for postgres/anthropic clients
 pytest                            # program-spawning paths need `make build` at the pack root
-uvicorn app.main:app --port 8000
+uvicorn app.main:create_app --factory --port 8000   # the module exposes the factory, not an instance
 ```
 
 Modules gated on a `prod` client skip on a plain `[dev]` install, and say so.
