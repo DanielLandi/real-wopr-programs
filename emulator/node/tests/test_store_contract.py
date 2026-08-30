@@ -9,6 +9,7 @@ import asyncio
 
 import pytest
 
+from app.main import DEFAULT_LINKS
 from app.store import GLOBAL_ROOM_KEY, GameState, MemoryStore
 
 import pgharness  # sibling test module (pytest prepends tests/ to sys.path; no tests package exists)
@@ -23,11 +24,11 @@ def store(request):
     if request.param == "memory":
         yield MemoryStore()
         return
-    # postgres — wired in Task 3
+    # postgres — the real schema, every migration applied (#83)
     from app.store import PostgresStore
 
     url = pgharness.pg_url()
-    pgharness.apply_schema(url)
+    pgharness.apply_migrations(url)
     pgharness.truncate_all(url)
     s = PostgresStore(url)
     yield s
@@ -44,6 +45,35 @@ def test_session_roundtrip_and_defcon(store):
         await store.set_defcon(s.id, 3)
         assert (await store.get_session(s.id)).defcon == 3
         assert await store.get_session("00000000-0000-0000-0000-000000000000") is None
+
+    asyncio.run(flow())
+
+
+def test_every_default_link_surface_mints(store):
+    """Every surface `POST /api/session` accepts must survive the store it is
+    written to — which, for PostgresStore, means surviving the
+    `sessions_surface_check` CHECK constraint as the migrations actually left
+    it in the database.
+
+    This is the assertion #73 was missing. That bug was three copies of the
+    surface allowlist disagreeing: `DEFAULT_LINKS` and the relay's
+    `surface_links` had six, the constraint had three, and a machine-placed
+    call therefore died in Postgres while every test stayed green — because
+    the suite ran MemoryStore, which has no constraint to violate.
+    `test_session_surfaces.py` compares the three lists as text; only this
+    test asks the database.
+
+    It iterates `DEFAULT_LINKS` rather than naming six surfaces, on purpose:
+    a literal list here would be a fourth copy of the allowlist, and would go
+    on passing the day somebody adds the seventh surface.
+    """
+    async def flow():
+        for surface, profile in DEFAULT_LINKS.items():
+            s = await store.create_session(surface, profile, None)
+            got = await store.get_session(s.id)
+            assert got is not None, f"{surface}: minted session did not read back"
+            assert got.surface == surface
+            assert got.link_profile == profile
 
     asyncio.run(flow())
 
@@ -171,6 +201,46 @@ def test_exchange_register_and_list(store):
 
 
 @pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
+def test_the_test_database_is_the_schema_the_pack_ships():
+    """The test database must be at the pack's HEAD migration, not its baseline.
+
+    The regression guard for #83's actual defect. `pgharness` used to name
+    `0001_init.sql` — one file, not the directory — so `0002_session_surfaces.sql`
+    was never applied and every test above ran against a schema still carrying
+    the three-surface constraint #73 replaced. Nothing noticed, because a
+    schema that is merely OLD fails no test that does not reach for what the
+    new migration added.
+
+    So: every migration on disk has a row in `schema_migrations`. A future
+    `0003` that the harness does not apply fails here, by name.
+    """
+    import asyncpg
+
+    url = pgharness.pg_url()
+    pgharness.apply_migrations(url)
+
+    async def flow():
+        conn = await asyncpg.connect(url)
+        try:
+            rows = await conn.fetch("select version from schema_migrations")
+        finally:
+            await conn.close()
+        applied = {r["version"] for r in rows}
+        # The directory, NOT pgharness.migration_files() — asking the harness
+        # what it applied and then checking it applied that is a tautology,
+        # and the bug this guards was in the harness.
+        on_disk = {p.stem for p in pgharness.MIGRATIONS.glob("*.sql")}
+        assert on_disk, f"no migrations found in {pgharness.MIGRATIONS}"
+        assert on_disk - applied == set(), (
+            "these migrations were never applied to the test database: "
+            f"{sorted(on_disk - applied)} — every test in this file ran "
+            "against a schema the pack does not ship"
+        )
+
+    asyncio.run(flow())
+
+
+@pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
 def test_exchange_approved_row_flows_through_postgres():
     """Postgres-leg proof that an approved phone-book row actually flows
     through list_exchanges with the exact 7-key shape the /api/exchanges
@@ -182,7 +252,7 @@ def test_exchange_approved_row_flows_through_postgres():
     from app.store import PostgresStore
 
     url = pgharness.pg_url()
-    pgharness.apply_schema(url)
+    pgharness.apply_migrations(url)
     pgharness.truncate_all(url)
 
     async def flow():
