@@ -349,6 +349,31 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
     }
   }
   const trunkLocalWorld = opts.trunk?.localWorld ?? envLocalWorld ?? [];
+
+  // PEER OR HUB, decided once, before anything hub-shaped is built (#87).
+  //
+  // A tie line out makes this relay a PEER. Resolved here rather than beside
+  // `startTieline` far below, because the answer governs more than the dial:
+  // a peer has no business holding a registry of other people's exchanges,
+  // so its `/trunk` must refuse every REGISTER — and that guard has to exist
+  // before the socket handlers are wired, not after `listen()`. The dial
+  // itself still waits for the bound port.
+  //
+  // A HUB IS NEVER A PEER. A relay with a seeded world 1 is the switchboard,
+  // and a switchboard that dialled a tie line would register with a hub —
+  // itself, in the deployed topology, since `TRUNK_HUB_URL`'s default is the
+  // flagship's own address — and then route its own callbacks out through
+  // that loop. A stray copy of the variable in a hub's environment is exactly
+  // the kind of quiet misconfiguration #75 was about: a seeded relay stays a
+  // hub, keeps its `/trunk`, and says why the tie line was ignored (below,
+  // after listen, where the dial would otherwise have happened).
+  const tielineOpts: ServerOpts["tieline"] = opts.tieline ?? (() => {
+    if (!process.env.TRUNK_HUB_URL) return undefined;
+    const parsed = tielineFromEnv();
+    if (!parsed.ok) { console.error(`TIE LINE NOT DIALLED — ${parsed.error}`); return undefined; }
+    return parsed.opts;
+  })();
+  const isPeer = tielineOpts !== undefined && trunkLocalWorld.length === 0;
   // Constructed here, immediately before the Switchboard, rather than beside
   // the WebSocketServers below: a SeatBridge closing over `seats` is threaded
   // into the Switchboard's own options, so `seats` must exist before that
@@ -567,6 +592,11 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
 
   const switchboard = new Switchboard({
     ...opts.trunk,
+    // Belt and braces with the `/trunk` guard in `trunkWss` below: a peer's
+    // board has room for NO foreign exchange, so even a REGISTER that somehow
+    // reached `register()` could place nothing. The socket guard is the one
+    // that answers; this is what makes the registry itself incapable.
+    maxExchanges: isPeer ? 0 : opts.trunk?.maxExchanges,
     seats: seatBridge,
     maxWorlds: opts.trunk?.maxWorlds ?? defaultMaxWorlds,
     reservedWorlds: opts.trunk?.reservedWorlds ?? defaultReservedWorlds,
@@ -912,6 +942,13 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   });
 
   trunkWss.on("connection", (host) => {
+    // A peer is not a hub (#87). Nothing that reaches this port may REGISTER
+    // an exchange here, whatever the port is bound to: refuse the socket the
+    // moment it opens, before a frame is read, with a close the tie line on
+    // the far end treats as TERMINAL (`LINE REFUSED — NOT A HUB`) — a line
+    // pointed at a peer by mistake is a configuration fault, and redialling
+    // it forever would explain nothing.
+    if (isPeer) { host.close(4463, "not a hub"); return; }
     let code: string | null = null;
     // A socket that connects to /trunk and never REGISTERs would otherwise be
     // held open forever — sweepDead only reaps registered exchanges — so an
@@ -1388,20 +1425,9 @@ export async function startServer(opts: ServerOpts = {}): Promise<RunningServer>
   // trunk that registered before the relay could answer a relayed call would
   // advertise a slot that is not yet answering.
   //
-  // A HUB IS NEVER A PEER. A relay with a seeded world 1 is the switchboard,
-  // and a switchboard that dialled a tie line would register with a hub —
-  // itself, in the deployed topology, since `TRUNK_HUB_URL`'s default is the
-  // flagship's own address — and then route its own callbacks out through that
-  // loop. The variable means nothing to the relay today, so a stray copy of it
-  // in a hub's environment is exactly the kind of quiet misconfiguration this
-  // issue is about. Refuse, and say why.
-  const tielineOpts: ServerOpts["tieline"] = opts.tieline ?? (() => {
-    if (!process.env.TRUNK_HUB_URL) return undefined;
-    const parsed = tielineFromEnv();
-    if (!parsed.ok) { console.error(`TIE LINE NOT DIALLED — ${parsed.error}`); return undefined; }
-    return parsed.opts;
-  })();
-  if (tielineOpts && trunkLocalWorld.length > 0) {
+  // Whether this relay is a peer at all was decided up top (`isPeer`); a
+  // seeded relay with a tie line configured is a hub, and says so here.
+  if (tielineOpts && !isPeer) {
     console.error("TIE LINE IGNORED — THIS RELAY IS A HUB (TRUNK_LOCAL_WORLD IS SET)");
   } else if (tielineOpts) {
     tieline = startTieline({

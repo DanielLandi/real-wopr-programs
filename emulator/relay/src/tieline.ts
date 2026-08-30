@@ -331,10 +331,12 @@ export function startTieline(opts: TielineOpts): {
     };
     hub.on("close", (closeCode: number, reason: Buffer) => {
       // A refusal is an answer, not an outage: NO CIRCUITS (4460), SLOT TAKEN
-      // (4461), WORLD RESERVED (4462), switchboard full (4409). Redialling
-      // would spam the hub with a REGISTER it just refused, so stop for good
-      // and say why.
-      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462) {
+      // (4461), WORLD RESERVED (4462), NOT A HUB (4463 — the address is a
+      // peer's, which holds no board at all; #87), switchboard full (4409).
+      // Redialling would spam the far end with a REGISTER it just refused,
+      // so stop for good and say why.
+      if (closeCode === 4409 || closeCode === 4460 || closeCode === 4461 || closeCode === 4462
+          || closeCode === 4463) {
         stopped = true;
         console.error(`LINE REFUSED — ${reason.toString().toUpperCase() || "SWITCHBOARD REFUSED"}`);
       } else if (closeCode === 4400 && !everAssigned) {
