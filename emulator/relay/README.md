@@ -43,6 +43,14 @@ mints the two TRUNK surfaces for the relay and for nobody else (#74) — taken f
 environment. A relay that sends no token places machine calls that all refuse with
 `no session`.
 
+A `/link` dial also asks the bridge which surface the session actually is
+(`GET /api/session/{id}`) before it resolves a pacing profile, because the `?surface=`
+in the query string is the caller's claim and pacing is not theirs to choose (#80). A
+claim that is not the session's surface closes the line `4403 surface does not match
+session`; a session the bridge does not know closes `4404`, and a bridge that cannot be
+asked closes `4503` — the lookup fails closed. So the relay needs the bridge's REST face
+as well as its WS face, both at `BRIDGE_WS_URL`'s host.
+
 ```bash
 npm install
 npm test                 # throughput-at-baud, parity, toggle, FSM, federation, e2e

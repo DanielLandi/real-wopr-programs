@@ -262,3 +262,38 @@ def test_a_refused_mint_creates_no_room(client):
                     json={"surface": "trunk-call", "room_code": "ABCDEF"})
     assert r.status_code == 401, r.text
     assert client.get("/api/room/ABCDEF").status_code == 404
+
+
+# -- #80: the surface the relay paces by is the one stored here -------------
+#
+# `/link` used to take the surface from its query string, so a visitor could
+# mint an ordinary `home-terminal` session — which needs no token, and must
+# not, it is the front door — and then dial `?surface=trunk-caller` to be
+# paced at profile `off`. The relay now asks this bridge which surface the
+# session actually is, and refuses a dial that claims another. The field it
+# reads is `GET /api/session/{id}`'s `surface`, which makes that field a
+# cross-service contract rather than a convenience.
+
+
+@pytest.mark.parametrize("surface", sorted(DEFAULT_LINKS))
+def test_a_session_reports_the_surface_it_was_minted_with(client, surface):
+    """The relay's `/link` cross-check (#80) is built on this answer.
+
+    Parametrised over every mintable surface, machine ends included: the
+    machine legs dial `/link` exactly as a visitor does, so they are
+    cross-checked by the same lookup and would be the loudest possible
+    breakage if this field ever stopped agreeing with the mint.
+    """
+    minted = client.post("/api/session", json={"surface": surface}, headers=AUTH)
+    assert minted.status_code == 201, minted.text
+    r = client.get(f"/api/session/{minted.json()['session_id']}")
+    assert r.status_code == 200, r.text
+    assert r.json()["surface"] == surface
+
+
+def test_a_session_that_does_not_exist_is_a_404_not_a_guess(client):
+    """The relay reads a 404 as "unknown session" and refuses the dial with
+    its own code. An empty body or a defaulted surface here would turn a
+    stale session id into a paced line."""
+    assert client.get("/api/session/11111111-1111-1111-1111-111111111111"
+                      ).status_code == 404

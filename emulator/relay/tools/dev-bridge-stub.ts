@@ -7,6 +7,7 @@
 //
 // NOT shipped, NOT part of the module's public surface.
 
+import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 
@@ -38,7 +39,34 @@ const respond = (input: string): string => {
   return "SHALL WE PLAY A GAME?";
 };
 
-const wss = new WebSocketServer({ port: PORT });
+// The REST face. A `/link` dial asks the bridge which surface a session is
+// before it paces anything (#80), so a bridge stand-in that is only a socket
+// is one every dial refuses `4503`. Minting is answered too, so the surfaces
+// can be driven against this stub end to end rather than half of it.
+let minted = 0;
+const http = createServer((req, res) => {
+  if (req.method === "POST" && req.url === "/api/session") {
+    req.resume();
+    res.writeHead(201, { "content-type": "application/json" });
+    res.end(JSON.stringify({ session_id: `dev-${++minted}`, token: "dev-token",
+                             link_profile: "dialup-300", room_code: null,
+                             system: null, joshua: "dev" }));
+    return;
+  }
+  if (req.method === "GET" && /^\/api\/session\/[^/?]+$/.test(req.url ?? "")) {
+    // Every dev session is a front-door one: this stub has no store to
+    // remember anything else, and the surfaces all dial `home-terminal`.
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ surface: "home-terminal", defcon: 5,
+                             link_profile: "dialup-300", room_code: null,
+                             system: null, last_seen_at: null }));
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+
+const wss = new WebSocketServer({ server: http });
 wss.on("connection", (ws, req) => {
   console.log(`dev-bridge: session connected ${req.url}`);
   const buffer: Envelope[] = [];
@@ -58,4 +86,5 @@ wss.on("connection", (ws, req) => {
     }
   });
 });
-console.log(`dev-bridge-stub listening on :${PORT} (WOPR canned responses)`);
+http.listen(PORT, () =>
+  console.log(`dev-bridge-stub listening on :${PORT} (WOPR canned responses)`));

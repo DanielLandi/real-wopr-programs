@@ -20,6 +20,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { startServer } from "../src/server.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { SeatRegistry } from "../src/seats.ts";
+import { answerSessionLookup } from "./fake-bridge.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 
 function fastConfig() {
@@ -127,6 +128,9 @@ async function startStubBridge(): Promise<StubBridge> {
         res.end(JSON.stringify({ session_id: session, token: `T-${session}` }));
         return;
       }
+      // The lookup a `/link` dial makes before it paces anything (#80): this
+      // bridge minted these sessions, so it is the one that says what they are.
+      if (answerSessionLookup(req, res, (id) => surfaceOf.get(id))) return;
       res.writeHead(500);
       res.end();
     });
