@@ -14,6 +14,9 @@ import type { Envelope, FrameKind } from "./link.ts";
 export type SeatEvent =
   | { type: "seated"; token: string }
   | { type: "ring"; from: string }
+  /** The ring ended without ever becoming a call — declined, unanswered, or
+   *  abandoned by the caller. The seat itself is untouched and still seated. */
+  | { type: "ring-ended" }
   | { type: "frame"; frame: Envelope }
   | { type: "close" };
 
@@ -161,6 +164,20 @@ export class WoprSeat {
       if (frame.kind === "control" && frame.payload.startsWith("RING ")) {
         // A name can contain spaces (CHEYENNE MOUNTAIN) — split once.
         this.emit({ type: "ring", from: frame.payload.slice("RING ".length) });
+        return;
+      }
+      // RING's counterpart, and the third word of the seat's own handshake:
+      // the hub sends it when a ring ends without ever becoming a call —
+      // declined, timed out, or abandoned by the caller (relay/src/server.ts's
+      // playOutAndDrop, which sends NO CARRIER only when a call was actually
+      // answered). It is NOT forwarded as a frame, unlike NO CARRIER: a
+      // carrier drop is line state, whose meaning belongs to the frame
+      // handler, whereas RING and its end are the pair this client already
+      // owns — arming the prompt here and disarming it two modules away would
+      // be the drift. Nothing is printed for it; a phone that stops ringing
+      // announces nothing.
+      if (frame.kind === "control" && frame.payload === "NO ANSWER") {
+        this.emit({ type: "ring-ended" });
         return;
       }
       this.emit({ type: "frame", frame });

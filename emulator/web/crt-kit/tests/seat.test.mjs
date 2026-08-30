@@ -389,3 +389,25 @@ test("close() ends the seat for good and cancels a redial in flight", (t) => {
   t.mock.timers.tick(RETRY_MAX_MS * 2);
   assert.equal(made.length, 2);
 });
+
+// --- a ring that never became a call ---------------------------------------
+// The hub's counterpart to RING. It is seat-handshake vocabulary, not
+// line-state: RING arms the prompt and NO ANSWER disarms it, and splitting the
+// pair across two modules would be the drift (#78 item 2).
+
+test("NO ANSWER ends the ring — it is not forwarded as a frame", (t) => {
+  const made = withFakeSocket(t);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const seat = new WoprSeat({ url: "ws://h/seat", surface: "home-terminal" });
+  const events = [];
+  seat.onEvent((e) => events.push(e));
+  seat.connect();
+  seatIt(made[0], "TOK1");
+  made[0].onmessage?.({ data: control("RING PAN AM") });
+  made[0].onmessage?.({ data: control("NO ANSWER") });
+
+  assert.deepEqual(events.map((e) => e.type), ["seated", "ring", "ring-ended"]);
+  assert.ok(!events.some((e) => e.type === "frame"),
+    "a ring that never became a call must not reach the frame handler, which would print NO CARRIER's neighbour on a line that never carried");
+  assert.equal(seat.token, "TOK1", "the seat itself survives — only the ring ended");
+});
