@@ -18,23 +18,11 @@ jobs:
         run: make test
       - name: Package the pack
         run: make pack
-      - name: Verify pack.json indexes every program
-        run: |
-          python3 - <<'PY'
-          import json, glob, os, sys
-          idx = {p["id"] for p in json.load(open("pack.json"))["programs"]}
-          on_disk = {
-              os.path.basename(os.path.dirname(os.path.dirname(m)))
-              for m in glob.glob("games/*/harness/manifest.json")
-                     + glob.glob("systems/*/harness/manifest.json")
-                     + glob.glob("joshua/harness/manifest.json")
-                     + glob.glob("wopr/harness/manifest.json")
-          }
-          missing = on_disk - idx
-          if missing:
-              print("pack.json is missing programs:", sorted(missing)); sys.exit(1)
-          print(f"pack.json indexes all {len(on_disk)} programs")
-          PY
+      - name: pack.json is current (it indexes every program, at every depth)
+        # The generator is the authority on what the pack contains; a program
+        # on disk that pack.json does not list makes the regenerated index
+        # differ, which --check reports. No category list is kept here.
+        run: python3 tools/gen-dial-directory.py --check
 
   # --- emulator/ (the modern harness) ---------------------------------------
   # These are the suites that used to run in the private engine repo, unchanged,

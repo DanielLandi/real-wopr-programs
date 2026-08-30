@@ -13,10 +13,12 @@ PACK = Path(__file__).resolve().parents[3]
 
 
 def program_manifests():
-    return sorted(PACK.glob("games/*/harness/manifest.json")) \
-        + sorted(PACK.glob("games/*/*/harness/manifest.json")) \
-        + sorted(PACK.glob("systems/*/harness/manifest.json")) \
-        + sorted(PACK.glob("joshua/harness/manifest.json"))
+    # The categories come from pack.json, not a list kept here: this test's
+    # own hand-kept glob missed `wopr/` for as long as that category existed.
+    programs = json.loads((PACK / "pack.json").read_text())["programs"]
+    cats = sorted({p["path"].split("/")[0] for p in programs})
+    return [m for c in cats for depth in ("harness", "*/harness", "*/*/harness")
+            for m in sorted(PACK.glob(f"{c}/{depth}/manifest.json"))]
 
 
 @pytest.mark.parametrize("manifest", program_manifests(), ids=lambda p: str(p.parent.parent))
