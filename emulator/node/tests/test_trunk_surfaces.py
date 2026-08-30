@@ -366,3 +366,34 @@ def test_a_session_that_does_not_exist_is_a_404_not_a_guess(client):
     stale session id into a paced line."""
     assert client.get("/api/session/11111111-1111-1111-1111-111111111111"
                       ).status_code == 404
+
+
+# -- #124: the placed call's end reaches the operator's window ---------------
+#
+# The machine end of a call this host PLACED closes when the far seat hangs
+# up — and until this row existed, nothing at the bridge recorded that the
+# hang-up ever arrived. The row belongs to the exchange (session_id=None),
+# on the shelf `exchange-registered` and the ORIGIN provenance row already
+# sit on (#88): nobody types EVENTS on a machine leg, so a row logged against
+# the leg's own session would be readable from nowhere.
+
+def test_the_placed_calls_end_is_journaled_against_the_exchange():
+    import asyncio
+
+    store = MemoryStore()
+    app = create_app(settings=Settings(internal_token=TOKEN), store=store,
+                     engines={"scripted": ScriptedJoshua({})})
+    with TestClient(app) as client:
+        # The console that reads it is any console at the installation — one
+        # minted before the call, with no part in it.
+        console = client.post("/api/session", json={"surface": "norad-terminal"}).json()
+        with open_session(client, "trunk-caller") as ws:
+            assert BACKDOOR_GREETING in next_output(ws)
+            # Nothing has ended yet: the row is written by the close, not the
+            # greeting.
+            rows = asyncio.run(store.get_recent_events(console["session_id"]))
+            assert not [r for r in rows if r["payload"].get("event") == "callback-ended"]
+        rows = asyncio.run(store.get_recent_events(console["session_id"]))
+        ended = [r for r in rows if r["payload"].get("event") == "callback-ended"]
+        assert len(ended) == 1, rows
+        assert ended[0]["kind"] == "route" and ended[0]["actor"] == "system"
