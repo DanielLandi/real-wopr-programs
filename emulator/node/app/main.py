@@ -629,8 +629,16 @@ def create_app(settings=None, store=None, engines=None, runner=None) -> FastAPI:
                         # rather than bound to a local nothing reads: a variable
                         # that only pretends to record something is worse than
                         # the comment explaining why it is not recorded.
+                        #
+                        # Logged against the EXCHANGE (session_id=None), not
+                        # this session: this is a trunk-call leg, and nobody
+                        # ever types EVENTS on the machine end of a call. The
+                        # record of who called is the installation's, and the
+                        # operator console is the installation's window — the
+                        # same shelf `exchange-registered` already sits on
+                        # (#88).
                         await store.log_event(
-                            session_id, "route", "system",
+                            None, "route", "system",
                             {"origin": message[len("ORIGIN "):].strip()})
                     continue
 

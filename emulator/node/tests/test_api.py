@@ -270,6 +270,50 @@ def test_ws_greets_an_operator_again_after_a_restart():
             assert "--CONNECTION TERMINATED--" in json.loads(ws.receive_text())["payload"]
 
 
+def test_events_shows_the_machine_call_from_the_operator_console():
+    """A machine that calls in discloses where it called from on a
+    `trunk-call` leg — the machine end, where nobody ever types EVENTS. The
+    record of who called is the installation's, so it is logged against the
+    exchange and an operator console reads it back (#88). The real writer
+    (the ORIGIN control frame) against the real reader; the machine leg's own
+    typed lines stay its own (E10's session isolation)."""
+    # The machine surfaces are internal (#74): the relay mints them with the
+    # bridge's token, on the POST and on the WS alike.
+    auth = {"x-wopr-internal-token": "bridge-secret"}
+    settings = Settings(wopr_operators="NORAD-3:TIGERTEAM:3", internal_token="bridge-secret")
+    store = MemoryStore()
+
+    with TestClient(create_app(settings=settings, store=store)) as c:
+        r = c.post("/api/session", json={"surface": "trunk-call"}, headers=auth)
+        assert r.status_code == 201, r.text
+        leg = r.json()
+        with c.websocket_connect(
+                f"/ws/session/{leg['session_id']}?token={leg['token']}",
+                headers=auth) as machine:
+            machine.send_text(ws_envelope(leg["session_id"], "ORIGIN world 1 slot PANAM",
+                                          kind="control"))
+            # A control frame answers nothing; the knock after it proves the
+            # host has read the frame before the console looks.
+            machine.send_text(ws_envelope(leg["session_id"], "HELLO"))
+            assert "--CONNECTION TERMINATED--" in json.loads(machine.receive_text())["payload"]
+
+        console = make_session(c, "norad-terminal")
+        sid, token = console["session_id"], console["token"]
+        with c.websocket_connect(f"/ws/session/{sid}?token={token}", headers=auth) as ws:
+            assert "LOGON:" in json.loads(ws.receive_text())["payload"]
+            ws.send_text(ws_envelope(sid, "LOGON NORAD-3"))
+            assert "ACCESS CODE:" in json.loads(ws.receive_text())["payload"]
+            json.loads(ws.receive_text())  # prompt frame
+            ws.send_text(ws_envelope(sid, "TIGERTEAM"))
+            assert "CLEARANCE ACCEPTED" in json.loads(ws.receive_text())["payload"]
+            json.loads(ws.receive_text())  # prompt frame
+            ws.send_text(ws_envelope(sid, "EVENTS"))
+            events = json.loads(ws.receive_text())["payload"]
+        assert "ROUTE   SYSTEM  ORIGIN WORLD 1 SLOT PANAM" in events
+        assert "TEXT HELLO" not in events  # the machine leg's own rows are its own
+        assert "TIGERTEAM" not in events  # redaction holds (E10)
+
+
 def test_ws_operator_reconnect_in_same_process_is_not_regreeted():
     """The counterpart to the restart case above: a resync *within* the same
     process keeps the router's in-memory attachment, so the door already

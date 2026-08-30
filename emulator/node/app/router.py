@@ -792,8 +792,10 @@ class _Turn:
             # no other key today, and appending guarantees that a future
             # payload carrying both `origin` and, say, `route` still summarises
             # by `route` — no existing row's rendering changes as a side effect
-            # of teaching EVENTS one more word (#78).
-            for key in ("text", "route", "defcon", "game", "system", "origin"):
+            # of teaching EVENTS one more word (#78). `event` is the
+            # exchange-registered row, the other exchange-wide row a console
+            # can now read (#88); appended for the same reason.
+            for key in ("text", "route", "defcon", "game", "system", "origin", "event"):
                 if key in payload:
                     summary = f"{key} {payload[key]}"
                     break
