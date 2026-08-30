@@ -4,7 +4,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocket } from "ws";
-import { startNetworkRelay, profileFor, type NetworkDescriptor } from "../src/network.ts";
+import { startNetworkRelay as startWithDefaultHost, profileFor,
+         type NetworkDescriptor } from "../src/network.ts";
+import { startNetworkRelay } from "./loopback.ts";
 import { decodeNodeFrame, encodeNodeFrame, type NodeFrame } from "../src/node-proto.ts";
 import { decodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 
@@ -171,14 +173,17 @@ test("network relay: when the node drops, an in-flight caller is closed", async 
   await relay.close();
 });
 
+// The two bind-address tests below are about the DEFAULT the descriptor
+// chooses, so they call the relay directly rather than through loopback.ts's
+// wrapper — which exists to override exactly that default.
 test("network relay: a private network binds loopback only", async () => {
-  const relay = await startNetworkRelay(BUS, { port: 0 });
+  const relay = await startWithDefaultHost(BUS, { port: 0 });
   assert.equal(relay.address, "127.0.0.1");
   await relay.close();
 });
 
 test("network relay: a public network binds all interfaces", async () => {
-  const relay = await startNetworkRelay(PSTN, { port: 0 });
+  const relay = await startWithDefaultHost(PSTN, { port: 0 });
   assert.equal(relay.address, "0.0.0.0");
   await relay.close();
 });

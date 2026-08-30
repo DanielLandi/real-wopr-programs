@@ -6,12 +6,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer, seededPort, type RunningServer } from "../src/server.ts";
+import { seededPort, type RunningServer } from "../src/server.ts";
+import { startServer, LOOPBACK } from "./loopback.ts";
 import { DEFAULT_CONFIG, type CommsConfig } from "../src/config.ts";
 import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../src/envelope.ts";
 import type { TrunkFrame } from "../src/trunk.ts";
 import { SeatRegistry } from "../src/seats.ts";
 import { answerSessionLookup, lookupBridge } from "./fake-bridge.ts";
+import { Inbox } from "./inbox.ts";
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -40,25 +42,27 @@ function nextMessage(ws: WebSocket): Promise<string> {
  *  parallel run) are parsed by ws in one synchronous loop and emitted as two
  *  back-to-back `message` events, before any microtask runs. A `once`
  *  listener consumes the first, and the second fires into nobody — the frame
- *  this test is waiting for is gone, and the wait never ends (#113). */
-const frameQueues = new WeakMap<WebSocket, { frames: any[]; wake: (() => void)[] }>();
+ *  this test is waiting for is gone, and the wait never ends (#113).
+ *
+ *  That buffering is `Inbox` (tests/inbox.ts, #114) — one implementation of
+ *  the model, not two (#150). What stays here is the READING position: the
+ *  inbox never trims, so each socket carries a cursor, and a frame this
+ *  helper looked at and rejected is behind the cursor for good. Without that,
+ *  a second `dial()` on the same host socket would match the FIRST call's
+ *  `OPEN` all over again and the test would pass on a frame that predates the
+ *  thing it is waiting for. */
+const frameQueues = new WeakMap<WebSocket, { frames: Inbox<any>; at: number }>();
 async function nextFrame<T = any>(ws: WebSocket, pred: (f: any) => boolean): Promise<T> {
   let q = frameQueues.get(ws);
   if (!q) {
-    q = { frames: [], wake: [] };
+    q = { frames: new Inbox<any>(), at: 0 };
     frameQueues.set(ws, q);
-    const queue = q;
-    ws.on("message", (data) => {
-      queue.frames.push(JSON.parse(data.toString()));
-      for (const w of queue.wake.splice(0)) w();
-    });
+    const frames = q.frames;
+    ws.on("message", (data) => frames.push(JSON.parse(data.toString())));
   }
   for (;;) {
-    while (q.frames.length > 0) {
-      const f = q.frames.shift();
-      if (pred(f)) return f as T;
-    }
-    await new Promise<void>((r) => q!.wake.push(r));
+    const f = await q.frames.nth(q.at++);
+    if (pred(f)) return f as T;
   }
 }
 
@@ -154,7 +158,7 @@ function startStubBridge(opts?: { fail?: boolean; delayMs?: number }): Promise<{
         else respond();
       });
     });
-    server.listen(0, () => {
+    server.listen(0, LOOPBACK, () => {
       resolve({
         port: (server.address() as { port: number }).port,
         requests,
@@ -174,7 +178,7 @@ function startStubComms(): Promise<{
   close: () => Promise<void>;
 }> {
   return new Promise((resolve) => {
-    const wss = new WebSocketServer({ port: 0 });
+    const wss = new WebSocketServer({ port: 0, host: LOOPBACK });
     wss.on("connection", (ws) => {
       ws.on("message", (data) => ws.send(data.toString()));
     });
@@ -224,7 +228,7 @@ function fakeBridge(): Promise<{ port: number; close: () => void; seen: string[]
       });
       void req;
     });
-    httpServer.listen(0, () => {
+    httpServer.listen(0, LOOPBACK, () => {
       resolve({
         port: (httpServer.address() as { port: number }).port,
         close: () => { for (const c of wss.clients) c.terminate(); httpServer.close(); },
@@ -314,11 +318,22 @@ test("toggle: fast mode runs the identical client code, instant connect, same by
 });
 
 test("redundant control DIAL while connected is ignored (no second upstream socket)", async () => {
-  let connections = 0;
+  // Two inboxes, armed before the server they observe exists: the upstream
+  // sockets the bridge is handed, and the frames that reach it over them.
+  // Both replace a sleep (#150). The second is what makes the negative
+  // assertion an assertion rather than a nap: an `input` sent AFTER the
+  // redundant DIAL, on the same socket, cannot reach the bridge until the
+  // relay has handled the DIAL ahead of it — so "the bridge has the input"
+  // is the moment at which "no second upstream was opened" is a fact.
+  const connections = new Inbox<string>();
+  const upstream = new Inbox<string>();
   // The fake bridge answers the session lookup as well as the socket: since
   // #80 a `/link` dial asks which surface the session IS before it paces
   // anything, and a bridge that cannot say refuses the dial.
-  const bridge = await lookupBridge("home-terminal", () => { connections += 1; });
+  const bridge = await lookupBridge("home-terminal", (up: WebSocket, req: http.IncomingMessage) => {
+    connections.push(req.url ?? "");
+    up.on("message", (data) => upstream.push(decodeEnvelope(data.toString()).payload));
+  });
   const bridgePort = bridge.port;
 
   const config: CommsConfig = structuredClone(DEFAULT_CONFIG);
@@ -346,15 +361,24 @@ test("redundant control DIAL while connected is ignored (no second upstream sock
       });
       ws.on("error", reject);
     });
-    // Give the upstream socket a beat to open, then send a redundant DIAL.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.equal(connections, 1);
+    // Wait for the upstream socket itself, not for 100 ms and a hope.
+    await connections.count(1);
     ws.send(encodeEnvelope({
       v: 1, session: "11111111-1111-1111-1111-111111111111", seq: 0,
       kind: "control", link: "client", payload: "DIAL", eom: true,
     }));
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(connections, 1, "a redundant DIAL must not open a second upstream");
+    ws.send(encodeEnvelope({
+      v: 1, session: "11111111-1111-1111-1111-111111111111", seq: 0,
+      kind: "input", link: "client", payload: "AFTER THE DIAL", eom: true,
+    }));
+    // Whichever lands first: the input reaching the bridge over the one
+    // upstream there should be, or a second upstream being opened. Racing
+    // them is what makes the wrong answer a red rather than a hang — a relay
+    // that re-dialled may never deliver this input at all.
+    await Promise.race([upstream.nth(0), connections.nth(1)]);
+    assert.equal(connections.all.length, 1,
+                 "a redundant DIAL must not open a second upstream");
+    assert.equal(upstream.all[0], "AFTER THE DIAL");
   } finally {
     ws.close();
     await server.close();
@@ -1614,7 +1638,7 @@ function fullBridge(): Promise<{
     });
   });
   return new Promise((resolve) => {
-    server.listen(0, () => resolve({
+    server.listen(0, LOOPBACK, () => resolve({
       port: (server.address() as { port: number }).port,
       seen,
       sessions,

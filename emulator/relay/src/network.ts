@@ -33,6 +33,12 @@ export interface NetworkDescriptor {
 
 export interface NetworkRelayOpts {
   port?: number;
+  /** The address to bind, overriding the descriptor's default below. Tests
+   *  pass `127.0.0.1` for the same reason `startServer`'s `host` exists: an
+   *  ephemeral port on a wildcard address can be shared with another
+   *  process's 127.0.0.1 socket, and the test's own `ws://127.0.0.1:<port>`
+   *  dial then lands on the stranger (#151). */
+  host?: string;
   mode?: CommsMode;
 }
 
@@ -85,7 +91,7 @@ export async function startNetworkRelay(
 
   // A private network is a local channel, not a line anyone can dial: bind
   // loopback so nothing off-box can reach a store even by guessing its name.
-  const host = desc.private ? "127.0.0.1" : "0.0.0.0";
+  const host = opts.host ?? (desc.private ? "127.0.0.1" : "0.0.0.0");
 
   const httpServer: Server = createServer((_req, res) => { res.writeHead(404); res.end(); });
   const nodeWss = new WebSocketServer({ noServer: true, maxPayload: NODE_MAX_FRAME_BYTES + 512 });

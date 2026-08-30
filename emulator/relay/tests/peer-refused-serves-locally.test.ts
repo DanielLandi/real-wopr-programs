@@ -18,7 +18,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer, LOOPBACK } from "./loopback.ts";
 import { startTieline } from "../src/tieline.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { answerSessionLookup } from "./fake-bridge.ts";
@@ -68,7 +68,7 @@ function echoBridge(): Promise<{ port: number; close: () => void }> {
         }));
       });
     });
-    httpServer.listen(0, () => resolve({
+    httpServer.listen(0, LOOPBACK, () => resolve({
       port: (httpServer.address() as { port: number }).port,
       close: () => { for (const c of wss.clients) c.terminate(); httpServer.close(); },
     }));

@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
 import { WebSocket } from "ws";
-import { startServer } from "../src/server.ts";
+import { startServer } from "./loopback.ts";
 import { decodeTrunkFrame, TRUNK_MAX_FRAME_BYTES, type TrunkFrame } from "../src/trunk.ts";
 
 function connect(url: string): Promise<WebSocket> {

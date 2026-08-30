@@ -18,7 +18,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
-import { startServer, type RunningServer } from "../src/server.ts";
+import { type RunningServer } from "../src/server.ts";
+import { startServer, LOOPBACK } from "./loopback.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 
 const INTERNAL_SURFACES = new Set(["trunk-call", "trunk-caller"]);
@@ -92,7 +93,7 @@ function fakeBridge(opts: { internalToken?: string; fail?: "lookup";
   wss.on("connection", () => { upstreams += 1; announceUpstream?.(); });
 
   return new Promise((resolve) => {
-    server.listen(0, () => resolve({
+    server.listen(0, LOOPBACK, () => resolve({
       port: (server.address() as { port: number }).port,
       requests,
       get upstreams() { return upstreams; },
