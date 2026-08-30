@@ -51,6 +51,37 @@ session`; a session the bridge does not know closes `4404`, and a bridge that ca
 asked closes `4503` — the lookup fails closed. So the relay needs the bridge's REST face
 as well as its WS face, both at `BRIDGE_WS_URL`'s host.
 
+## Close codes
+
+The relay refuses with WebSocket close codes in the private `44xx`/`45xx` range, and the far
+end decides from the code alone what to do next. Two sets: the *visitor* side (`/link`,
+`/seat`, `/x/<code>/link` — `4400`, `4403`, `4404`, `4408`, `4429`, `4503`, described above
+and in `server.ts`), and the *switchboard* side below — what the hub's `/trunk` says to a tie
+line it will not have. A third-party peer reads this table, not the engine repo's, so it lives
+next to the code it describes; `tests/trunk-close-codes.test.ts` greps the constants out of
+`server.ts` and `tieline.ts` and fails when a row and the code disagree.
+
+| Code | Reason | The hub sends it when | Tie line | Source |
+| --- | --- | --- | --- | --- |
+| `4400` | `malformed trunk frame` | a frame on `/trunk` does not decode (an off-roster slot, a world that is neither a number nor `NEW`, any undecodable frame) | terminal before `ASSIGNED` — `LINE NOT ACCEPTED — … — CHECK TIELINE_SLOT AND TIELINE_WORLD`; after `ASSIGNED` it is an outage and the line redials with backoff | `server.ts` `trunkWss` `"message"` handler (`decodeTrunkFrame` catch); `tieline.ts` `hub.on("close")` `4400 && !everAssigned` branch |
+| `4408` | `no register` | a socket opened `/trunk` and sent no `REGISTER` inside `trunk.registerTimeoutMs` (default 20 s) | redials — a slow host, not a refusal | `server.ts` `trunkWss` `registerTimer` |
+| `4409` | `switchboard full` | `Switchboard.register` returns `"full"`: the hub already holds `maxExchanges` exchanges (`trunk.maxExchanges` on `ServerOpts`, default 32) | terminal — `LINE REFUSED — SWITCHBOARD FULL` | `server.ts` `trunkWss` `REGISTER` branch; `trunk.ts` `register()`; `tieline.ts` terminal set |
+| `4460` | `no circuits available` | `"no-circuits"`: the world asked for is out of range, or every slot in every eligible world is taken and no new world can be provisioned (`TRUNK_MAX_WORLDS`) | terminal — `LINE REFUSED — NO CIRCUITS AVAILABLE` | same three sites as `4409` (`trunk.ts` `place()`) |
+| `4461` | `slot taken` | `"slot-taken"`: the named slot (`TIELINE_SLOT`) in the world asked for is already held | terminal — `LINE REFUSED — SLOT TAKEN` (fixable: ask for another slot or world) | same three sites as `4409` |
+| `4462` | `world reserved` | `"world-reserved"`: the world is on the hub's reserved list (`TRUNK_RESERVED_WORLDS`; world 1 is the flagship's own) and the `REGISTER` carried no key matching `TRUNK_RESERVE_KEY` (the line sends `TIELINE_RESERVE_KEY`) | terminal — `LINE REFUSED — WORLD RESERVED` (needs the hub operator's key) | same three sites as `4409`; reservation itself in `trunk.ts` `reserved()` |
+| `4463` | `not a hub` | the relay at the far end is a **peer** (a tie line configured **and** no seeded local world): its `/trunk` closes every socket the moment it opens, before a frame is read; its `Switchboard` is built with `maxExchanges: 0` as the second line (#87) | terminal — `LINE REFUSED — NOT A HUB`; a line pointed at a peer is a configuration fault, so it is never redialled | `server.ts` `trunkWss` `isPeer` guard; `tieline.ts` terminal set; `tests/peer-not-a-hub.test.ts` |
+
+The four `REGISTER` refusals are distinct on purpose: the host operator has to tell "this hub
+is out of room entirely" (`4409`) from "the world you asked for is out of circuits" (`4460`)
+from "someone else already holds that slot" (`4461`) from "that world is not open to you"
+(`4462`) — the middle two are fixable by asking for a different world or slot, the last
+needs the hub operator's key, and `4463` says the address was never a hub at all.
+
+A tie line that receives a terminal code prints its `LINE REFUSED` line once and stops for
+good; anything else (`4408`, a `4400` after `ASSIGNED`, a plain drop, `1006`) is an outage
+and the line redials with capped exponential backoff, re-registering for a fresh exchange
+code.
+
 ```bash
 npm install
 npm test                 # throughput-at-baud, parity, toggle, FSM, federation, e2e
