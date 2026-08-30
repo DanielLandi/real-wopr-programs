@@ -231,6 +231,32 @@ def test_events_order_and_limit(store):
     asyncio.run(flow())
 
 
+def test_exchange_rows_are_read_from_every_session(store):
+    """Rows logged with `session_id=None` are the exchange's — a peer
+    registering, a machine calling in (#88) — and every session's journal
+    carries them, interleaved in order with its own rows, under the same
+    limit. Another session's rows stay its own (E10)."""
+    async def flow():
+        a = await store.create_session("norad-terminal", "leased-9600", None)
+        b = await store.create_session("norad-terminal", "leased-9600", None)
+        await store.log_event(a.id, "input", "user", {"n": "a1"})
+        await store.log_event(None, "route", "system", {"origin": "world 1 slot PANAM"})
+        await store.log_event(b.id, "input", "user", {"n": "b1"})
+        await store.log_event(a.id, "input", "user", {"n": "a2"})
+        seen_a = await store.get_recent_events(a.id, limit=10)
+        assert [e["payload"] for e in seen_a] == [
+            {"n": "a1"}, {"origin": "world 1 slot PANAM"}, {"n": "a2"}]
+        assert [e["session_id"] for e in seen_a] == [a.id, None, a.id]
+        seen_b = await store.get_recent_events(b.id, limit=10)
+        assert [e["payload"] for e in seen_b] == [
+            {"origin": "world 1 slot PANAM"}, {"n": "b1"}]
+        # The limit is a limit on the journal, exchange rows included.
+        assert [e["payload"] for e in await store.get_recent_events(a.id, limit=1)] == [
+            {"n": "a2"}]
+
+    asyncio.run(flow())
+
+
 def test_system_state_default_empty(store):
     async def flow():
         s = await store.create_session("home-terminal", "dialup-300", None, system_id="sys-1")
@@ -251,6 +277,9 @@ def test_malformed_id_is_unknown_id(store):
         assert await store.get_session("attack") is None
         assert await store.get_active_game("attack") is None
         await store.set_defcon("attack", 3)  # no error, no-op
+        assert await store.get_recent_events("attack") == []
+        # ...even when the exchange has rows of its own to show (#88).
+        await store.log_event(None, "route", "system", {"event": "exchange-registered"})
         assert await store.get_recent_events("attack") == []
         assert await store.get_system_state("attack") == ""
 

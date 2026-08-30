@@ -112,7 +112,14 @@ class Store(Protocol):
     async def set_defcon(self, session_id: str, level: int) -> None: ...
     async def get_clearance_level(self, user_id: str | None) -> int: ...
     async def set_operator(self, session_id: str, callsign: str, level: int) -> None: ...
-    async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]: ...
+    async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        """The journal one session can read back: its own rows plus the
+        exchange's — rows logged with `session_id=None`, which belong to the
+        installation rather than to any one line (a peer registering, a
+        machine calling in). Oldest first, the newest `limit` rows. The
+        exchange's rows are the same from every session that reads them;
+        another session's rows are never among them (E10)."""
+        ...
     async def get_active_game(self, session_id: str) -> GameState | None: ...
     async def get_latest_game(self, game_id: str | None, room_code: str | None = None,
                               playing_only: bool = True) -> GameState | None: ...
@@ -179,7 +186,12 @@ class MemoryStore:
         self.clearances[callsign] = level
 
     async def get_recent_events(self, session_id: str, limit: int = 10) -> list[dict[str, Any]]:
-        rows = [e for e in self.events if e["session_id"] == session_id]
+        # Unknown id: no rows, not even the exchange's own — parity with
+        # PostgresStore's malformed-id guard (the nearest thing it has).
+        if session_id not in self.sessions:
+            return []
+        rows = [e for e in self.events
+                if e["session_id"] == session_id or e["session_id"] is None]
         return rows[-limit:]
 
     async def get_active_game(self, session_id: str) -> GameState | None:
@@ -406,9 +418,11 @@ class PostgresStore:
         pool = await self._pool_or_connect()
         rows = await pool.fetch(
             "select session_id, ts, kind, actor, payload from event_logs"
-            " where session_id = $1::uuid order by ts desc, id desc limit $2",
+            " where session_id = $1::uuid or session_id is null"
+            " order by ts desc, id desc limit $2",
             uid, limit)
-        out = [{"session_id": str(r["session_id"]), "ts": r["ts"].isoformat(),
+        out = [{"session_id": None if r["session_id"] is None else str(r["session_id"]),
+                "ts": r["ts"].isoformat(),
                 "kind": r["kind"], "actor": r["actor"], "payload": r["payload"]}
                for r in rows]
         return list(reversed(out))

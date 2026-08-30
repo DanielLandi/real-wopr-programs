@@ -1014,10 +1014,30 @@ def test_events_renders_the_machine_call_provenance_event():
     async def flow():
         sid = await logon_as_operator(router, store)
         # The shape main.py writes for an `ORIGIN world ... slot ...` control
-        # frame — provenance for a machine that called in.
-        await store.log_event(sid, "route", "system", {"origin": "world 1 slot PANAM"})
+        # frame — provenance for a machine that called in, logged against the
+        # exchange, since the machine leg it arrives on has no operator (#88).
+        # test_api pins the same row from the real writer.
+        await store.log_event(None, "route", "system", {"origin": "world 1 slot PANAM"})
         r = await router.handle(sid, "EVENTS")
-        assert "ORIGIN WORLD 1 SLOT PANAM" in r.text
+        assert "ROUTE   SYSTEM  ORIGIN WORLD 1 SLOT PANAM" in r.text
+
+    asyncio.run(flow())
+
+
+def test_events_renders_the_exchange_registered_event():
+    """The other row the exchange keeps for itself. It was written with a key
+    EVENTS did not know, so once exchange rows became readable (#88) it would
+    have rendered with the blank summary #78 item 3 was about."""
+    store = MemoryStore()
+    router = make_router(store, operators=ROSTER)
+
+    async def flow():
+        sid = await logon_as_operator(router, store)
+        # The shape main.py writes in POST /api/exchanges/register.
+        await store.log_event(None, "route", "system",
+                              {"event": "exchange-registered", "id": "sac-1"})
+        r = await router.handle(sid, "EVENTS")
+        assert "ROUTE   SYSTEM  EVENT EXCHANGE-REGISTERED" in r.text
 
     asyncio.run(flow())
 
