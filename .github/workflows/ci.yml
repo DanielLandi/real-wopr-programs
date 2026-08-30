@@ -43,6 +43,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     services:
+      # An ephemeral database, thrown away with the job. tests/pgharness.py
+      # applies every migration in emulator/node/db/migrations to it — the
+      # whole directory, forward-only, the same contract as the engine repo's
+      # db/apply.sh — so the store contract suite runs against the schema the
+      # pack actually ships, and `sessions_surface_check` is enforced here the
+      # way Neon enforces it (#83).
       postgres:
         image: postgres:16
         env:
@@ -54,7 +60,11 @@ jobs:
     env:
       WOPR_TEST_DATABASE_URL: postgresql://postgres:wopr@localhost:5432/postgres
       # This job is the one that covers the production engines, so a missing
-      # prod extra must fail it rather than skip quietly (tests/conftest.py).
+      # prod extra — or a missing/unreachable database — must fail it rather
+      # than skip quietly (tests/conftest.py). Without the flag, an absent
+      # WOPR_TEST_DATABASE_URL does not even produce a skip line: the postgres
+      # fixture param is simply never generated and the job is green over a
+      # suite that only ran MemoryStore.
       WOPR_REQUIRE_PROD_EXTRAS: "1"
     steps:
       - uses: actions/checkout@v4

@@ -7,11 +7,27 @@ store — and that third copy is the one that drifted: `wopr-panel` returned 500
 against Neon from the day it was added, and the two machine surfaces could not
 mint a session at all, so a machine-placed call died at the database.
 
-None of it surfaced in tests, because the suite runs the in-memory store and
-never touches the constraint. So these tests read the migration and the relay's
-config as TEXT and compare the lists. That is deliberately crude: a test that
-imported the constraint from the database would need a database, and would go
-back to being skipped exactly where it matters.
+None of it surfaced in tests, because the suite ran the in-memory store and
+never touched the constraint. So these tests read the migration and the relay's
+config as TEXT and compare the lists.
+
+**Text comparison is the cheap half, and it is no longer the only half** (#83).
+`test_store_contract.py::test_every_default_link_surface_mints` now mints every
+`DEFAULT_LINKS` surface against a real Postgres with every migration applied —
+which is the check that proves the constraint, as the database actually holds
+it, accepts what the bridge actually sends. A migration that is textually
+consistent and never applied passes this file and fails that one.
+
+This file stays, for three things that one cannot do:
+
+- The relay's `surface_links` is TypeScript. No Python test holding a database
+  connection can see it, and the `relay` job has never heard of `DEFAULT_LINKS`.
+  The bridge/relay direction is covered here or nowhere.
+- A mint test can only find surfaces the database REJECTS. A constraint wider
+  than the code is not a failure, but it is a lie about what the system accepts,
+  and it hides the next drift — that direction is only checked below.
+- It runs with no database, in milliseconds, and names the offending surface.
+  A contributor with no Docker still gets the fast fail.
 """
 from __future__ import annotations
 
