@@ -13,7 +13,8 @@ import pytest
 
 from app.main import DEFAULT_LINKS
 from app.store import (EVENT_ACTORS, EVENT_KINDS, EXCHANGE_JOSHUAS, GAME_STATUSES,
-                       GLOBAL_ROOM_KEY, SESSION_SURFACES, GameState, MemoryStore)
+                       GLOBAL_ROOM_KEY, SESSION_SURFACES, GameState, MemoryStore,
+                       normalize_api)
 
 import pgharness  # sibling test module (pytest prepends tests/ to sys.path; no tests package exists)
 
@@ -124,8 +125,9 @@ def test_every_exchange_joshua_registers(store):
         for joshua in sorted(EXCHANGE_JOSHUAS):
             ok = await store.register_exchange(
                 id=f"x-{joshua}", name=f"Exchange {joshua}", region="Nowhere",
-                api="https://x.example", link="wss://x.example", joshua=joshua,
-                operator=None)
+                # one endpoint each: the book holds one row per api (0004)
+                api=f"https://x-{joshua}.example", link="wss://x.example",
+                joshua=joshua, operator=None)
             assert ok is True, f"{joshua}: registration refused"
 
     asyncio.run(flow())
@@ -307,6 +309,117 @@ def test_exchange_register_and_list(store):
             api="https://x.example", link="wss://x.example", joshua="period",
             operator=None)
         assert dup is False
+
+    asyncio.run(flow())
+
+
+def test_register_exchange_refuses_second_row_for_same_normalized_api(store):
+    """One row per normalized api, at the STORE, not just the route's #142
+    guard. On the Postgres leg the False is `exchanges_api_normalized_key`
+    (db/migrations/0004) firing; MemoryStore mirrors it so the suite
+    everything runs enforces the same book."""
+    async def flow():
+        assert await store.register_exchange(
+            id="alpha", name="Alpha Exchange", region="US-East",
+            api="https://alpha.example", link="wss://alpha.example/link",
+            joshua="claude", operator="op1") is True
+        # same endpoint, any spelling, any other id: refused
+        for variant in ("https://alpha.example", "https://alpha.example/",
+                        "https://ALPHA.example"):
+            assert await store.register_exchange(
+                id="alpha-again", name="Alpha Again", region="US-East",
+                api=variant, link="wss://alpha.example/link",
+                joshua="claude", operator="op1") is False, variant
+        assert await store.exchange_id_for_api("https://alpha.example") == "alpha"
+        # a different endpoint is a different machine
+        assert await store.register_exchange(
+            id="beta", name="Beta Exchange", region="US-West",
+            api="https://beta.example", link="wss://beta.example/link",
+            joshua="period", operator="op2") is True
+
+    asyncio.run(flow())
+
+
+@pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
+def test_unique_index_refuses_a_hand_insert_for_a_listed_machine():
+    """#143's actual target. #142's 409 is app-layer; the path `homelab-sp`
+    took into the book was a hand INSERT, which bypasses the route, the
+    store, and the approved=false forcing all at once. Only
+    `exchanges_api_normalized_key` stands on that path — prove it refuses,
+    by name."""
+    import asyncpg
+
+    url = pgharness.pg_url()
+    pgharness.apply_migrations(url)
+    pgharness.truncate_all(url)
+
+    async def flow():
+        conn = await asyncpg.connect(url)
+        try:
+            await conn.execute(
+                "insert into exchanges (id, name, region, api, link, joshua,"
+                " operator, approved) values ('local-wopr', 'CHEYENNE MOUNTAIN',"
+                " 'US-Mountain', 'https://hub.example', 'wss://hub.example/link',"
+                " 'claude', null, true)")
+            with pytest.raises(asyncpg.UniqueViolationError) as err:
+                await conn.execute(
+                    "insert into exchanges (id, name, region, api, link, joshua,"
+                    " operator, approved) values ('homelab-sp',"
+                    " 'CHEYENNE MOUNTAIN (HOMELAB)', 'US-Mountain',"
+                    " 'https://HUB.example/', 'wss://hub.example/link',"
+                    " 'claude', null, true)")
+            assert "exchanges_api_normalized_key" in str(err.value)
+        finally:
+            await conn.close()
+
+    asyncio.run(flow())
+
+
+@pytest.mark.skipif(not pgharness.pg_url(), reason="WOPR_TEST_DATABASE_URL not set")
+def test_normalize_api_and_the_index_expression_agree():
+    """`normalize_api` (Python) and `lower(rtrim(api, '/'))` (the 0004 index,
+    and PostgresStore.exchange_id_for_api's WHERE) are two spellings of one
+    fold. Two rows the index sees as one machine must be two calls the guard
+    sees as one machine, and vice versa — so run the fold both ways over the
+    same table of inputs: case, trailing slashes (one, many), and none.
+
+    (`normalize_api` also strips whitespace; that is pre-storage hygiene on
+    the lookup's argument, and the `api ~ '^https://'` CHECK plus the wire
+    validators keep whitespace-bearing endpoints out of the column the index
+    folds, so it has no SQL counterpart to pin.)"""
+    import asyncpg
+
+    url = pgharness.pg_url()
+    pgharness.apply_migrations(url)
+
+    inputs = [
+        "https://alpha.example",          # none: already normal
+        "https://alpha.example/",         # one trailing slash
+        "https://alpha.example///",       # many
+        "https://ALPHA.example",          # case, host
+        "https://Alpha.Example/Path/",    # case + slash, with a path
+        "https://alpha.example:8443/x",   # port and path survive the fold
+    ]
+
+    # The expression under test is read from the database's own index, not
+    # retyped here: if 0004's expression and this test ever disagree, the
+    # test must fail, not agree with itself.
+    async def flow():
+        conn = await asyncpg.connect(url)
+        try:
+            indexdef = await conn.fetchval(
+                "select pg_get_indexdef(indexrelid) from pg_index"
+                " join pg_class on pg_class.oid = indexrelid"
+                " where relname = 'exchanges_api_normalized_key'")
+            assert indexdef is not None, "0004's index is not in the schema"
+            assert indexdef.startswith("CREATE UNIQUE INDEX"), indexdef
+            expr = indexdef.split("USING btree ", 1)[1]
+            for raw in inputs:
+                folded = await conn.fetchval(
+                    f"select {expr}".replace("api", "$1::text"), raw)
+                assert folded == normalize_api(raw), raw
+        finally:
+            await conn.close()
 
     asyncio.run(flow())
 
