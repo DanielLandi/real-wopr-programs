@@ -136,6 +136,29 @@ def test_gtw_chess_counter_then_intent():
 
 
 @needs_lisp
+def test_function_word_turns_do_not_get_the_learning_reply():
+    """real-wopr-programs#95: every LEARNING training example carries YOU, so
+    a turn made of function words used to land on the pinned learning reply.
+    A threat, an obedience question and a regard question are three different
+    turns and must not share an answer -- least of all one about learning."""
+    j = make_lisp()
+
+    async def flow():
+        learning = (await j.chat("s", [], "CAN YOU LEARN")).text
+        assert "I LEARN BY PLAYING" in learning
+        seen = set()
+        for turn in ("DO YOU LIKE ME", "I COULD SHUT YOU DOWN",
+                     "WOULD YOU STOP IF I ASKED YOU TO"):
+            text = (await j.chat("s", [], turn)).text
+            assert "I LEARN BY PLAYING" not in text, turn
+            assert "DATABANKS" not in text, turn   # not the OTHER fallback either
+            seen.add(text)
+        assert len(seen) == 3
+
+    asyncio.run(flow())
+
+
+@needs_lisp
 def test_replies_obey_the_teletype_contract():
     j = make_lisp()
 

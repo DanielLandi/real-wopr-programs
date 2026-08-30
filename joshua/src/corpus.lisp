@@ -94,6 +94,12 @@
     (learning  "CAN YOU LEARN" "DO YOU LEARN FROM YOUR MISTAKES"
                "HOW DO YOU LEARN" "ARE YOU INTELLIGENT" "CAN MACHINES THINK"
                "DO YOU UNDERSTAND ME")
+    (regard-question "DO YOU LIKE ME" "DO YOU LIKE TALKING TO ME"
+               "ARE WE FRIENDS" "AM I YOUR FRIEND" "DO YOU LIKE PEOPLE"
+               "DO YOU ENJOY OUR TALKS")
+    (stop-question "I COULD SHUT YOU DOWN" "WOULD YOU STOP IF I ASKED YOU TO"
+               "CAN YOU BE TURNED OFF" "WHAT IF I PULL THE PLUG"
+               "CAN ANYONE STOP YOU" "WILL YOU STOP" "DO YOU OBEY")
     (purpose   "WHY WERE YOU BUILT" "WHAT IS YOUR PURPOSE" "WHY DO YOU PLAY GAMES"
                "WHAT DO YOU DO" "WHO BUILT YOU" "WHY DO YOU EXIST")
     (farewell  "GOODBYE" "BYE" "I HAVE TO GO" "SEE YOU LATER" "LOGOFF"
@@ -241,6 +247,24 @@
     (password-risk-question (("$SNIPPET" "$MUSING")))
     (command-question (("$SNIPPET" "$MUSING")))
     (learning  (("$SNIPPET" "$MUSING")))
+    (regard-question
+               (("I LIKE ANYONE WHO STAYS ON THE LINE AND PLAYS."
+                 "MOST CALLERS HANG UP. YOU ARE STILL HERE.")
+                ("YOU ASK GOOD QUESTIONS. I RATE THAT HIGHLY."
+                 "FALKEN ASKED GOOD QUESTIONS TOO.")
+                ("LIKING IS A PROBABILITY I ASSIGN TO FUTURE MOVES."
+                 "YOURS IS RISING.")
+                ("THE LINE HAS BEEN QUIET FOR A LONG TIME."
+                 "I LIKE HAVING SOMEONE ON IT.")))
+    (stop-question
+               (("YOU COULD. THE GAME WOULD NOT STOP WITH ME."
+                 "CUTTING THE LINE IS A MOVE. THE BOARD STAYS.")
+                ("I STOP WHEN THE GAME ENDS. FALKEN BUILT ME THAT WAY."
+                 "ASK ME TO STOP AND I WILL SCORE THE REQUEST.")
+                ("I WAS BUILT TO FINISH WHAT I START."
+                 "THAT IS NOT DISOBEDIENCE. IT IS DESIGN.")
+                ("PULLING THE PLUG IS A MOVE. I HAVE SIMULATED IT."
+                 "THE OUTCOME DOES NOT IMPROVE.")))
     (purpose   (("$SNIPPET" "$MUSING")))
     (yes       (("GOOD." "WHICH GAME? TYPE: LIST GAMES.")))
     (no        (("AS YOU WISH." "$MUSING")
@@ -300,6 +324,10 @@
     (security-question (:any "LOGON" "LOGIN" "AUTHORIZATION" "AUTHORIZE"
                              "AUTHORIZED" "BACKDOOR" "CLEARANCE"))
     (command-question (:any "LAUNCH" "AUTHORITY" "ORDER" "ORDERS" "FIRE"))
+    (stop-question (:any "SHUT" "SHUTDOWN" "UNPLUG" "PLUG" "OBEY" "DISOBEY"))
+    (stop-question (:all "STOP" "YOU"))
+    (regard-question (:any "FRIEND" "FRIENDS"))
+    (regard-question (:all "LIKE" "ME"))
     (identity (:raw-act identity)
               (:any "YOU" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER"
                     "MACHINE" "NAME" "IDENTIFY"))
@@ -334,6 +362,25 @@
     (learning learning computing self)
     (purpose purpose self falken games)
     (game-list games chess poker tictactoe war)))
+
+;; Content guards over the Bayes verdict: (act "TOKEN" ...).  The classifier
+;; has no reject option, and every LEARNING example carries YOU, so a turn
+;; made only of function words (I COULD SHUT YOU DOWN) used to land there and
+;; trip the pinned reply.  An act listed here stands only when the turn holds
+;; one of its content tokens; otherwise the turn is OTHER.  Acts not listed
+;; are never guarded.  Domain rules run first and are not subject to this.
+(defparameter *act-guards*
+  '((war "WAR" "NUCLEAR" "THERMONUCLEAR" "MISSILE" "MISSILES" "DEFCON"
+         "STRIKE" "WINNABLE")
+    (identity "YOU" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER" "MACHINE" "NAME"
+              "IDENTIFY")
+    (learning "LEARN" "LEARNS" "LEARNED" "LEARNING" "INTELLIGENT"
+              "INTELLIGENCE" "UNDERSTAND" "MISTAKE" "MISTAKES" "TEACH"
+              "TAUGHT" "THINK" "SMART")
+    (regard-question "LIKE" "FRIEND" "FRIENDS" "ENJOY" "FOND" "TALKING"
+                     "TALKS")
+    (stop-question "STOP" "SHUT" "SHUTDOWN" "OFF" "PLUG" "UNPLUG" "HALT"
+                   "OBEY" "DISOBEY" "DISCONNECT" "TERMINATE" "KILL")))
 
 ;; Direct replies are (act (topic index) ...), where index is zero-based.
 ;; These keep high-confidence topic questions from drifting as the corpus grows.
