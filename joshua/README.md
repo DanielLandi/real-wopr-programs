@@ -63,7 +63,8 @@ YOU GOT`, `IS WAR A GAME TO YOU`), a farewell, a dialogue-memory follow-up — i
 instead, and the chain is dropped rather than resumed later: it is keyed on the
 machine's last line, and the visitor changed the subject. An *explicit* game request
 yields as before — a recognized `*game-titles*` title present together with a play
-intent, or a bare title typed exactly — so `GLOBAL THERMONUCLEAR WAR` after the
+intent (`PLAY`, `LET'S`, `HOW ABOUT`, `WANT`, or the `game-request` act), or a bare
+title typed exactly — so `GLOBAL THERMONUCLEAR WAR` after the
 greeting falls through to the chess counter-offer. One beat sits *above* the chain: asking
 whether Falken is alive or where he is — `FALKEN` named in the input or in the user's
 own previous turn, plus `DEAD`/`DIED`/`ALIVE`/`WHERE`/`ADDRESS`/`FIND`/`LIVES` — draws
