@@ -62,7 +62,7 @@ binary. Fixtures whose name contains `error` must exit non-zero (a well-formed p
 
 ```
 make test                                      # every program
-tools/test.sh wopr                             # one category: games | systems | joshua | wopr
+tools/test.sh wopr                             # one category, as pack.json declares them (tools/categories.sh lists them)
 games/hearts/harness/build.sh                  # build one program
 games/hearts/harness/bin/hearts < games/hearts/harness/tests/01-new.in
 ```

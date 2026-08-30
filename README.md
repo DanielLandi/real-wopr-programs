@@ -6,7 +6,7 @@ in a language of its era.
 
 This repository holds **both halves**, and keeps them visibly apart:
 
-- The **programs** — `games/`, `systems/`, `joshua/` — are period source. Fortran, COBOL,
+- The **programs** — `wopr/`, `games/`, `systems/`, `joshua/` — are period source. Fortran, COBOL,
   BASIC, 6502 assembly, CLtL1-era Lisp. They are the reason to be here.
 - The **harness** — `emulator/` — is a modern Python/TypeScript runtime that hosts those
   programs on a modern computer. It is openly modern and does not pretend otherwise.

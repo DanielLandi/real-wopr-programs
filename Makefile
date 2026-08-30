@@ -16,4 +16,4 @@ map: deps              ## print the topology without starting anything
 host: build deps       ## run this machine as a hosted exchange (ties into the hub)
 	@tools/host.sh
 clean:                 ## remove build output and packages
-	@rm -rf games/*/harness/bin games/*/*/harness/bin systems/*/harness/bin joshua/harness/bin wopr/harness/bin dist
+	@rm -rf $(foreach c,$(shell tools/categories.sh),$(c)/harness/bin $(c)/*/harness/bin $(c)/*/*/harness/bin) dist

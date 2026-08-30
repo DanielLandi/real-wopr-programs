@@ -24,13 +24,22 @@ PROTOCOL_BY_KIND = {"game": "WOPR/1", "system": "SYSTEM/1", "joshua": "SYSTEM/1"
                     "executive": "SYSTEM/1"}
 
 
+# Every depth the pack contract puts a harness at: <cat>/harness (joshua, wopr),
+# <cat>/<id>/harness (games, systems), <cat>/<id>/<interpretation>/harness
+# (tictactoe). Shared with tools/build.sh and tools/test.sh by convention.
+HARNESS_DEPTHS = ("harness", "*/harness", "*/*/harness")
+
+
 def _manifest_paths(pack_root: Path) -> list[Path]:
-    """Every program manifest, including tictactoe's nested interpretations."""
-    return (sorted(pack_root.glob("games/*/harness/manifest.json"))
-            + sorted(pack_root.glob("games/*/*/harness/manifest.json"))
-            + sorted(pack_root.glob("systems/*/harness/manifest.json"))
-            + sorted(pack_root.glob("joshua/harness/manifest.json"))
-            + sorted(pack_root.glob("wopr/harness/manifest.json")))
+    """Every program manifest, at every depth, in every category KIND_BY_TOP names.
+
+    KIND_BY_TOP is the one place in the pack a category is spelled out, because
+    naming one is a real decision — what kind of program lives there. Everything
+    downstream (pack.json, tools/categories.sh, the build and test scripts)
+    derives from it rather than restating it.
+    """
+    return [m for cat in KIND_BY_TOP for depth in HARNESS_DEPTHS
+            for m in sorted(pack_root.glob(f"{cat}/{depth}/manifest.json"))]
 
 
 def collect_programs(pack_root: Path) -> list[dict]:
