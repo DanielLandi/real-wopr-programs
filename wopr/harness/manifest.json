@@ -3,7 +3,27 @@
   "title": "W.O.P.R.",
   "binary": "wopr",
   "language": "fortran",
-  "summary": "War Operation Plan Response — the connection monitor that owns a terminal session.",
+  "summary": "War Operation Plan Response \u2014 the connection monitor that owns a terminal session.",
   "timeout_s": 5,
-  "memory_budget_kb": 4096
+  "memory_budget_kb": 4096,
+  "node": {
+    "networks": {
+      "pstn": {
+        "address": "(311) 486-0623",
+        "protocol": "SYSTEM/1"
+      },
+      "norad": {
+        "address": "WOPR",
+        "protocol": "SYSTEM/1"
+      }
+    },
+    "mounts": [
+      "games/*",
+      "joshua",
+      "norad"
+    ],
+    "peers": [
+      "reference"
+    ]
+  }
 }

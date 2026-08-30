@@ -2,8 +2,9 @@
 
 Kept apart from topology.py so the rules can be read and tested one at a time.
 The supervisor refuses to start when errors() is non-empty; warnings are printed
-and do not block — the composite-host warning exists to keep pack.json's `nodes`
-waiting room visible rather than comfortable.
+and do not block — the composite-host warning exists to keep a pack.json `nodes`
+waiting room visible rather than comfortable. This pack's is empty: the
+executive declares itself in `wopr/harness/manifest.json` like every other node.
 """
 
 from __future__ import annotations

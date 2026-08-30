@@ -52,11 +52,24 @@ def test_reference_is_also_on_the_norad_network():
     assert load_nodes(PACK)["reference"].networks["norad"].address == "REFERENCE"
 
 
-def test_wopr_is_a_composite_host_waiting_for_period_source():
+def test_wopr_declares_itself_in_its_own_manifest():
+    """Phase 4 of the executive design (real-wopr#198): the waiting room
+    empties, and node declarations are uniform. WOPR is the dual-homed
+    machine the film rests on, and it mounts the console it hands a cleared
+    operator to."""
     wopr = load_nodes(PACK)["wopr"]
     assert set(wopr.networks) == {"pstn", "norad"}
-    assert wopr.source == "pack.json"
-    assert "games/*" in wopr.mounts
+    assert wopr.networks["pstn"].address == "(311) 486-0623"
+    assert wopr.networks["norad"].address == "WOPR"
+    assert wopr.source == "manifest"
+    assert wopr.mounts == ("games/*", "joshua", "norad")
+    assert wopr.peers == ("reference",)
+
+
+def test_the_waiting_room_is_empty():
+    import json
+    pack = json.loads((PACK / "pack.json").read_text())
+    assert "nodes" not in pack
 
 
 def test_games_are_not_nodes():
