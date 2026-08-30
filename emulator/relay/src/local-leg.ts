@@ -28,6 +28,20 @@ export interface LocalLegOpts {
   commsUrl: string;
   surface: "trunk-call" | "trunk-caller";
   system?: string;
+  /** The service-to-service token the bridge requires to mint a TRUNK
+   *  surface (#74). Those two surfaces are pre-authenticated — a
+   *  `trunk-caller` session is behind the front door the moment it connects
+   *  — and unpaced (profile `off`), so the bridge will not mint one for a
+   *  caller that cannot prove it is the relay. Visitor surfaces are
+   *  untouched: they still mint with no header at all.
+   *
+   *  Defaults to `process.env.BRIDGE_INTERNAL_TOKEN`, mirroring
+   *  `startServer`'s `opts.internalToken ?? process.env… ?? ""` — the hub
+   *  passes the value it already resolved, the tieline passes its own
+   *  option, and a host that merely exports the variable needs no wiring.
+   *  Empty means the header is OMITTED rather than sent blank, so an
+   *  unconfigured relay reads as "no header" and not as "wrong token". */
+  internalToken?: string;
   /** Who called, as the program will be told: "world 1 slot PANAM" or
    *  "seat <handle>". The ONE way a program learns this, on every path —
    *  including the seeded-slot path, where no OPEN exists to carry a field. */
@@ -53,10 +67,13 @@ export interface LocalLeg {
 
 export async function openLocalLeg(opts: LocalLegOpts): Promise<LocalLeg | "refused"> {
   let minted: { session_id: string; token: string };
+  const internalToken = opts.internalToken ?? process.env.BRIDGE_INTERNAL_TOKEN ?? "";
   try {
     const res = await fetch(`${opts.bridgeUrl}/api/session`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: internalToken
+        ? { "content-type": "application/json", "x-wopr-internal-token": internalToken }
+        : { "content-type": "application/json" },
       body: JSON.stringify({ surface: opts.surface, system: opts.system ?? null }),
       signal: AbortSignal.timeout(8_000),
     });

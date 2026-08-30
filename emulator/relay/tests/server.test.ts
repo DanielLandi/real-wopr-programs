@@ -93,17 +93,17 @@ function httpJson(method: string, url: string, body?: string,
 // while a mint is still in flight, deterministically rather than by luck.
 function startStubBridge(opts?: { fail?: boolean; delayMs?: number }): Promise<{
   port: number;
-  requests: Array<{ method: string; path: string; body: string }>;
+  requests: Array<{ method: string; path: string; body: string; headers: http.IncomingHttpHeaders }>;
   close: () => Promise<void>;
 }> {
-  const requests: Array<{ method: string; path: string; body: string }> = [];
+  const requests: Array<{ method: string; path: string; body: string; headers: http.IncomingHttpHeaders }> = [];
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on("data", (c) => chunks.push(c));
       req.on("end", () => {
         const body = Buffer.concat(chunks).toString();
-        requests.push({ method: req.method ?? "", path: req.url ?? "", body });
+        requests.push({ method: req.method ?? "", path: req.url ?? "", body, headers: req.headers });
         const respond = () => {
           if (req.method === "POST" && req.url === "/api/session" && !opts?.fail) {
             res.writeHead(201, { "content-type": "application/json" });
@@ -555,6 +555,37 @@ test("seededPort: a refused mint frees the channel with an explicit CLOSE", asyn
     assert.deepEqual(up, [{ t: "CLOSE", chan: 3, reason: "no session" }]);
   } finally {
     port.close();
+    await bridge.close();
+  }
+});
+
+test("seededPort: the mint carries the internal token (#74)", async () => {
+  // The bridge refuses a TRUNK surface to a caller that cannot prove it is
+  // the relay, so a hub whose seeded slots do not forward the token places
+  // calls that all refuse with `no session`. Three call sites share
+  // openLocalLeg; this is the one that lives inside the hub itself.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+  const up: TrunkFrame[] = [];
+  const port = seededPort(
+    { slot: "WOPR", name: "CHEYENNE MOUNTAIN", region: "COLORADO US" },
+    `ws://127.0.0.1:${bridge.port}`,
+    `ws://127.0.0.1:${comms.port}`,
+    (f) => up.push(f),
+    "SECRET",
+  );
+  try {
+    port.send(JSON.stringify({ t: "OPEN", chan: 5, query: "", origin: { world: 1, slot: "PANAM" } }));
+    const deadline = Date.now() + 2000;
+    while (bridge.requests.length === 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const mint = bridge.requests.find((r) => r.path === "/api/session");
+    assert.ok(mint, "the OPEN must have minted a session");
+    assert.equal(mint.headers["x-wopr-internal-token"], "SECRET");
+  } finally {
+    port.close();
+    await comms.close();
     await bridge.close();
   }
 });

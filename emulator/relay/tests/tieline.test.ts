@@ -95,16 +95,16 @@ async function startStubBridge(opts?: {
   fail?: boolean;
 }): Promise<{
   port: number;
-  requests: Array<{ method: string; path: string; body: string }>;
+  requests: Array<{ method: string; path: string; body: string; headers: http.IncomingHttpHeaders }>;
   close: () => Promise<void>;
 }> {
-  const requests: Array<{ method: string; path: string; body: string }> = [];
+  const requests: Array<{ method: string; path: string; body: string; headers: http.IncomingHttpHeaders }> = [];
   const server = http.createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
     req.on("end", () => {
       const body = Buffer.concat(chunks).toString();
-      requests.push({ method: req.method ?? "", path: req.url ?? "", body });
+      requests.push({ method: req.method ?? "", path: req.url ?? "", body, headers: req.headers });
       if (req.method === "POST" && req.url === "/api/session") {
         const respond = () => {
           if (opts?.fail) { res.writeHead(500); res.end(); return; }
@@ -1173,5 +1173,57 @@ test("tieline: a refused mint on an inbound machine call closes the onOpen it fi
       "onOpen without a matching onClose leaks the call in every host that tracks them");
   } finally {
     t.stop(); hub.close(); await comms.close(); await bridge.close();
+  }
+});
+
+
+test("tieline: a machine call's local leg carries the internal token (#74)", async () => {
+  // The bridge will not mint a TRUNK surface for a caller that cannot prove
+  // it is the relay, so a tieline that does not forward the token answers
+  // every inbound machine call with `no session`. The tieline is the call
+  // site that runs as its own process beside a local stack, which is why the
+  // token is an option here rather than only an environment read.
+  const comms = await startStubComms();
+  const bridge = await startStubBridge();
+
+  const fakeHub = new WebSocketServer({ port: 0 });
+  fakeHub.on("connection", (ws) => {
+    ws.on("message", (data) => {
+      const f = JSON.parse(data.toString());
+      if (f.t === "REGISTER") {
+        ws.send(JSON.stringify({ t: "ASSIGNED", exchange: "FAKE01", world: 1, slot: "WOPR" }));
+        // A MACHINE called: an origin with a world/slot shape is what sends
+        // this down openMachineChannel rather than the visitor dial path.
+        ws.send(JSON.stringify({ t: "OPEN", chan: 4, query: "", origin: { world: 1, slot: "PANAM" } }));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => fakeHub.once("listening", resolve));
+  const hubPort = (fakeHub.address() as { port: number }).port;
+
+  const tieline = startTieline({
+    hubUrl: `ws://127.0.0.1:${hubPort}`,
+    name: "TEST EXCH",
+    region: "TESTLAND",
+    joshua: "period",
+    localComms: `ws://127.0.0.1:${comms.port}`,
+    localBridge: `http://127.0.0.1:${bridge.port}`,
+    internalToken: "SECRET",
+    reconnect: false,
+  });
+
+  try {
+    const deadline = Date.now() + 5000;
+    while (!bridge.requests.some((r) => r.path === "/api/session") && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const mint = bridge.requests.find((r) => r.path === "/api/session");
+    assert.ok(mint, "the inbound machine call must have minted a session");
+    assert.equal(mint.headers["x-wopr-internal-token"], "SECRET");
+  } finally {
+    tieline.stop();
+    await new Promise<void>((resolve) => fakeHub.close(() => resolve()));
+    await comms.close();
+    await bridge.close();
   }
 });
