@@ -212,3 +212,29 @@ def test_router_with_lisp_engine_starts_games_from_conversation():
         assert (await store.get_active_game(s.id)) is not None
 
     asyncio.run(flow())
+
+
+@needs_lisp
+def test_the_greeting_chain_yields_to_a_turn_with_its_own_subject():
+    """The film's chain feeds on the film's inputs (a hello, an answer about
+    feeling) and yields to a visitor who plainly is not continuing it — WHO
+    ARE YOU one line after the greeting is answered, not swallowed. Once a
+    beat yields the chain is dropped, not resumed (#94)."""
+    j = make_lisp()
+    greeted = [{"role": "user", "content": "JOSHUA"},
+               {"role": "assistant", "content": "GREETINGS PROFESSOR FALKEN."}]
+
+    async def flow():
+        r = await j.chat("s", greeted, "HELLO. ARE YOU STILL THERE?")
+        assert r.text == "HOW ARE YOU FEELING TODAY?"
+        r = await j.chat("s", greeted, "WHO ARE YOU")
+        assert "HOW ARE YOU FEELING TODAY?" not in r.text
+        assert "JOSHUA" in r.text or "W.O.P.R" in r.text
+        asked = greeted + [{"role": "user", "content": "HELLO"},
+                           {"role": "assistant", "content": "HOW ARE YOU FEELING TODAY?"}]
+        r = await j.chat("s", asked, "GOOD")
+        assert r.text.startswith("EXCELLENT. IT'S BEEN A LONG TIME.")
+        r = await j.chat("s", asked, "WHAT GAMES HAVE YOU GOT")
+        assert "EXCELLENT" not in r.text and "LIST GAMES" in r.text
+
+    asyncio.run(flow())

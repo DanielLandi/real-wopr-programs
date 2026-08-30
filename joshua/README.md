@@ -53,11 +53,18 @@ are deterministic table lookups addressed by `(topic index)` — they consume no
 
 The greeting chain (`GREETINGS PROFESSOR FALKEN.` → `HOW ARE YOU FEELING TODAY?`
 → `EXCELLENT...` and the 6/23/73 account question → `YES THEY DO.` and the game
-offer) normally consumes the next three inputs regardless of content, but
-yields to an *explicit* game request mid-chain — a recognized `*game-titles*` title
-present together with a play intent, or a bare title typed exactly — so
-`GLOBAL THERMONUCLEAR WAR` after the greeting falls through to the chess counter-offer
-while non-game filler still feeds the beat. One beat sits *above* the chain: asking
+offer) advances on a turn that continues it and yields to one that plainly does
+not. A turn the act classifier reads as a greeting, an answer about feeling, a yes,
+a no, or nothing in particular (`*chain-continuing-acts*`) feeds the next beat —
+the film's own inputs all do; the account beat additionally hears a `learning`-register
+answer (`PEOPLE SOMETIMES MAKE MISTAKES.`) as its explanation (`*account-answer-acts*`).
+Any other act — a question with a subject of its own (`WHO ARE YOU`, `WHAT GAMES HAVE
+YOU GOT`, `IS WAR A GAME TO YOU`), a farewell, a dialogue-memory follow-up — is answered
+instead, and the chain is dropped rather than resumed later: it is keyed on the
+machine's last line, and the visitor changed the subject. An *explicit* game request
+yields as before — a recognized `*game-titles*` title present together with a play
+intent, or a bare title typed exactly — so `GLOBAL THERMONUCLEAR WAR` after the
+greeting falls through to the chess counter-offer. One beat sits *above* the chain: asking
 whether Falken is alive or where he is — `FALKEN` named in the input or in the user's
 own previous turn, plus `DEAD`/`DIED`/`ALIVE`/`WHERE`/`ADDRESS`/`FIND`/`LIVES` — draws
 the DOD pension dossier, because in the film that question follows the greeting

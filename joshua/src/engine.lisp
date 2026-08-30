@@ -554,6 +554,17 @@ plain NO-style answers only when they follow a game offer."
                (when (string= u (car entry))
                  (return t)))))))
 
+(defun chain-yields-p (input act memory-lines &optional extra-acts)
+  "T when the greeting chain should answer INPUT instead of speaking its next
+   beat: an explicit game request (as before), a dialogue-memory follow-up,
+   or an act outside *CHAIN-CONTINUING-ACTS* (plus EXTRA-ACTS, the acts a
+   particular beat's question invites).  The chain is keyed on the machine's
+   last line, so a beat that yields is not resumed later — the visitor
+   changed the subject and the machine follows."
+  (or (explicit-game-request-p input act)
+      (and memory-lines t)
+      (not (member act (append *chain-continuing-acts* extra-acts)))))
+
 (defun dossier-request-p (input history)
   "T when the user is asking after Falken the man — whether he is alive, or
    where he is. FALKEN has to be on the table: named in INPUT, or in the
@@ -617,8 +628,12 @@ plain NO-style answers only when they follow a game offer."
                  '(:seek . "FALKEN") nil))
         ((and (eq act 'falken) (not (second state)))
          (finish '("GREETINGS PROFESSOR FALKEN.") nil))
+        ;; Each beat yields to a turn that is plainly not continuing it
+        ;; (CHAIN-YIELDS-P): the film's own inputs — a hello, an answer about
+        ;; feeling, the MISTAKES line — feed the beat, a question with a
+        ;; subject of its own is answered instead.
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)
-              (not (explicit-game-request-p input act)))
+              (not (chain-yields-p input act memory-lines)))
          (finish '("HOW ARE YOU FEELING TODAY?") nil))
         ;; The chain no longer closes on the game offer: the film asks about
         ;; the deleted account first, and only the answer to *that* reaches
@@ -629,12 +644,13 @@ plain NO-style answers only when they follow a game offer."
         ;; the game offer under a question would break that parity and answer
         ;; the machine's own question on the user's behalf.
         ((and (containsp "HOW ARE YOU FEELING" last-a)
-              (not (explicit-game-request-p input act)))
+              (not (chain-yields-p input act memory-lines)))
          (finish '("EXCELLENT. IT'S BEEN A LONG TIME."
                    "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
                  nil nil))
         ((and (containsp "6/23/73" last-a)
-              (not (explicit-game-request-p input act)))
+              (not (chain-yields-p input act memory-lines
+                                   *account-answer-acts*)))
          (finish '("YES THEY DO." "" "SHALL WE PLAY A GAME?") nil))
         ;; --- game intents -------------------------------------------------
         ((and game (wants-play-p input act) (string= (cdr game) "gtw")
