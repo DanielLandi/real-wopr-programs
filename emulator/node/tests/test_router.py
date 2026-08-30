@@ -1004,6 +1004,24 @@ def test_events_lists_recent_session_log_lines():
     asyncio.run(flow())
 
 
+def test_events_renders_the_machine_call_provenance_event():
+    """The event that records WHO called was the one event an operator could
+    not read: `origin` was not among the summary keys, so the row rendered
+    with an empty summary column (#78 item 3)."""
+    store = MemoryStore()
+    router = make_router(store, operators=ROSTER)
+
+    async def flow():
+        sid = await logon_as_operator(router, store)
+        # The shape main.py writes for an `ORIGIN world ... slot ...` control
+        # frame — provenance for a machine that called in.
+        await store.log_event(sid, "route", "system", {"origin": "world 1 slot PANAM"})
+        r = await router.handle(sid, "EVENTS")
+        assert "ORIGIN WORLD 1 SLOT PANAM" in r.text
+
+    asyncio.run(flow())
+
+
 def test_operator_tier_gating():
     store = MemoryStore()
     router = make_router(store, operators=ROSTER)
