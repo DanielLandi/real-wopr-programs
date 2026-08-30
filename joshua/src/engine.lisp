@@ -536,9 +536,15 @@ plain NO-style answers only when they follow a game offer."
     best))
 
 (defun wants-play-p (input act)
+  "T when INPUT carries a play intent: the GAME-REQUEST act, or one of the
+   keyword forms. HOW ABOUT is the film's own ask (HOW ABOUT GLOBAL
+   THERMONUCLEAR WAR?) and WANT covers I WANT <title>; both are mirrored in
+   the scripted engine's WANTS_GAME (emulator/node/app/joshua.py) so the
+   chess counter-offer fires on the same turns in both engines."
   (let ((u (string-upcase input)))
     (or (eq act 'game-request)
-        (containsp "PLAY" u) (containsp "LET'S" u) (containsp "LETS" u))))
+        (containsp "PLAY" u) (containsp "LET'S" u) (containsp "LETS" u)
+        (containsp "HOW ABOUT" u) (containsp "WANT" u))))
 
 (defun explicit-game-request-p (input act)
   "T when INPUT unambiguously asks for a game: a recognized title is present

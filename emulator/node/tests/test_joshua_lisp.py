@@ -238,3 +238,21 @@ def test_the_greeting_chain_yields_to_a_turn_with_its_own_subject():
         assert "EXCELLENT" not in r.text and "LIST GAMES" in r.text
 
     asyncio.run(flow())
+
+
+@needs_lisp
+def test_how_about_and_want_are_play_requests_in_both_engines():
+    """real-wopr-programs#119: the film's own ask is HOW ABOUT GLOBAL
+    THERMONUCLEAR WAR?; it must reach the chess counter-offer, not war
+    retrieval, and I WANT <title> must start a game — on both engines."""
+    lisp = make_lisp()
+    scripted = ScriptedJoshua({"gtw": "GLOBAL THERMONUCLEAR WAR", "tictactoe": "TIC TAC TOE"})
+
+    async def flow():
+        for engine in (lisp, scripted):
+            r = await engine.chat("s", [], "HOW ABOUT GLOBAL THERMONUCLEAR WAR")
+            assert r.text == CHESS_OFFER and r.start_game_id is None
+            r = await engine.chat("s", [], "I WANT TIC TAC TOE")
+            assert r.text == "INITIALIZING TIC TAC TOE." and r.start_game_id == "tictactoe"
+
+    asyncio.run(flow())

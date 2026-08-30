@@ -160,7 +160,10 @@ class ScriptedJoshua:
         chess_offered = any(
             CHESS_OFFER in m["content"] for m in history if m["role"] == "assistant")
 
-        wants_game = "PLAY" in t or "LET'S" in t or "LETS" in t
+        # Mirrors wants-play-p in joshua/src/engine.lisp (#119: HOW ABOUT is
+        # the film's own ask; WANT covers I WANT <title>).
+        wants_game = ("PLAY" in t or "LET'S" in t or "LETS" in t
+                      or "HOW ABOUT" in t or "WANT" in t)
         for title, gid in self._by_title.items():
             if wants_game and title in t:
                 if gid == "gtw" and not chess_offered:
