@@ -134,9 +134,9 @@ a particular turn."
 
 (defun classify-act (tokens)
   "The Bayes argmax, or OTHER when the turn carries no content evidence at
-all.  Every act-level guard rail downstream (*DOMAIN-RULES*, *ACT-GUARDS*)
-sees the reject as a plain OTHER raw act, so a rule keyed on :RAW-ACT no
-longer fires on a turn the classifier had no business reading."
+all.  GUARDED-ACT sees the reject as a plain OTHER raw act — OTHER is
+unguarded, so it stands — and a turn the classifier had no business reading
+keeps no act of its own."
   (if (content-evidence-p tokens)
       (classify-act-argmax tokens)
       'other))
@@ -278,32 +278,37 @@ longer fires on a turn the classifier had no business reading."
         (setf found nil)))
     found))
 
-(defun rule-clause-p (clause tokens raw-act)
+(defun rule-clause-p (clause tokens)
   (let ((kind (car clause))
         (values (cdr clause)))
     (cond
       ((eq kind :any) (any-token-p values tokens))
       ((eq kind :all) (all-token-p values tokens))
-      ((eq kind :raw-act) (eq raw-act (car values)))
       (t nil))))
 
-(defun domain-rule-p (rule tokens raw-act)
+(defun domain-rule-p (rule tokens)
   (let ((ok t))
     (dolist (clause (cdr rule))
-      (unless (rule-clause-p clause tokens raw-act)
+      (unless (rule-clause-p clause tokens)
         (setf ok nil)))
     ok))
 
-(defun rule-domain-act (tokens raw-act)
+(defun rule-domain-act (tokens)
+  "The planner's keyword routing: the first *DOMAIN-RULES* entry whose
+clauses all hold, or NIL.  A rule reads the turn and nothing else.  A rule
+that also consulted the Bayes verdict would be a guard wearing a rule's
+clothes, and would shadow the real guard below (#157)."
   (let ((found nil))
     (dolist (rule *domain-rules*)
-      (when (and (null found) (domain-rule-p rule tokens raw-act))
+      (when (and (null found) (domain-rule-p rule tokens))
         (setf found (car rule))))
     found))
 
 (defun guarded-act (tokens raw-act)
   "RAW-ACT, or OTHER when *ACT-GUARDS* lists it and none of its content
-tokens is present.  Unlisted acts pass through untouched."
+tokens is present.  Unlisted acts pass through untouched.  This is the only
+place the Bayes verdict is second-guessed; *DOMAIN-RULES* route on the turn
+alone, so a guard is never shadowed by a rule for the same act (#157)."
   (let ((guard (assoc raw-act *act-guards*)))
     (if (and guard (not (any-token-p (cdr guard) tokens)))
         'other
@@ -312,7 +317,7 @@ tokens is present.  Unlisted acts pass through untouched."
 (defun domain-act (tokens raw-act)
   "Keyword guard rails over the statistical act classifier: the planner's
 rules first, then the content guards over the Bayes verdict."
-  (or (rule-domain-act tokens raw-act)
+  (or (rule-domain-act tokens)
       (guarded-act tokens raw-act)))
 
 (defun preferred-topics (act)
@@ -380,14 +385,14 @@ in *MEMORY-LINES* so the retrieval/Markov models never train on it."
           (incf count))))
     count))
 
-(defun vague-followup-p (tokens raw-act)
+(defun vague-followup-p (tokens)
   "MORE/CONTINUE-style turns, but only when the turn names no domain
 of its own: TELL ME MORE ABOUT DEFCON is a DEFCON question, not vague."
   (and (or (token-present-p "MORE" tokens)
            (token-present-p "CONTINUE" tokens)
            (token-present-p "ELABORATE" tokens)
            (and (token-present-p "GO" tokens) (token-present-p "ON" tokens)))
-       (null (rule-domain-act tokens raw-act))))
+       (null (rule-domain-act tokens))))
 
 (defun falken-history-p (history)
   "FALKEN was mentioned by either side (this also covers the
@@ -476,7 +481,7 @@ plain NO-style answers only when they follow a game offer."
            (token-present-p "YOU" tokens)
            (token-present-p "DO" tokens))))
 
-(defun memory-reply-lines (history tokens act raw-act)
+(defun memory-reply-lines (history tokens act)
   (cond
     ((launch-safe-contradiction-p history tokens)
      (topic-lines '((contradiction 0) (contradiction 1))))
@@ -485,11 +490,11 @@ plain NO-style answers only when they follow a game offer."
              '("SHALL WE PLAY A GAME?")))
     ((and (eq act 'chess-question) (falken-history-p history))
      (topic-lines '((falken-memory 0) (falken-memory 1))))
-    ((and (vague-followup-p tokens raw-act)
+    ((and (vague-followup-p tokens)
           (>= (history-act-count history '(war)) 2))
      (append (topic-lines '((war-memory 0) (war-memory 1)))
              '("SHALL WE PLAY A GAME?")))
-    ((vague-followup-p tokens raw-act)
+    ((vague-followup-p tokens)
      (let ((last-topic (last-memory-topic-act history)))
        (cond
          ((eq last-topic 'mad-question)
@@ -648,7 +653,7 @@ plain NO-style answers only when they follow a game offer."
          (last-a (last-assistant history))
          (game (find-game input))
          ;; Pure lookups (no RNG use): computed once, tested and used below.
-         (memory-lines (memory-reply-lines history tokens act raw-act))
+         (memory-lines (memory-reply-lines history tokens act))
          (planned-lines (domain-reply-lines act)))
     (declare (ignore trust))
     (labels ((finish (lines intent &optional (pressure t))

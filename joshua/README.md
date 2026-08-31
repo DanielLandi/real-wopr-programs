@@ -19,6 +19,7 @@ machine — compute is the one thing Falken had plenty of.
 | Naive-Bayes dialogue-act classifier | **Anachronism** — 1700s math, 1990s NLP practice | Routes input to GREETING / WAR / LEARNING / GAME-REQUEST… |
 | Stop-word reject option on the classifier | **Period** — Chow's reject option (1970) and the SMART system's stop list (1971) both predate the film | A turn whose only known tokens are function words ("ARE YOU LONELY") is answered as OTHER instead of being forced onto an act |
 | Data-driven topic/domain planner | **Anachronism** — rule-based expert-system practice was period; mixing it with statistical routing is the Falken fiction | Corpus tables keep NORAD, command authority, security, computing, and war replies grounded in the right databank slice |
+| Content guards over the classifier's verdict | **Period** — the stop list again, used the other way round | An act with a guard stands only when the turn carries one of that act's *content* tokens (`*act-guards*`); the function words belong to the stop list, never to a guard, and the planner's rules read the turn alone so they cannot shadow a guard |
 | TF-IDF cosine retrieval over a databank | **Anachronism** — Salton's vector-space model (1975) existed for document search; retrieval-augmented *dialogue* is a 2020s idea | Grounds replies in W.O.P.R.'s "knowledge databank" |
 | Markov bigram generation | **Anachronism** — Shannon (1948) math, 1990s statistical NLP | Composes novel "musing" lines the corpus never contained |
 
