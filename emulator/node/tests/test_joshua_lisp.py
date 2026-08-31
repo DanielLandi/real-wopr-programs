@@ -211,6 +211,42 @@ def test_a_turn_with_no_content_word_is_rejected_rather_than_answered():
 
 
 @needs_lisp
+def test_the_identity_guard_asks_for_more_than_a_pronoun():
+    """real-wopr-programs#157: the IDENTITY guard listed YOU, a stop word, so
+    it admitted every turn that mentioned the addressee -- which is most of
+    them. ARE YOU SURE and ARE YOU WINNING were Bayes IDENTITY verdicts (the
+    act's examples are dense in ARE/YOU), and the guard, having nothing to
+    discriminate with, let them through: both were answered with the name.
+
+    The guard now lists content tokens only, and the identity idiom that
+    names nothing -- WHO ARE YOU, WHAT ARE YOU -- is a domain rule, where the
+    interrogative and the pronoun can be required together. The second half
+    of this test is the control: a guard tightened until it rejects the turns
+    it exists to admit would satisfy the first half and lose the persona."""
+    j = make_lisp()
+
+    async def flow():
+        for turn in ("ARE YOU SURE", "ARE YOU WINNING", "WHY ARE YOU"):
+            text = (await j.chat("s", [], turn)).text
+            assert "DATABANKS" in text or "I DO NOT HAVE AN ANSWER" in text, turn
+            assert "JOSHUA" not in text, turn
+
+        # Named, or asked in the idiom: still identity.
+        landed = {
+            "WHO ARE YOU": "FALKEN CALLS ME JOSHUA",
+            "WHAT ARE YOU": "FALKEN CALLS ME JOSHUA",
+            "ARE YOU JOSHUA": "JOSHUA",
+            "ARE YOU A COMPUTER": "WAR OPERATION PLAN RESPONSE",
+            "IDENTIFY YOURSELF": "JOSHUA",
+        }
+        for turn, expected in landed.items():
+            text = (await j.chat("s", [], turn)).text
+            assert expected in text, f"{turn} -> {text!r}"
+
+    asyncio.run(flow())
+
+
+@needs_lisp
 def test_replies_obey_the_teletype_contract():
     j = make_lisp()
 

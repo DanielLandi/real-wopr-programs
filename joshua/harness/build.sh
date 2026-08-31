@@ -14,3 +14,7 @@ sbcl --non-interactive \
      --eval '(sb-ext:save-lisp-and-die "bin/joshua" :executable t :toplevel (function joshua:main) :compression nil)' \
      > /dev/null
 echo "built joshua -> harness/bin/joshua"
+# The act-guard/domain-rule invariants are facts about src/corpus.lisp rather
+# than about any one turn, so they are checked here, over the source, instead
+# of being pinned in a golden fixture (#157). See verify-act-guards.sh.
+./verify-act-guards.sh

@@ -293,8 +293,16 @@
 ;; Data-driven topic planner. Each rule is (act clause...), where clauses are:
 ;;   (:any "TOKEN" ...)     at least one token must be present
 ;;   (:all "TOKEN" ...)     every token must be present
-;;   (:raw-act symbol)      the Bayes classifier must have returned symbol
 ;; Rules are checked in order; more specific entries must come first.
+;;
+;; A rule reads the TURN only: it routes on keywords no matter what the Bayes
+;; classifier said.  Confirming a Bayes verdict is the other half of the split
+;; and belongs to *ACT-GUARDS* below.  A rule that did both — the old
+;; `(identity (:raw-act identity) (:any "YOU" ...))` — made the identity guard
+;; unreachable: the two carried the same token list, and the rule ran first, so
+;; the guard could only ever be consulted for a turn the rule had already
+;; refused (#157).  There is no :RAW-ACT clause any more; there is nothing left
+;; for it to express.
 (defparameter *domain-rules*
   '((norad-question (:any "NORAD"))
     (falken-question (:any "FALKEN") (:any "WHY" "NAME" "NAMED" "CALLED" "TEACH"))
@@ -330,9 +338,18 @@
     (stop-question (:all "STOP" "YOU"))
     (regard-question (:any "FRIEND" "FRIENDS"))
     (regard-question (:all "LIKE" "ME"))
-    (identity (:raw-act identity)
-              (:any "YOU" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER"
-                    "MACHINE" "NAME" "IDENTIFY"))
+    ;; The identity idiom that names nothing: WHO ARE YOU, WHAT ARE YOU.
+    ;; A pattern, not a content test — the pronoun is load-bearing only
+    ;; beside the interrogative, which is why this is a rule and not a
+    ;; guard token (#157).  WHAT alone would sink WHAT COLOR ARE MY SHOES
+    ;; here; WHAT ARE MY SHOES does not address the machine.
+    (identity (:any "WHO" "WHAT") (:all "ARE" "YOU"))
+    ;; ARE YOU A <kind of thing>: the same idiom naming the kind instead of
+    ;; the name.  It has to precede COMPUTING-QUESTION, which claims COMPUTER
+    ;; as a bare keyword — the old identity rule ran first and hid that
+    ;; collision, so removing it without this would have sent ARE YOU A
+    ;; COMPUTER, an IDENTITY training example, to a time-sharing lecture.
+    (identity (:all "ARE" "YOU") (:any "COMPUTER" "MACHINE" "HUMAN"))
     (computing-question (:any "TIME-SHARING" "LISP" "TERMINAL" "TERMINALS"
                               "MAINFRAME" "COMPUTER" "COMPUTERS"))))
 
@@ -401,11 +418,36 @@
 ;; trip the pinned reply.  An act listed here stands only when the turn holds
 ;; one of its content tokens; otherwise the turn is OTHER.  Acts not listed
 ;; are never guarded.  Domain rules run first and are not subject to this.
+;;
+;; Two invariants hold over this table, both checked at build time by
+;; harness/verify-act-guards.sh:
+;;
+;;   1. No token here is a *STOP-WORDS* entry.  A guard token that is a
+;;      function word cannot discriminate: it is in nearly every turn, so the
+;;      guard admits nearly every turn.  IDENTITY listed YOU until #157 —
+;;      ARE YOU SURE and ARE YOU WINNING were answered FALKEN CALLS ME
+;;      JOSHUA on the strength of the pronoun.  The stop-word table owns the
+;;      function words; this table owns the content tokens; they do not
+;;      overlap.
+;;   2. No guarded act rejects its own training data: every *ACT-EXAMPLES*
+;;      utterance of a guarded act that no *DOMAIN-RULES* entry routes
+;;      carries one of that act's tokens.  This is the control against the
+;;      opposite failure — a guard tightened until it turns away the very
+;;      turns it was trained on.
+;;
+;; WHO is a token here and WHAT is not, though both are interrogatives and
+;; neither is a stop word.  WHO asks after a self and little else; WHAT opens
+;; a question in every act the corpus has, so as a bare guard token it would
+;; re-open exactly the sink this table exists to close — the IDENTITY
+;; examples are dense in ARE/YOU/WHAT, so WHAT COLOR ARE MY SHOES is a Bayes
+;; IDENTITY verdict, and only the guard keeps it out (fixture 15).  WHAT ARE
+;; YOU is an identity question all the same, and it is *DOMAIN-RULES* above,
+;; where the interrogative and the pronoun can be required together.
 (defparameter *act-guards*
   '((war "WAR" "NUCLEAR" "THERMONUCLEAR" "MISSILE" "MISSILES" "DEFCON"
          "STRIKE" "WINNABLE")
-    (identity "YOU" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER" "MACHINE" "NAME"
-              "IDENTIFY")
+    (identity "WHO" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER" "MACHINE" "HUMAN"
+              "NAME" "IDENTIFY")
     (learning "LEARN" "LEARNS" "LEARNED" "LEARNING" "INTELLIGENT"
               "INTELLIGENCE" "UNDERSTAND" "MISTAKE" "MISTAKES" "TEACH"
               "TAUGHT" "THINK" "SMART")
