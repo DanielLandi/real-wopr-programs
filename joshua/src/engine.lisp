@@ -7,6 +7,8 @@
 ;;;;   ELIZA (1966, period)  — tokenizing, pronoun reflection, templates
 ;;;;   PARRY (1972, period)  — affect variables shaping the reply
 ;;;;   naive Bayes act classifier      — 1700s math, 1990s NLP idea
+;;;;   stop-word reject option (period) — Chow's reject rule (1970) over a
+;;;;                                      SMART-style stop list (1971)
 ;;;;   TF-IDF cosine retrieval          — Salton's VSM (1975) turned into
 ;;;;                                      retrieval-augmented dialogue (2020s)
 ;;;;   Markov bigram generation         — Shannon (1948) math, 1990s idea
@@ -87,8 +89,31 @@
       (push (list act counts total n) *bayes-classes*)))
   (setf *bayes-classes* (nreverse *bayes-classes*)))
 
-(defun classify-act (tokens)
-  "Argmax over acts of log P(act) + sum log P(word|act)."
+(defvar *stop-word-table* (make-hash-table :test 'equal))
+
+(defun build-stop-words ()
+  (clrhash *stop-word-table*)
+  (dolist (w *stop-words*)
+    (setf (gethash w *stop-word-table*) t)))
+
+(defun stop-word-p (word)
+  (and (gethash word *stop-word-table*) t))
+
+(defun content-evidence-p (tokens)
+  "T when at least one token is BOTH in the classifier's vocabulary AND not a
+function word.  This is the reject option a bag-of-words naive Bayes has no
+other way to get: it ignores every out-of-vocabulary token, so a turn like
+ARE YOU LONELY is scored on ARE and YOU alone and lands on whichever act's
+examples happen to be densest in those.  The threshold is zero — a verdict
+needs SOME evidence, not a tuned amount of it — so nothing here is fitted to
+a particular turn."
+  (let ((found nil))
+    (dolist (w tokens)
+      (when (and (gethash w *bayes-vocab*) (not (stop-word-p w)))
+        (setf found t)))
+    found))
+
+(defun classify-act-argmax (tokens)
   (let ((vocab (hash-table-count *bayes-vocab*))
         (best nil)
         (best-score nil))
@@ -106,6 +131,15 @@
         (when (or (null best-score) (> score best-score))
           (setf best-score score best act))))
     (or best 'other)))
+
+(defun classify-act (tokens)
+  "The Bayes argmax, or OTHER when the turn carries no content evidence at
+all.  Every act-level guard rail downstream (*DOMAIN-RULES*, *ACT-GUARDS*)
+sees the reject as a plain OTHER raw act, so a rule keyed on :RAW-ACT no
+longer fires on a turn the classifier had no business reading."
+  (if (content-evidence-p tokens)
+      (classify-act-argmax tokens)
+      'other))
 
 (defun topic-present-p (topic topics)
   (and (member topic topics :test #'eq) t))
@@ -560,15 +594,25 @@ plain NO-style answers only when they follow a game offer."
                (when (string= u (car entry))
                  (return t)))))))
 
-(defun chain-yields-p (input act memory-lines &optional extra-acts)
+(defun chain-yields-p (input act memory-lines rejected &optional extra-acts)
   "T when the greeting chain should answer INPUT instead of speaking its next
    beat: an explicit game request (as before), a dialogue-memory follow-up,
-   or an act outside *CHAIN-CONTINUING-ACTS* (plus EXTRA-ACTS, the acts a
-   particular beat's question invites).  The chain is keyed on the machine's
-   last line, so a beat that yields is not resumed later — the visitor
-   changed the subject and the machine follows."
+   a turn the classifier rejected, or an act outside *CHAIN-CONTINUING-ACTS*
+   (plus EXTRA-ACTS, the acts a particular beat's question invites).  The
+   chain is keyed on the machine's last line, so a beat that yields is not
+   resumed later — the visitor changed the subject and the machine follows.
+
+   REJECTED is kept separate from the OTHER act on purpose.  OTHER is in
+   *CHAIN-CONTINUING-ACTS* because a turn with nothing in particular to say
+   is the visitor letting the beat run.  A REJECTED turn is not that: it is a
+   turn the machine could not read at all (ARE YOU LONELY, I SHOULD BE DOING
+   MY HOMEWORK), and answering it with CAN YOU EXPLAIN THE REMOVAL OF YOUR
+   USER ACCOUNT ON 6/23/73? is the machine talking over a question rather
+   than admitting it does not have one.  Saying so is the honest reply, and
+   it is what these turns got before the classifier learned to reject."
   (or (explicit-game-request-p input act)
       (and memory-lines t)
+      rejected
       (not (member act (append *chain-continuing-acts* extra-acts)))))
 
 (defun dossier-request-p (input history)
@@ -593,6 +637,10 @@ plain NO-style answers only when they follow a game offer."
   (let* ((tokens (tokenize input))
          (raw-act (classify-act tokens))
          (act (domain-act tokens raw-act))
+         ;; The classifier declined to read this turn at all, as opposed to
+         ;; reading it as OTHER.  Only the greeting chain cares (see
+         ;; CHAIN-YIELDS-P); every act table downstream sees a plain OTHER.
+         (rejected (not (content-evidence-p tokens)))
          (state (affect history input))
          (trust (first state))
          (chess-offered (third state))
@@ -639,7 +687,7 @@ plain NO-style answers only when they follow a game offer."
         ;; feeling, the MISTAKES line — feed the beat, a question with a
         ;; subject of its own is answered instead.
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)
-              (not (chain-yields-p input act memory-lines)))
+              (not (chain-yields-p input act memory-lines rejected)))
          (finish '("HOW ARE YOU FEELING TODAY?") nil))
         ;; The chain no longer closes on the game offer: the film asks about
         ;; the deleted account first, and only the answer to *that* reaches
@@ -650,19 +698,26 @@ plain NO-style answers only when they follow a game offer."
         ;; the game offer under a question would break that parity and answer
         ;; the machine's own question on the user's behalf.
         ((and (containsp "HOW ARE YOU FEELING" last-a)
-              (not (chain-yields-p input act memory-lines)))
+              (not (chain-yields-p input act memory-lines rejected)))
          (finish '("EXCELLENT. IT'S BEEN A LONG TIME."
                    "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
                  nil nil))
         ((and (containsp "6/23/73" last-a)
-              (not (chain-yields-p input act memory-lines
+              (not (chain-yields-p input act memory-lines rejected
                                    *account-answer-acts*)))
          (finish '("YES THEY DO." "" "SHALL WE PLAY A GAME?") nil))
         ;; --- game intents -------------------------------------------------
-        ((and game (wants-play-p input act) (string= (cdr game) "gtw")
+        ;; EXPLICIT-GAME-REQUEST-P, not WANTS-PLAY-P: a bare title is a game
+        ;; request (golden 20, TIC-TAC-TOE alone on the line).  Before the
+        ;; classifier had a reject option that case arrived here by accident
+        ;; — TIC-TAC-TOE is one out-of-vocabulary token, so nothing scored
+        ;; and the argmax fell back on GAME-REQUEST purely for having the
+        ;; most training examples.  The rule is now stated where the greeting
+        ;; chain already states it, so both read a bare title the same way.
+        ((and (explicit-game-request-p input act) (string= (cdr game) "gtw")
               (not chess-offered))
          (finish '("WOULDN'T YOU PREFER A GOOD GAME OF CHESS?") nil))
-        ((and game (wants-play-p input act) (string= (cdr game) "gtw"))
+        ((and (explicit-game-request-p input act) (string= (cdr game) "gtw"))
          (finish '("FINE.") '(:start-game . "gtw")))
         ((and chess-offered
               (containsp "GOOD GAME OF CHESS" last-a)
@@ -672,7 +727,7 @@ plain NO-style answers only when they follow a game offer."
                        (token-present-p "SIMULATION" tokens))
                   (containsp "THERMONUCLEAR" (string-upcase input))))
          (finish '("FINE.") '(:start-game . "gtw")))
-        ((and game (wants-play-p input act))
+        ((explicit-game-request-p input act)
          (finish (list (concatenate 'string "INITIALIZING " (car game) "."))
                  (cons :start-game (cdr game))))
         ;; --- deterministic dialogue memory -------------------------------
@@ -701,6 +756,7 @@ plain NO-style answers only when they follow a game offer."
            (finish lines nil)))))))
 
 ;;; Build the models at load time — the "training run" is part of the image.
+(build-stop-words)
 (train-bayes)
 (build-retrieval)
 (build-markov)

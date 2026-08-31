@@ -17,6 +17,7 @@ machine — compute is the one thing Falken had plenty of.
 | Tokenizing + pronoun reflection | **Period** — ELIZA (Weizenbaum 1966) | Turns "MY plan" into "YOUR plan" in echoes |
 | Affect variables shaping replies | **Period** — PARRY (Colby 1972, Lisp on a PDP-10) | OBSESSION rises each gameless turn → "SHALL WE PLAY A GAME?" pressure; Falken recognition beats |
 | Naive-Bayes dialogue-act classifier | **Anachronism** — 1700s math, 1990s NLP practice | Routes input to GREETING / WAR / LEARNING / GAME-REQUEST… |
+| Stop-word reject option on the classifier | **Period** — Chow's reject option (1970) and the SMART system's stop list (1971) both predate the film | A turn whose only known tokens are function words ("ARE YOU LONELY") is answered as OTHER instead of being forced onto an act |
 | Data-driven topic/domain planner | **Anachronism** — rule-based expert-system practice was period; mixing it with statistical routing is the Falken fiction | Corpus tables keep NORAD, command authority, security, computing, and war replies grounded in the right databank slice |
 | TF-IDF cosine retrieval over a databank | **Anachronism** — Salton's vector-space model (1975) existed for document search; retrieval-augmented *dialogue* is a 2020s idea | Grounds replies in W.O.P.R.'s "knowledge databank" |
 | Markov bigram generation | **Anachronism** — Shannon (1948) math, 1990s statistical NLP | Composes novel "musing" lines the corpus never contained |
