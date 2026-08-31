@@ -33,6 +33,11 @@ tools/behavior.sh          # tictactoe self-play + GTW convergence
 
 Toolchain install: `toolchain.md`. Pack format and manifest schema: `PACK.md`.
 
+## External services
+
+See [`SERVICES.md`](./SERVICES.md) — update it in the same commit whenever a
+service dependency is added, removed, or re-keyed.
+
 ## Who consumes this
 
 `../real-wopr` (the engine/ops repo) imports this pack into `build/pack/` via
