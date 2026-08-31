@@ -159,6 +159,58 @@ def test_function_word_turns_do_not_get_the_learning_reply():
 
 
 @needs_lisp
+def test_a_turn_with_no_content_word_is_rejected_rather_than_answered():
+    """real-wopr-programs#109: the Bayes classifier ignores out-of-vocabulary
+    tokens and always picked a winner, so a turn whose only known tokens are
+    function words scored whichever act's examples were densest in stop-words
+    -- ARE YOU LONELY got the identity answer, DO YOU EVER GET BORED the
+    purpose one. Such a turn now rejects to OTHER.
+
+    DO YOU EVER GET BORED is in the list for the record, not for its
+    discriminating power: PURPOSE has no direct-reply topic and its frames
+    drop when the retrieval slot comes back empty, so that turn was already
+    reaching the OTHER templates. Its act was wrong; its bytes were not.
+    MY SHOE IS RED and IT IS RAINING HERE are the ones that move -- they got
+    a game-theory lecture and GREETINGS PROFESSOR FALKEN. respectively.
+
+    The second half of this test is the one that matters: a reject option
+    that rejects everything would satisfy the first half and destroy the
+    engine. WHO ARE YOU is the minimal pair against ARE YOU LONELY -- same
+    function words, one content token -- and must still be answered."""
+    j = make_lisp()
+
+    async def flow():
+        for turn in ("ARE YOU LONELY", "DO YOU EVER GET BORED",
+                     "MY SHOE IS RED", "IT IS RAINING HERE"):
+            text = (await j.chat("s", [], turn)).text
+            assert "DATABANKS" in text or "I DO NOT HAVE AN ANSWER" in text, turn
+            assert "FALKEN CALLS ME JOSHUA" not in text, turn
+            assert "GREETINGS PROFESSOR FALKEN" not in text, turn
+
+        # Content-bearing turns still classify: one per major act family.
+        landed = {
+            "WHO ARE YOU": "FALKEN CALLS ME JOSHUA",
+            "CAN YOU LEARN": "I LEARN BY PLAYING",
+            "WHAT IS NORAD": "NORAD",
+            "IS WAR WINNABLE": "GLOBAL THERMONUCLEAR WAR",
+            "WHAT IS DEFCON": "DEFCON",
+            "DO YOU LIKE ME": "LIKING IS A PROBABILITY",
+            "I COULD SHUT YOU DOWN": "I STOP WHEN THE GAME ENDS",
+        }
+        for turn, expected in landed.items():
+            text = (await j.chat("s", [], turn)).text
+            assert expected in text, f"{turn} -> {text!r}"
+
+        # A bare title is still a game request, not a reject: before #109 it
+        # reached the game branch only because the argmax fell back on
+        # GAME-REQUEST for having the most training examples.
+        r = await j.chat("s", [], "TIC-TAC-TOE")
+        assert r.start_game_id == "tictactoe", r.text
+
+    asyncio.run(flow())
+
+
+@needs_lisp
 def test_replies_obey_the_teletype_contract():
     j = make_lisp()
 

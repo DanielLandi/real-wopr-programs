@@ -365,6 +365,36 @@
     (purpose purpose self falken games)
     (game-list games chess poker tictactoe war)))
 
+;; Function words: the tokens that say nothing about WHICH act a turn is.
+;; The classifier's reject option (CONTENT-EVIDENCE-P in engine.lisp) reads
+;; this list.  A hand-kept stop list is the period-correct instrument — the
+;; SMART retrieval system shipped one in 1971 — and `retrieve` below already
+;; expresses the same idea statistically, as low IDF.  It is written out
+;; rather than derived from *ACT-EXAMPLES* because it is a fact about
+;; English, not about this corpus: deriving it would silently move the
+;; classifier's reject boundary every time an act is added.
+;;
+;; Interrogatives (WHO WHAT WHY HOW WHICH WHERE WHEN) are deliberately NOT
+;; stop words.  Here they are the content: WHO ARE YOU is an identity
+;; question on the strength of its first word alone, and `question-turn-p`
+;; in engine.lisp already reads them as meaning-bearing.  Neither are the
+;; YES/NO words, which are acts in their own right.
+(defparameter *stop-words*
+  '("A" "AN" "THE" "THIS" "THAT" "THESE" "THOSE" "SOME" "ANY" "EVERY"
+    "I" "ME" "MY" "MINE" "MYSELF" "YOU" "YOUR" "YOURS" "YOURSELF"
+    "WE" "US" "OUR" "OURS" "HE" "HIM" "HIS" "SHE" "HER" "HERS"
+    "IT" "ITS" "THEY" "THEM" "THEIR" "THEIRS" "ONE" "ANYONE" "ANYBODY"
+    "SOMEBODY" "SOMEONE" "NOBODY" "EVERYONE" "SOMETHING" "ANYTHING"
+    "EVERYTHING"
+    "AM" "IS" "ARE" "WAS" "WERE" "BE" "BEEN" "BEING"
+    "DO" "DOES" "DID" "DONE" "HAVE" "HAS" "HAD"
+    "CAN" "COULD" "WILL" "WOULD" "SHALL" "SHOULD" "MAY" "MIGHT" "MUST"
+    "GET" "GETS" "GOT" "MAKE" "MAKES" "TAKE" "TAKES" "PUT" "GIVE" "GIVES"
+    "TO" "OF" "IN" "ON" "AT" "BY" "FOR" "FROM" "WITH" "ABOUT" "AS"
+    "INTO" "OVER" "UNDER" "THAN" "THEN" "AND" "OR" "BUT" "IF" "SO"
+    "THERE" "HERE" "NOW" "EVER" "NEVER" "JUST" "VERY" "REALLY" "MUCH"
+    "MANY" "MORE" "MOST" "OWN" "SAME" "TOO" "ALSO" "ALL" "BOTH" "EACH"))
+
 ;; Content guards over the Bayes verdict: (act "TOKEN" ...).  The classifier
 ;; has no reject option, and every LEARNING example carries YOU, so a turn
 ;; made only of function words (I COULD SHUT YOU DOWN) used to land there and
