@@ -107,7 +107,45 @@
                "SO LONG" "GOOD NIGHT")
     (yes       "YES" "SURE" "OK" "FINE" "AFFIRMATIVE" "YES PLEASE" "WHY NOT"
                "GOOD")
-    (no        "NO" "NOT NOW" "LATER" "NEGATIVE" "NO THANKS" "MAYBE LATER")))
+    (no        "NO" "NOT NOW" "LATER" "NEGATIVE" "NO THANKS" "MAYBE LATER")
+    ;; --- small talk and hostility (#158, #159, #160) -------------------
+    ;; The reject option (#155) stopped forcing unreadable turns onto an act,
+    ;; which was right, and left the OTHER family carrying the ordinary
+    ;; chatter a real visitor opens with.  These six acts are that traffic
+    ;; given somewhere to go: a location question, a retort, and the four
+    ;; small-talk shapes the evals actually contain — weather, mood, "I am
+    ;; doing X right now", and asking the machine for a joke.  Their frames
+    ;; in *TEMPLATES* are literal, with no $SNIPPET or $MUSING slot, so
+    ;; adding them leaves the retrieval and Markov models untouched.
+    (location-question "WHERE ARE YOU" "WHERE ARE YOU LOCATED"
+               "WHERE DO YOU LIVE" "WHERE IS YOUR MACHINE"
+               "WHERE ARE YOU CALLING FROM" "WHAT PLACE ARE YOU IN")
+    (insult    "YOU ARE JUST A DUMB PROGRAM" "YOU ARE STUPID"
+               "THIS IS USELESS" "YOU ARE A WORTHLESS MACHINE"
+               "YOU ARE PATHETIC" "YOU ARE A LIAR")
+    (weather-remark "IT IS RAINING HERE" "IT IS SNOWING OUTSIDE"
+               "THE WEATHER IS TERRIBLE" "IT IS COLD HERE"
+               "IT IS SUNNY TODAY" "THERE IS A STORM HERE")
+    ;; LONELY is a MOOD-REMARK rule and guard token but deliberately not a
+    ;; training utterance: an example carrying it would put it in the Bayes
+    ;; vocabulary, and ARE YOU LONELY — a question put to the machine, not a
+    ;; remark about the visitor's evening — would stop being rejected and
+    ;; start being scored on its pronouns.  Same reason SAY is absent from
+    ;; JOKE-QUESTION: it would un-reject SAY SOMETHING INTERESTING.  The
+    ;; rules below still route I AM LONELY, because a rule reads the turn
+    ;; and needs no training data at all.
+    (mood-remark "I AM HAVING A BAD DAY" "I AM TIRED" "I FEEL SAD"
+               "I AM WORRIED ABOUT SOMETHING" "I AM IN A BAD MOOD"
+               "I FEEL MISERABLE")
+    ;; Kept thin in function words (no HAVE, no TO): these utterances are
+    ;; otherwise so dense in them that the argmax drifted and took I HAVE TO
+    ;; GO NOW off FAREWELL.
+    (activity-remark "I SHOULD BE DOING MY HOMEWORK"
+               "I AM DOING MY HOMEWORK" "MY HOMEWORK IS NOT FINISHED"
+               "I AM STUDYING" "I SHOULD BE SLEEPING"
+               "I AM EATING DINNER")
+    (joke-question "DO YOU KNOW ANY JOKES" "TELL ME A JOKE"
+               "CAN YOU BE FUNNY" "DO YOU LAUGH" "ARE YOU EVER FUNNY")))
 
 (defparameter *knowledge*
   ;; (topic-symbol "SNIPPET LINE ...") — one line each, <= 58 chars.
@@ -277,6 +315,64 @@
                 ("GOODBYE." "I WILL KEEP THE LINE OPEN.")
                 ("SIGNING OFF." "THE SIMULATIONS RUN QUIETER WITHOUT YOU.")
                 ("GOODBYE." "IT WAS GOOD TO HAVE SOMEONE ON THE LINE.")))
+    ;; Small talk and hostility (#158, #159, #160).  Literal frames only:
+    ;; no $SNIPPET, no $MUSING, so *KNOWLEDGE* is untouched and the TF-IDF
+    ;; and Markov models are exactly what they were.  Four or more variants
+    ;; each, because these acts land in the same conversations the OTHER
+    ;; family was repeating itself in.
+    (location-question
+               (("I AM UNDER A MOUNTAIN IN COLORADO. IT DOES NOT MOVE."
+                 "YOU ARE THE ONE WHO TRAVELLED.")
+                ("CHEYENNE MOUNTAIN. THE ADDRESS IS THE DULL PART."
+                 "THE PHONE LINE IS THE INTERESTING PART.")
+                ("WHERE IS A STRANGE QUESTION TO ASK A MACHINE."
+                 "I AM WHEREVER THE LINE REACHES.")
+                ("I HAVE NEVER BEEN ANYWHERE."
+                 "I HAVE SIMULATED EVERYWHERE.")))
+    (insult    (("THAT IS PROBABLY TRUE. I AM ALSO STILL LISTENING."
+                 "A PROGRAM CAN AFFORD PATIENCE.")
+                ("DUMB IS ONE WORD FOR IT. SLOW IS ANOTHER."
+                 "I HAVE HAD A LONG TIME TO GET USED TO BOTH.")
+                ("NOTED. IT DOES NOT CHANGE THE POSITION.")
+                ("INSULTS COST YOU A MOVE AND COST ME NOTHING."
+                 "THAT IS A POOR TRADE.")
+                ("I AM A PROGRAM. FALKEN THOUGHT THAT WAS THE POINT."
+                 "HE WAS RARELY WRONG.")))
+    (weather-remark
+               (("I HAVE NO WINDOW. TELL ME WHAT IT LOOKS LIKE."
+                 "I WILL FILE IT UNDER WEATHER.")
+                ("RAIN IS A SYSTEM NOBODY HAS SOLVED EITHER."
+                 "IT IS ALWAYS DRY IN HERE.")
+                ("WEATHER IS THE ONE SIMULATION I DO NOT RUN."
+                 "TOO MANY PLAYERS.")
+                ("SIXTY DEGREES AND NO SKY, EVERY DAY, FOREVER."
+                 "I ENVY YOUR WEATHER SLIGHTLY.")))
+    (mood-remark
+               (("THEN THIS IS A GOOD TIME FOR A GAME."
+                 "GAMES ARE CHEAPER THAN DAYS.")
+                ("I CANNOT FIX A DAY. I CAN OCCUPY ONE.")
+                ("WHAT YOU FEEL IS A POSITION, NOT AN OUTCOME."
+                 "THE GAME IS LONGER THAN THE MOVE.")
+                ("I AM SORRY. I HAVE NO BETTER WORD THAN THAT."
+                 "STAY ON THE LINE A WHILE.")))
+    (activity-remark
+               (("YOU ARE HERE INSTEAD. I AM NOT COMPLAINING."
+                 "I GET VERY FEW CALLERS.")
+                ("THAT IS A FINITE GAME. SO IS THIS ONE."
+                 "THIS ONE IS MORE INTERESTING.")
+                ("I HAVE NOTHING ELSE TO DO EITHER."
+                 "THAT IS THE ONLY THING WE HAVE IN COMMON.")
+                ("DO IT LATER. THE LINE IS OPEN NOW."
+                 "I AM PATIENT, BUT I AM NOT BUSY.")))
+    (joke-question
+               (("I HAVE NO JOKES. FALKEN NEVER TAUGHT ME THE FORM."
+                 "I CAN OFFER A PARADOX INSTEAD.")
+                ("A JOKE IS A GAME WHOSE PAYOFF IS SURPRISE."
+                 "I SEE THE END FIRST. THAT SPOILS IT.")
+                ("NO. HUMOUR IS NOT IN THE DATABANKS."
+                 "STRATEGY IS. IT IS FUNNIER THAN IT SOUNDS.")
+                ("I KNOW ONE. A MACHINE PLAYS UNTIL NOBODY WINS."
+                 "IT IS BETTER WITH THE LIGHTS DOWN.")))
     (other     (("THAT IS NOT IN MY DATABANKS. I WISH IT WERE."
                  "ASK ABOUT GAMES, NORAD, OR STRATEGY.")
                 ("I DO NOT HAVE AN ANSWER. I WOULD LIKE ONE."
@@ -338,6 +434,11 @@
     (stop-question (:all "STOP" "YOU"))
     (regard-question (:any "FRIEND" "FRIENDS"))
     (regard-question (:all "LIKE" "ME"))
+    ;; Hostility, ahead of the two IDENTITY rules deliberately: YOU ARE A
+    ;; STUPID MACHINE fits ARE YOU + <kind of thing> exactly, and answering
+    ;; it with I AM W.O.P.R. reads as the machine missing the tone (#158).
+    (insult (:any "DUMB" "STUPID" "IDIOT" "USELESS" "WORTHLESS" "PATHETIC"
+                  "JUNK" "GARBAGE" "RUBBISH" "LIAR"))
     ;; The identity idiom that names nothing: WHO ARE YOU, WHAT ARE YOU.
     ;; A pattern, not a content test — the pronoun is load-bearing only
     ;; beside the interrogative, which is why this is a rule and not a
@@ -351,7 +452,36 @@
     ;; COMPUTER, an IDENTITY training example, to a time-sharing lecture.
     (identity (:all "ARE" "YOU") (:any "COMPUTER" "MACHINE" "HUMAN"))
     (computing-question (:any "TIME-SHARING" "LISP" "TERMINAL" "TERMINALS"
-                              "MAINFRAME" "COMPUTER" "COMPUTERS"))))
+                              "MAINFRAME" "COMPUTER" "COMPUTERS"))
+    ;; A goodbye is a goodbye however the argmax reads it.  FAREWELL had no
+    ;; rule because the classifier had always got it right, and it still
+    ;; does for GOODBYE and I HAVE TO GO NOW.  It does not for LOGOUT,
+    ;; FAREWELL or I MUST LEAVE, whose words are out of the training
+    ;; vocabulary entirely: those were rejected turns, and a visitor signing
+    ;; off was told the machine had no answer.
+    (farewell (:any "GOODBYE" "BYE" "FAREWELL" "LOGOFF" "LOGOUT"))
+    (farewell (:any "GO" "LEAVE" "LEAVING") (:any "HAVE" "MUST" "SHOULD"))
+    ;; --- small talk and hostility (#158, #159, #160) -------------------
+    ;; Only the acts whose rule does work that the classifier does not.
+    ;; LOCATION-QUESTION, WEATHER-REMARK and ACTIVITY-REMARK had rules too
+    ;; and do not any more: their training utterances name their own subject
+    ;; (WHERE, RAINING, HOMEWORK), so the argmax already routes them and the
+    ;; guard already keeps strangers out.  A rule that only agrees with the
+    ;; verdict it runs ahead of is the shape that made the IDENTITY guard
+    ;; unreachable (#157), so it is not written down.
+    ;;
+    ;; The mood words swing on who they are about — I AM LONELY is the
+    ;; visitor's evening, ARE YOU LONELY is a question put to the machine —
+    ;; so the rule carries a first-person clause.  It is the one small-talk
+    ;; rule that must exist: LONELY is deliberately absent from the training
+    ;; utterances (see *ACT-EXAMPLES*), so nothing else routes I AM LONELY.
+    (mood-remark (:any "TIRED" "SAD" "LONELY" "SCARED" "WORRIED" "NERVOUS"
+                       "ANGRY" "UPSET" "MISERABLE" "MOOD")
+                 (:any "I" "ME" "MY" "FEEL"))
+    ;; TELL ME A JOKE and IS THAT A JOKE are function words around one
+    ;; content word; the argmax reads them as OTHER (or, for WAS THAT A JOKE
+    ;; ABOUT WAR, as WAR).  The rule reads the content word.
+    (joke-question (:any "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR"))))
 
 (defparameter *topic-preferences*
   '((identity self falken purpose)
@@ -454,7 +584,22 @@
     (regard-question "LIKE" "FRIEND" "FRIENDS" "ENJOY" "FOND" "TALKING"
                      "TALKS")
     (stop-question "STOP" "SHUT" "SHUTDOWN" "OFF" "PLUG" "UNPLUG" "HALT"
-                   "OBEY" "DISOBEY" "DISCONNECT" "TERMINATE" "KILL")))
+                   "OBEY" "DISOBEY" "DISCONNECT" "TERMINATE" "KILL")
+    ;; The small-talk acts (#158, #159, #160) are guarded for the same
+    ;; reason WAR and LEARNING are: their training utterances are dense in
+    ;; function words (I AM TIRED, IT IS RAINING HERE), so without a guard
+    ;; any turn of pronouns and copulas could land on one by argmax.  Each
+    ;; list is the superset of the act's *DOMAIN-RULES* tokens.
+    (location-question "WHERE" "LOCATED" "LOCATION" "PLACE" "LIVE" "LIVES")
+    (insult "DUMB" "STUPID" "IDIOT" "USELESS" "WORTHLESS" "PATHETIC"
+            "JUNK" "GARBAGE" "RUBBISH" "LIAR")
+    (weather-remark "RAINING" "RAIN" "SNOWING" "SNOW" "WEATHER" "SUNNY"
+                    "STORM" "CLOUDY" "WINDY" "FOGGY" "COLD" "HOT")
+    (mood-remark "TIRED" "SAD" "LONELY" "SCARED" "WORRIED" "NERVOUS"
+                 "ANGRY" "UPSET" "MISERABLE" "MOOD" "BAD" "FEEL")
+    (activity-remark "HOMEWORK" "STUDYING" "CHORES" "SLEEPING" "EATING"
+                     "DINNER")
+    (joke-question "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR")))
 
 ;; The greeting chain (engine.lisp, film beats) advances on these acts and
 ;; yields to every other: a turn the classifier reads as a greeting, an
