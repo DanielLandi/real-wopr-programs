@@ -565,6 +565,33 @@ plain NO-style answers only when they follow a game offer."
         (when filled (push (truncate-line filled) out))))
     (nreverse out)))
 
+(defun frame-spoken-p (frame said)
+  "T when this frame's opening line is already somewhere in SAID, the text
+the machine has spoken in this conversation.  Only the first line is
+checked, and only when it is a literal: a $-slot line is not known until it
+is filled, and the opening line is what a reader hears as the repeat."
+  (let ((line (car frame)))
+    (and line
+         (> (length line) 0)
+         (not (containsp "$" line))
+         (containsp line said))))
+
+(defun unspoken-frames (frames said)
+  "FRAMES minus the ones already spoken, or all of FRAMES when that would
+leave nothing.  The variant LCG is seeded from the dialogue history but has
+no memory of what it just said, so two turns of the same act inside one
+conversation could draw the same variant — C07 drew MY DATABANKS ARE
+NARROW. twice in five turns (#168).  Filtering before the pick is what gives
+the RNG that memory, and it stays deterministic: the filter reads the same
+HISTORY block every other derived state reads.  Falling back to the full
+list when every variant has been used keeps the act answerable forever
+rather than running out of things to say."
+  (let ((fresh '()))
+    (dolist (frame frames)
+      (unless (frame-spoken-p frame said)
+        (push frame fresh)))
+    (if fresh (nreverse fresh) frames)))
+
 (defun find-game (input)
   "Longest game title present in INPUT -> (title . id)."
   (let ((u (string-upcase input)) (best nil))
@@ -749,12 +776,18 @@ plain NO-style answers only when they follow a game offer."
                 (musing (markov-musing tokens))
                 (reflected (join (reflect (last tokens 6))))
                 (frames (cdr (assoc act *templates*)))
-                (frame (if frames (pick (car frames))
-                           (pick (car (cdr (assoc 'other *templates*))))))
+                (said (history-text history :a))
+                (frame (if frames
+                           (pick (unspoken-frames (car frames) said))
+                           (pick (unspoken-frames
+                                  (car (cdr (assoc 'other *templates*)))
+                                  said))))
                 (lines (fill-template frame snippet reflected musing)))
            (when (null lines)
              (setf lines (fill-template
-                          (pick (car (cdr (assoc 'other *templates*))))
+                          (pick (unspoken-frames
+                                 (car (cdr (assoc 'other *templates*)))
+                                 said))
                           snippet reflected musing)))
            (when (null lines)
              (setf lines '("PLEASE RESTATE.")))

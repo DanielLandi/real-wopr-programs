@@ -170,8 +170,14 @@ def test_a_turn_with_no_content_word_is_rejected_rather_than_answered():
     discriminating power: PURPOSE has no direct-reply topic and its frames
     drop when the retrieval slot comes back empty, so that turn was already
     reaching the OTHER templates. Its act was wrong; its bytes were not.
-    MY SHOE IS RED and IT IS RAINING HERE are the ones that move -- they got
-    a game-theory lecture and GREETINGS PROFESSOR FALKEN. respectively.
+    MY SHOE IS RED is the one that moves -- it got a game-theory lecture.
+
+    IT IS RAINING HERE was in this list until #160 and is deliberately not
+    any more. Rejecting it was honest but it was never the goal: the turn is
+    ordinary small talk, and the corpus now has a WEATHER-REMARK act for it
+    (real-wopr-programs#160). The reject option is not what changed -- the
+    turn stopped being unreadable because the machine learned to read it.
+    A turn with no act at all, MY SHOE IS RED, still rejects.
 
     The second half of this test is the one that matters: a reject option
     that rejects everything would satisfy the first half and destroy the
@@ -181,7 +187,7 @@ def test_a_turn_with_no_content_word_is_rejected_rather_than_answered():
 
     async def flow():
         for turn in ("ARE YOU LONELY", "DO YOU EVER GET BORED",
-                     "MY SHOE IS RED", "IT IS RAINING HERE"):
+                     "MY SHOE IS RED"):
             text = (await j.chat("s", [], turn)).text
             assert "DATABANKS" in text or "I DO NOT HAVE AN ANSWER" in text, turn
             assert "FALKEN CALLS ME JOSHUA" not in text, turn
@@ -200,6 +206,18 @@ def test_a_turn_with_no_content_word_is_rejected_rather_than_answered():
         for turn, expected in landed.items():
             text = (await j.chat("s", [], turn)).text
             assert expected in text, f"{turn} -> {text!r}"
+
+        # The small-talk and hostility acts added by #158/#159/#160. Every
+        # frame in the OTHER family closes on a line naming GAMES, NORAD --
+        # and no other frame in the corpus does -- so its absence is the
+        # assertion that these turns get an act of their own. Asserting on a
+        # word from one particular frame would not work: which variant the
+        # LCG draws is a property of the seed, not of the act.
+        for turn in ("WHERE ARE YOU", "YOU ARE JUST A DUMB PROGRAM",
+                     "IT IS RAINING HERE", "I AM HAVING A BAD DAY",
+                     "I SHOULD BE DOING MY HOMEWORK", "DO YOU KNOW ANY JOKES"):
+            text = (await j.chat("s", [], turn)).text
+            assert "GAMES, NORAD" not in text, f"{turn} -> {text!r}"
 
         # A bare title is still a game request, not a reject: before #109 it
         # reached the game branch only because the argmax fell back on
