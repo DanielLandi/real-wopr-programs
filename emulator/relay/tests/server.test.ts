@@ -13,7 +13,7 @@ import { decodeEnvelope, encodeEnvelope, reassemble, type Envelope } from "../sr
 import type { TrunkFrame } from "../src/trunk.ts";
 import { SeatRegistry } from "../src/seats.ts";
 import { answerSessionLookup, lookupBridge } from "./fake-bridge.ts";
-import { Inbox } from "./inbox.ts";
+import { Inbox, orLostTo } from "./inbox.ts";
 
 function connect(url: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
@@ -372,12 +372,13 @@ test("redundant control DIAL while connected is ignored (no second upstream sock
       kind: "input", link: "client", payload: "AFTER THE DIAL", eom: true,
     }));
     // Whichever lands first: the input reaching the bridge over the one
-    // upstream there should be, or a second upstream being opened. Racing
-    // them is what makes the wrong answer a red rather than a hang — a relay
-    // that re-dialled may never deliver this input at all.
-    await Promise.race([upstream.nth(0), connections.nth(1)]);
-    assert.equal(connections.all.length, 1,
-                 "a redundant DIAL must not open a second upstream");
+    // upstream there should be, or a second upstream being opened. Losing to
+    // the second upstream is what makes the wrong answer a red rather than a
+    // hang — a relay that re-dialled may never deliver this input at all
+    // (#154; `orLostTo` is that race, named, in inbox.ts).
+    const oneUpstream = "a redundant DIAL must not open a second upstream";
+    await orLostTo(upstream.nth(0), connections.nth(1), (url) => `${oneUpstream} (got ${url})`);
+    assert.equal(connections.all.length, 1, oneUpstream);
     assert.equal(upstream.all[0], "AFTER THE DIAL");
   } finally {
     ws.close();

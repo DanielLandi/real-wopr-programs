@@ -8,16 +8,8 @@ import http from "node:http";
 import { WebSocketServer } from "ws";
 import { openLocalLeg } from "../src/local-leg.ts";
 import { decodeEnvelope, encodeEnvelope } from "../src/envelope.ts";
-import { Inbox } from "./inbox.ts";
-
-/** A wait that goes red the moment the leg under test dies instead. The
- *  leg reports every death through its `close` callback ("local leg
- *  closed" on a socket error or close); a test that discards that signal
- *  while awaiting a frame turns a lost dial into a silent hang. */
-const orClosed = <T,>(p: Promise<T>, closes: Inbox<string | undefined>): Promise<T> =>
-  Promise.race([p, closes.nth(0).then((r): never => {
-    throw new Error(`the leg closed while the test was waiting: ${r}`);
-  })]);
+import { Inbox, orClosed } from "./inbox.ts";
+import { LOOPBACK } from "./loopback.ts";
 
 /** A bridge that mints one session, and a comms leg that records the URL it
  *  was dialled on and echoes envelopes the test pushes at it.
@@ -51,18 +43,16 @@ async function stubs(opts: { mintStatus?: number } = {}): Promise<{
       res.writeHead(404); res.end();
     });
   });
-  // 127.0.0.1 explicitly, both stubs: a listener left on the IPv6 wildcard
-  // can share its port number with another process's IPv4 socket, and the
-  // leg's ws://127.0.0.1:<port> dial then lands on the stranger, not the
-  // stub — observed live while chasing #114 (the stranger answered 401, ws
-  // errored, and the only signal went to a no-op close callback). Binding
-  // the same family the dial uses makes the port genuinely ours.
-  await new Promise<void>((r) => bridge.listen(0, "127.0.0.1", r));
+  // Both stubs bind LOOPBACK, the family the leg's own dial uses — see
+  // loopback.ts for why a listener that skips it can be handed a port
+  // another process already holds on 127.0.0.1. This file was the first to
+  // get it right (#114); it goes through the shared constant now (#153).
+  await new Promise<void>((r) => bridge.listen(0, LOOPBACK, r));
 
   const dialled = new Inbox<string>();
   const received = new Inbox<string>();
   const sockets: import("ws").WebSocket[] = [];
-  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  const wss = new WebSocketServer({ port: 0, host: LOOPBACK });
   wss.on("connection", (ws, req) => {
     sockets.push(ws);
     ws.on("message", (d) => received.push(d.toString()));
