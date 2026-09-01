@@ -42,3 +42,37 @@ export class Inbox<T> {
     return this.all;
   }
 }
+
+/** `p`, raced against the signal that makes `p` unwinnable — so a wait that
+ *  can no longer be won ends as a NAMED red instead of a hang.
+ *
+ *  The other half of the model above. An inbox wait deliberately never times
+ *  out, which is right while the thing being waited for can still arrive and
+ *  wrong the moment it cannot: a lost dial, a closed leg, a relay that opened
+ *  a second socket and will never deliver on the first. Waiting on alone, the
+ *  test hangs and the runner reports a timeout that names nothing; raced
+ *  against the rival signal, it reports what actually happened.
+ *
+ *  Still no timer: `spoiler` is a real event, not a deadline. If neither ever
+ *  arrives the wait hangs, which is still the honest failure for "nothing
+ *  happened at all".
+ *
+ *  This is not a hypothetical. A negative assertion in server.test.ts — the
+ *  redundant-DIAL guard — hung instead of going red when it was broken on
+ *  purpose, because nothing raced the second upstream socket; the red only
+ *  appeared once the wait was taught to lose to it (#152, #154). */
+export function orLostTo<T>(p: Promise<T>, spoiler: Promise<unknown>,
+                            why: (lost: unknown) => string): Promise<T> {
+  return Promise.race([p, spoiler.then((lost): never => { throw new Error(why(lost)); })]);
+}
+
+/** `orLostTo` for the commonest rival: the thing under test died first.
+ *
+ *  A leg reports every death through its `close` callback, and a test that
+ *  discards that signal while awaiting a frame turns a lost dial into a
+ *  silent hang. `closes` is the inbox those reasons are pushed into; the
+ *  first one is the death. */
+export function orClosed<T>(p: Promise<T>, closes: Inbox<string | undefined>): Promise<T> {
+  return orLostTo(p, closes.nth(0),
+                  (r) => `the leg closed while the test was waiting: ${r}`);
+}
