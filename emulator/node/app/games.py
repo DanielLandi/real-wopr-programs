@@ -10,7 +10,7 @@ from pathlib import Path
 # The canonical recitation order (docs/games.md §4) — the film's scrolling list.
 CATALOG_ORDER = [
     "falkens-maze", "blackjack", "gin-rummy", "hearts", "bridge", "checkers",
-    "chess", "poker", "fighter-combat", "guerrilla", "desert-warfare",
+    "chess", "poker", "fighter-combat", "guerilla", "desert-warfare",
     "air-to-ground", "theater-tactical", "theater-biotoxic", "tictactoe", "gtw",
 ]
 
@@ -28,7 +28,12 @@ PLACEHOLDER_TITLES = {
     "chess": "CHESS",
     "poker": "POKER",
     "fighter-combat": "FIGHTER COMBAT",
-    "guerrilla": "GUERRILLA ENGAGEMENT",
+    # GUERILLA, one R: the film's screen spelling, kept as the film spells
+    # it under the INDENTIFICATION precedent (real-wopr#199, and the
+    # 2026-08-03 ceiling-change row that settled the principle — a corrected
+    # copy of an on-screen string is a transcription error, not fidelity).
+    # The slot id follows the title so a visitor can type what they read.
+    "guerilla": "GUERILLA ENGAGEMENT",
     "desert-warfare": "DESERT WARFARE",
     "air-to-ground": "AIR-TO-GROUND ACTIONS",
     "theater-tactical": "THEATERWIDE TACTICAL WARFARE",

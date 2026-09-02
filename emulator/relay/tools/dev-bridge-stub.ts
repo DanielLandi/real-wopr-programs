@@ -27,7 +27,7 @@ const respond = (input: string): string => {
     // TIC-TAC-TOE — the real router's list_games_text agrees.
     return [
       "FALKEN'S MAZE", "BLACK JACK", "GIN RUMMY", "HEARTS", "BRIDGE",
-      "CHECKERS", "CHESS", "POKER", "FIGHTER COMBAT", "GUERRILLA ENGAGEMENT",
+      "CHECKERS", "CHESS", "POKER", "FIGHTER COMBAT", "GUERILLA ENGAGEMENT",
       "DESERT WARFARE", "AIR-TO-GROUND ACTIONS", "THEATERWIDE TACTICAL WARFARE",
       "THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE", "",
       "GLOBAL THERMONUCLEAR WAR",

@@ -11,7 +11,14 @@ import type { GtwFeed } from "./feed";
 
 // The launch code WOPR brute-forces in the film — a documented production
 // detail on the cabinet's readout, reproduced as a label, not dialogue.
-export const CODE = "CPE 1704 TKS";
+//
+// Unspaced, because the film's readout is unspaced (real-wopr#199). The
+// grouped form CPE 1704 TKS read better while the code was half-resolved,
+// which is a real argument for a cabinet surface — but codes.html and
+// docs/surfaces.md publish the same string, and on-screen text is the
+// fidelity contract (evals/film-baseline.md). Two surfaces disagreeing about
+// one string was the worst of the three options.
+export const CODE = "CPE1704TKS";
 
 // How many of the code's 10 characters are locked at each DEFCON.
 export const LOCKS_BY_DEFCON: Record<number, number> = { 5: 0, 4: 2, 3: 5, 2: 8, 1: 10 };
@@ -25,6 +32,8 @@ export function bits(a: number, b: number, c: number): number {
 
 // Indices of the code's non-space characters, in the scattered order the
 // brute force locks them (fixed permutation, film-style non-sequential).
+// The space filter is kept though CODE no longer has one: it is what makes
+// "ten characters" a property of the code rather than of its formatting.
 export const CODE_SLOTS = CODE.split("")
   .map((ch, i) => ({ ch, i }))
   .filter((s) => s.ch !== " ")

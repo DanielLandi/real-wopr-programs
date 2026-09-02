@@ -311,6 +311,18 @@ class Router:
         row = await self._active_game(session_id, room)
         if row is not None:
             lines.append(f"GAMEROW {row.game_id} {row.status} {row.turn} {row.interpretation}")
+        elif room is not None:
+            # The room's last game, finished. `_active_game` only reports a
+            # PLAYING row, so a war the room hub ran to NO-WIN while this
+            # terminal was attached to it simply disappears out of the facts,
+            # and the executive cannot tell that from a row that was never
+            # there — the player's next line got NO GAME IN PROGRESS. and no
+            # verdict at all (real-wopr#209). Room-scoped on purpose: the hub
+            # only ticks a room, so a roomless session's game can end no other
+            # way than by its own move, which already prints the verdict.
+            ended = await self.store.get_latest_game(None, room, playing_only=False)
+            if ended is not None:
+                lines.append(f"ENDEDROW {ended.game_id} {ended.status}")
         # The catalog in recitation order, with the film's scroll marked out:
         # RECITED slots are read aloud, TRAILING is the one that comes after
         # the blank line, UNLISTED slots are startable but never recited. The
@@ -668,8 +680,17 @@ class _Turn:
                                       "start_game": reply.start_game_id,
                                       "seeks": reply.seeks})
         self.seeks = reply.seeks
+        detail: dict[str, Any] = {}
+        if reply.act:
+            # Which act the F.D.P. chose, when the binary was launched
+            # --debug-act (real-wopr#262). Absent from every ordinary run and
+            # from every other engine; the dry run is its only reader.
+            detail["act"] = reply.act
         if reply.start_game_id:
-            self._set_detail({"start_game": reply.start_game_id}, final=True)
+            detail["start_game"] = reply.start_game_id
+            self._set_detail(detail, final=True)
+        elif detail:
+            self._set_detail(detail)
         # Joshua ASKS for the attach; the executive decides whether to honour
         # it. What comes back here is a request, not an instruction.
         return _ok("joshua", [f"START {reply.start_game_id or '-'}",

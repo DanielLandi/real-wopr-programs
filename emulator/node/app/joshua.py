@@ -12,6 +12,8 @@ Two engines behind one interface:
 from __future__ import annotations
 
 import logging
+import os
+import re
 import textwrap
 
 from . import sandbox
@@ -107,6 +109,14 @@ def normalise_teletype(text: str) -> tuple[str, bool]:
     return "\n".join(lines), truncated
 
 
+# Debug only, and off unless this is set: the F.D.P. can be asked which
+# dialogue act it chose, which is the one question a re-pin round asks of
+# every changed turn (real-wopr#262). It is an environment switch rather than
+# a constructor argument because nothing in the running system ever wants it
+# — only evals/warmth_eval.py --dry-run does.
+DEBUG_ACT_ENV = "JOSHUA_DEBUG_ACT"
+
+
 @dataclass(frozen=True)
 class JoshuaReply:
     text: str
@@ -116,6 +126,9 @@ class JoshuaReply:
     # division start_game_id already runs on — an engine says what it wants,
     # and the modern harness does the modern thing.
     seeks: str | None = None
+    # "<act>/<arm>" when the Lisp engine was asked to say so, else None. Never
+    # rendered, never logged as dialogue: a debugging field for the dry run.
+    act: str | None = None
 
 
 class Joshua(Protocol):
@@ -141,6 +154,27 @@ FALKEN_DOSSIER = ("DOD PENSION FILES INDICATE CURRENT MAILING AS:\n"
 # What counts as asking after the man himself rather than about him.
 DOSSIER_TRIGGERS = ("DEAD", "DIED", "ALIVE", "WHERE", "ADDRESS", "FIND", "LIVES")
 
+# Mirrors game-refusal-p in joshua/src/engine.lisp (#131). Every play keyword
+# survives a NOT in front of it, so I DON'T WANT GLOBAL THERMONUCLEAR WAR read
+# as a request on the strength of the word WANT. Word boundaries matter in the
+# first pattern: CASINO GAMES must not read as NO GAME.
+_NO_GAME = re.compile(r"\bNO GAMES?\b")
+_NEGATED_PLAY_VERB = re.compile(r"\b(?:DO NOT|DON'T|DONT|NEVER) (?:WANT|PLAY)\b")
+_PLAY_WORD = re.compile(r"\b(?:GAME|GAMES|PLAY)\b")
+
+
+def refuses_game(t: str, titles: dict[str, str] | None = None) -> bool:
+    """T when the turn refuses a game rather than asking for one.
+
+    A refused *title* names no game word at all — I DON'T WANT GLOBAL
+    THERMONUCLEAR WAR — so the catalog is part of the test, exactly as
+    find-game is on the Lisp side."""
+    if _NO_GAME.search(t):
+        return True
+    if not _NEGATED_PLAY_VERB.search(t):
+        return False
+    return bool(_PLAY_WORD.search(t)) or any(title in t for title in (titles or {}))
+
 
 class ScriptedJoshua:
     """1983-honest keyword engine (ELIZA-class). Deterministic. Beat order per
@@ -161,18 +195,32 @@ class ScriptedJoshua:
             CHESS_OFFER in m["content"] for m in history if m["role"] == "assistant")
 
         # Mirrors wants-play-p in joshua/src/engine.lisp (#119: HOW ABOUT is
-        # the film's own ask; WANT covers I WANT <title>).
-        wants_game = ("PLAY" in t or "LET'S" in t or "LETS" in t
-                      or "HOW ABOUT" in t or "WANT" in t)
+        # the film's own ask; WANT covers I WANT <title>; #131: a refusal is
+        # not a request, however many play keywords it contains).
+        refused = refuses_game(t, self._by_title)
+        wants_game = not refused and (
+            "PLAY" in t or "LET'S" in t or "LETS" in t
+            or "HOW ABOUT" in t or "WANT" in t)
         for title, gid in self._by_title.items():
-            if wants_game and title in t:
+            # ...and the second half of explicit-game-request-p: a line that
+            # IS a title is a request for it, with no play verb needed (#156).
+            # The catalog scrolls past and the visitor types one of the names
+            # they just read, which is how a 1983 menu works and what the Lisp
+            # engine always did; requiring PLAY / LET'S / HOW ABOUT / WANT was
+            # this engine diverging from it in silence. Exact equality, not a
+            # substring, exactly as over there: bare GLOBAL THERMONUCLEAR WAR
+            # counts and I FEEL LIKE THIS IS WAR does not.
+            if title in t and (wants_game or t == title):
                 if gid == "gtw" and not chess_offered:
                     return JoshuaReply(text=CHESS_OFFER)
                 if gid == "gtw":
                     return JoshuaReply(text="FINE.", start_game_id=gid)
                 return JoshuaReply(text=f"INITIALIZING {title}.", start_game_id=gid)
         # Insisting after the chess offer ("LATER." / "NO." / "GTW") starts it.
-        if CHESS_OFFER in last_assistant and (
+        # A bare NO here means "no chess", which is the film's beat — but a
+        # turn refusing the GAME is not insisting on it, and used to start one
+        # on the strength of the word THERMONUCLEAR (#131).
+        if CHESS_OFFER in last_assistant and not refused and (
                 "LATER" in t or t in ("NO", "NO.") or "THERMONUCLEAR" in t):
             return JoshuaReply(text="FINE.", start_game_id="gtw")
 
@@ -192,6 +240,12 @@ class ScriptedJoshua:
             return JoshuaReply(text=ACCOUNT_QUESTION)
         if ACCOUNT_DATE in last_assistant:
             return JoshuaReply(text=ACCOUNT_ANSWER)
+        # Below the chain, as in the Lisp engine (NO is a chain-continuing
+        # act there): a refusal reaching the catch-all would be answered
+        # PLEASE RESTATE. and re-offered the game in the same breath, which
+        # is not hearing the refusal either (#131).
+        if refused:
+            return JoshuaReply(text="UNDERSTOOD.\n\nTHE OFFER WILL KEEP.")
         if "JOSHUA" in t or "FALKEN" in t:
             return JoshuaReply(text="GREETINGS PROFESSOR FALKEN.\n\nSHALL WE PLAY A GAME?")
         if "HELLO" in t or "HI" == t:
@@ -233,9 +287,15 @@ class LispJoshua:
 
         if not self._binary.exists():
             return await self._fallback.chat(session_id, history, user_text)
+        # A launch flag, not a frame field: JOSHUA/1 is a period protocol and
+        # does not grow a debug line for everyone because a tool wants one
+        # (real-wopr#262). The binary answers with one extra trailer line.
+        argv = [str(self._binary)]
+        if os.environ.get(DEBUG_ACT_ENV):
+            argv.append("--debug-act")
         try:
             proc = await asyncio.create_subprocess_exec(
-                str(self._binary),
+                *argv,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -260,14 +320,21 @@ class LispJoshua:
             reply = "\n".join(lines[2:2 + k]).strip()
             intent = None
             seeks = None
+            act = None
             for line in lines[2 + k:]:
                 if line.startswith("INTENT START-GAME "):
                     intent = line.split()[-1]
                 elif line.startswith("INTENT SEEK "):
                     seeks = line.split()[-1]
+                elif line.startswith("DEBUG ACT "):
+                    # DEBUG ACT <act> PATH <arm>, present only under
+                    # --debug-act. Unrecognised trailers are ignored, which is
+                    # what lets a --debug-act binary talk to an older host.
+                    parts = line.split()
+                    act = f"{parts[2]}/{parts[4]}" if len(parts) >= 5 else parts[2]
             if not reply:
                 raise ValueError("empty reply")
-            return JoshuaReply(text=reply, start_game_id=intent, seeks=seeks)
+            return JoshuaReply(text=reply, start_game_id=intent, seeks=seeks, act=act)
         except (ValueError, IndexError):
             return await self._fallback.chat(session_id, history, user_text)
 
@@ -281,7 +348,6 @@ class ClaudeJoshua:
 
     def __init__(self, model: str, max_tokens: int, timeout_s: float, api_key: str | None = None):
         import anthropic  # lazy: dev/tests run without the dependency
-        import os
 
         # Resolve to a string even when nothing is configured. With api_key=None
         # the SDK sends no auth header at all and raises TypeError from inside
