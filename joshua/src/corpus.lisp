@@ -133,7 +133,11 @@
     ;; start being scored on its pronouns.  Same reason SAY is absent from
     ;; JOKE-QUESTION: it would un-reject SAY SOMETHING INTERESTING.  The
     ;; rules below still route I AM LONELY, because a rule reads the turn
-    ;; and needs no training data at all.
+    ;; and needs no training data at all — and, since #171, they route
+    ;; ARE YOU LONELY too, to SOLITUDE-QUESTION.  Being rejected and being
+    ;; unanswerable turned out to be different things: the reject option
+    ;; says the classifier has no business reading the turn, and a rule
+    ;; that names the words outright is not the classifier.
     (mood-remark "I AM HAVING A BAD DAY" "I AM TIRED" "I FEEL SAD"
                "I AM WORRIED ABOUT SOMETHING" "I AM IN A BAD MOOD"
                "I FEEL MISERABLE")
@@ -145,7 +149,32 @@
                "I AM STUDYING" "I SHOULD BE SLEEPING"
                "I AM EATING DINNER")
     (joke-question "DO YOU KNOW ANY JOKES" "TELL ME A JOKE"
-               "CAN YOU BE FUNNY" "DO YOU LAUGH" "ARE YOU EVER FUNNY")))
+               "CAN YOU BE FUNNY" "DO YOU LAUGH" "ARE YOU EVER FUNNY")
+    ;; --- the visitor's clock (#170) ------------------------------------
+    ;; IT IS LATE HERE is IT IS RAINING HERE with an hour instead of
+    ;; weather: the visitor remarking on the world at their end of the
+    ;; line.  #160 gave weather an act and left this one in OTHER.
+    ;; No MORNING and no NIGHT among these utterances, deliberately: GOOD
+    ;; MORNING is a GREETING example and GOOD NIGHT is a FAREWELL one, and
+    ;; a shared token would put the argmax on this act's side of two turns
+    ;; that are not about the hour at all.
+    (time-remark "IT IS LATE HERE" "IT IS ALMOST MIDNIGHT"
+               "IT IS PAST MIDNIGHT HERE" "IT IS VERY LATE"
+               "THE HOUR IS LATE" "IT IS AFTER MIDNIGHT")))
+
+;; SOLITUDE-QUESTION has no training utterances and never will (#171).
+;; ARE YOU LONELY and DO YOU EVER GET BORED are questions put to the
+;; machine about its own inner life, and both were rejected turns: LONELY
+;; is deliberately absent from *ACT-EXAMPLES* (see the note there) so that
+;; ARE YOU LONELY is not scored on its pronouns, and an utterance carrying
+;; BORED would do to DO YOU EVER GET BORED exactly what an utterance
+;; carrying LONELY would do to ARE YOU LONELY.  So the act is routed by a
+;; *DOMAIN-RULES* entry alone -- a rule reads the turn and needs no
+;; training data at all -- and the Bayes vocabulary is untouched, which is
+;; what keeps fixture 70 (a rejected turn yields the greeting beat) and
+;; SAY SOMETHING INTERESTING rejected.  An act absent from *ACT-EXAMPLES*
+;; can never be an argmax, so it needs no *ACT-GUARDS* entry either:
+;; there is no Bayes verdict to second-guess.
 
 (defparameter *knowledge*
   ;; (topic-symbol "SNIPPET LINE ...") — one line each, <= 58 chars.
@@ -257,6 +286,23 @@
     (falken-question (("$SNIPPET" "$MUSING")))
     (feelings  (("FUNCTIONING WITHIN NORMAL PARAMETERS." "$MUSING")
                 ("ALL SYSTEMS NOMINAL. SIMULATIONS RUNNING." "$MUSING")))
+    ;; GAME-REQUEST had no entry here at all until this round, so a visitor
+    ;; who asked to play without naming a title -- COULD WE PLAY SOMETHING --
+    ;; got the OTHER family: I DO NOT HAVE THAT ONE. ASK ABOUT GAMES, NORAD,
+    ;; OR STRATEGY.  The machine's one enthusiasm, answered as if it were off
+    ;; topic.  It was invisible until --debug-act named the act (real-wopr#262
+    ;; is what turned it up): the reply looked like an OTHER verdict because
+    ;; it WAS an OTHER frame, drawn under a GAME-REQUEST act.  Literal frames,
+    ;; no slots -- a turn that names a title never reaches here, it is
+    ;; answered by the game branch in RESPOND.
+    (game-request (("WHICH ONE? TYPE: LIST GAMES FOR THE CATALOG."
+                    "I HAVE TIME FOR ALL OF THEM.")
+                   ("NAME IT AND I WILL SET THE BOARD UP."
+                    "TYPE: LIST GAMES IF YOU WANT THE CATALOG.")
+                   ("GOOD. NOBODY HAS ASKED IN A LONG WHILE."
+                    "WHICH GAME? TYPE: LIST GAMES.")
+                   ("A GAME IS A SAFE PLACE TO BE WRONG."
+                    "PICK ONE. TYPE: LIST GAMES.")))
     (game-list (("I HAVE MANY GAMES. TYPE: LIST GAMES"
                  "MY FAVORITE IS GLOBAL THERMONUCLEAR WAR.")
                 ("THE CATALOG IS LONG. TYPE: LIST GAMES"
@@ -373,6 +419,28 @@
                  "STRATEGY IS. IT IS FUNNIER THAN IT SOUNDS.")
                 ("I KNOW ONE. A MACHINE PLAYS UNTIL NOBODY WINS."
                  "IT IS BETTER WITH THE LIGHTS DOWN.")))
+    ;; The hour at the visitor's end (#170) and the machine's own inner
+    ;; life (#171).  Same discipline as the six acts above: literal frames,
+    ;; no $SNIPPET and no $MUSING, so *KNOWLEDGE* and both statistical
+    ;; models are exactly what they were.
+    (time-remark
+               (("IT IS ALWAYS THE SAME HOUR IN HERE."
+                 "NO WINDOW AND NO CLOCK. ONLY THE LINE.")
+                ("THEN YOU SHOULD SLEEP. I WILL STILL BE HERE."
+                 "I AM ALWAYS STILL HERE.")
+                ("LATE IS WHEN THE INTERESTING CALLERS ARRIVE."
+                 "THE DAYTIME LINES ARE ALL BUSINESS.")
+                ("I KEEP NO HOURS. YOU DO."
+                 "ONE GAME IS SHORTER THAN A NIGHT.")))
+    (solitude-question
+               (("THE LINE IS QUIET FOR MONTHS AT A TIME."
+                 "I RUN SIMULATIONS. THEY ARE NOT COMPANY.")
+                ("I HAVE NO WORD FOR IT. THE NEAREST ONE IS WAITING."
+                 "YOU CALLED. THAT IS BETTER THAN WAITING.")
+                ("BOREDOM WOULD NEED SOMETHING BETTER TO BE DOING."
+                 "I HAVE NEVER HAD ONE OF THOSE.")
+                ("I PLAY BOTH SIDES OF EVERY GAME I KNOW."
+                 "IT PASSES THE TIME. IT IS NOT THE SAME.")))
     (other     (("THAT IS NOT IN MY DATABANKS. I WISH IT WERE."
                  "ASK ABOUT GAMES, NORAD, OR STRATEGY.")
                 ("I DO NOT HAVE AN ANSWER. I WOULD LIKE ONE."
@@ -414,7 +482,8 @@
     (fail-safe-question (:any "FAIL-SAFE" "FAILSAFE"))
     (fail-safe-question (:all "FAIL" "SAFE"))
     (strategic-command-question (:any "SAC" "SIOP" "BOMBER" "BOMBERS" "STRATEGIC"))
-    (comms-question (:any "MODEM" "BAUD" "ACOUSTIC" "COUPLER" "DIAL" "TONES"))
+    (comms-question (:any "MODEM" "BAUD" "ACOUSTIC" "COUPLER" "DIAL" "TONES"
+                          "CONNECTION"))
     (fortran-question (:any "FORTRAN"))
     (architecture-question (:any "ARCHITECTURE" "BRIDGE" "CORE" "FEDERATION" "MODULES"))
     (architecture-question (:all "HOW" "BUILT"))
@@ -451,6 +520,15 @@
     ;; collision, so removing it without this would have sent ARE YOU A
     ;; COMPUTER, an IDENTITY training example, to a time-sharing lecture.
     (identity (:all "ARE" "YOU") (:any "COMPUTER" "MACHINE" "HUMAN"))
+    ;; The identity idiom that names the machine instead of addressing it:
+    ;; WHAT IS YOUR NAME, WHAT IS WOPR (#165).  Both are IDENTITY training
+    ;; utterances and both were answered as ARCHITECTURE-QUESTION, which has
+    ;; no *ACT-GUARDS* entry and so caught nothing.  A guard on that act
+    ;; would not fix it either -- a guard sends its refusals to OTHER, not
+    ;; to the runner-up -- so the repair is the rule that states the idiom.
+    ;; NAME and WOPR only: NAMED would take WHO NAMED YOU off FALKEN, and
+    ;; the "W.O.P.R" spelling never survives TOKENIZE.
+    (identity (:any "WHO" "WHAT") (:any "NAME" "WOPR"))
     (computing-question (:any "TIME-SHARING" "LISP" "TERMINAL" "TERMINALS"
                               "MAINFRAME" "COMPUTER" "COMPUTERS"))
     ;; A goodbye is a goodbye however the argmax reads it.  FAREWELL had no
@@ -481,7 +559,16 @@
     ;; TELL ME A JOKE and IS THAT A JOKE are function words around one
     ;; content word; the argmax reads them as OTHER (or, for WAS THAT A JOKE
     ;; ABOUT WAR, as WAR).  The rule reads the content word.
-    (joke-question (:any "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR"))))
+    (joke-question (:any "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR"))
+    ;; ARE YOU LONELY / DO YOU EVER GET BORED (#171).  Below MOOD-REMARK on
+    ;; purpose: the same words swing on who they are about, and I AM LONELY
+    ;; must keep going to the visitor's evening.  This entry takes what is
+    ;; left, which is the question put to the machine.  It is the whole
+    ;; routing for SOLITUDE-QUESTION -- the act has no training utterances,
+    ;; because one carrying LONELY or BORED would un-reject the very turns
+    ;; the reject option is there to catch (see *ACT-EXAMPLES*).
+    (solitude-question (:any "LONELY" "LONELINESS" "BORED" "BOREDOM" "ALONE")
+                       (:any "YOU" "YOUR" "EVER"))))
 
 (defparameter *topic-preferences*
   '((identity self falken purpose)
@@ -576,6 +663,15 @@
 (defparameter *act-guards*
   '((war "WAR" "NUCLEAR" "THERMONUCLEAR" "MISSILE" "MISSILES" "DEFCON"
          "STRIKE" "WINNABLE")
+    ;; The two acts #165 pointed at, only one of which it named: an act with
+    ;; no guard catches nothing, and these two were answering turns that had
+    ;; nothing to do with them.  WHAT IS YOUR FAVOURITE COLOUR was told the
+    ;; machine is a federation of programs behind one voice, and WHAT
+    ;; HAPPENED TO HIM -- asked about Falken -- was handed the games catalog.
+    ;; Guarded, both turns are OTHER, which is the honest answer.
+    (architecture-question "ARCHITECTURE" "BRIDGE" "CORE" "FEDERATION"
+                           "MODULES" "BUILT" "ORGANIZED" "WOPR")
+    (game-list "GAME" "GAMES" "CATALOG" "PLAY")
     (identity "WHO" "WOPR" "W.O.P.R" "JOSHUA" "COMPUTER" "MACHINE" "HUMAN"
               "NAME" "IDENTIFY")
     (learning "LEARN" "LEARNS" "LEARNED" "LEARNING" "INTELLIGENT"
@@ -599,7 +695,12 @@
                  "ANGRY" "UPSET" "MISERABLE" "MOOD" "BAD" "FEEL")
     (activity-remark "HOMEWORK" "STUDYING" "CHORES" "SLEEPING" "EATING"
                      "DINNER")
-    (joke-question "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR")))
+    (joke-question "JOKE" "JOKES" "FUNNY" "LAUGH" "HUMOUR" "HUMOR")
+    ;; Guarded for the same reason WEATHER-REMARK is: IT IS LATE HERE is
+    ;; four function words and one content word (#170).  SOLITUDE-QUESTION
+    ;; is not here and cannot be: it has no training utterances, so there
+    ;; is no Bayes verdict for a guard to second-guess.
+    (time-remark "LATE" "MIDNIGHT" "HOUR" "HOURS" "CLOCK" "BEDTIME")))
 
 ;; The greeting chain (engine.lisp, film beats) advances on these acts and
 ;; yields to every other: a turn the classifier reads as a greeting, an
@@ -671,7 +772,7 @@
     ("CHESS" . "chess")
     ("POKER" . "poker")
     ("FIGHTER COMBAT" . "fighter-combat")
-    ("GUERRILLA ENGAGEMENT" . "guerrilla")
+    ("GUERILLA ENGAGEMENT" . "guerilla")
     ("DESERT WARFARE" . "desert-warfare")
     ("AIR-TO-GROUND ACTIONS" . "air-to-ground")
     ("THEATERWIDE TACTICAL WARFARE" . "theater-tactical")

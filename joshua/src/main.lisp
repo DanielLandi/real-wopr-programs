@@ -11,6 +11,19 @@
 ;;;;   INPUT <text>                      INTENT SEEK <who>        (optional)
 ;;;;                                     END
 ;;;;   END
+;;;;
+;;;; One line more, and only when the binary was launched `--debug-act`:
+;;;;
+;;;;                                     DEBUG ACT <act> PATH <arm>
+;;;;
+;;;; It is a property of the launch, not of the protocol.  A re-pin round's
+;;;; whole question is "changed act, or changed variant?", and answering it
+;;;; by reading reply text back against corpus.lisp is what real-wopr#262 was
+;;;; filed about; JOSHUA/1 itself stays the period frame it was, so the host
+;;;; never sees this line unless a tool asked for it.  The parser on the other
+;;;; side (LispJoshua in emulator/node/app/joshua.py) ignores trailer lines it
+;;;; does not recognise, so an old host reading a --debug-act binary is not a
+;;;; wire break either.
 
 (in-package :joshua)
 
@@ -44,6 +57,17 @@
       (expect-prefix (read-frame-line) "END")
       (cons (nreverse history) input))))
 
+(defun debug-act-requested-p ()
+  "T when this process was launched with --debug-act.  SBCL-specific, which
+is why it lives here: main.lisp is the only file allowed to know it is SBCL."
+  (let ((found nil))
+    (dolist (arg (cdr sb-ext:*posix-argv*))
+      (when (string= arg "--debug-act") (setf found t)))
+    found))
+
+(defun debug-name (symbol)
+  (string-downcase (symbol-name (or symbol 'none))))
+
 (defun write-response (lines intent)
   (format t "JOSHUA/1 OK~%REPLY ~D~%" (length lines))
   (dolist (line lines) (format t "~A~%" line))
@@ -51,6 +75,9 @@
     (ecase (car intent)
       (:start-game (format t "INTENT START-GAME ~A~%" (cdr intent)))
       (:seek       (format t "INTENT SEEK ~A~%" (cdr intent)))))
+  (when (debug-act-requested-p)
+    (format t "DEBUG ACT ~A PATH ~A~%"
+            (debug-name *chosen-act*) (debug-name *chosen-path*)))
   (format t "END~%")
   (finish-output))
 

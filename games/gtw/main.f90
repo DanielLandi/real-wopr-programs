@@ -266,9 +266,14 @@ contains
        if (usars > 0) call launch_missile('US', next_target('US'))
     end do
 
-    ! Escalation ladder.
-    if (defcon > 3) defcon = 3
-    if (usln + suln >= 6 .and. defcon > 2) defcon = 2
+    ! Escalation ladder: one step per tick, so the board walks the film's
+    ! 5-4-3-2-1 (real-wopr#210).  It used to jump to 3 on the first war
+    ! tick and to 2 in the same tick once six missiles were up, so 4 and 3
+    ! were states the simulation passed through without ever being
+    ! observed -- the cabinet's DEFCON feed visited 5, 2, 1.  The ladder
+    ! stops at 2: DEFCON 1 is not a readiness step here, it is what a
+    ! warhead landing means, and land_missiles sets it.
+    if (defcon > 2) defcon = defcon - 1
 
     call land_missiles()
   end subroutine tick

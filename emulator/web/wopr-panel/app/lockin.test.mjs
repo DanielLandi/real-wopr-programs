@@ -1,8 +1,8 @@
 // The S13 reveal order, read off the wire (real-wopr#208 / #103): the
 // cabinet's lock-in state is a function of the last complete GTW-FEED
-// message, so walk the E13 frame sequence — idle at 5, running at 2 and 1,
-// then NO-WIN holding — through the real FeedAssembler and check what the
-// readout and the lamps would show at each message. The frames reproduce the
+// message, so walk the E13 frame sequence — idle at 5, running down the
+// ladder to 1, then NO-WIN holding — through the real FeedAssembler and check
+// what the readout and the lamps would show at each message. The frames reproduce the
 // bridge's wire shape (emulator/node/app/gtwfeed.py) at dialup-300 quanta,
 // exactly as feed.test.mjs does; the scenario is
 // real-wopr/evals/scenarios/e13-cabinet-feed.json.
@@ -37,9 +37,14 @@ function shaped(payload, quantum = 2) {
   return frames;
 }
 
-// E13's observed frames: first/final of each panel step, in order.
+// E13's observed frames: first/final of each panel step, in order. The
+// descent is the film's 5-4-3-2-1 since real-wopr#210 taught the GTW core
+// the intermediate levels — before that the war stepped 5, 2, 1 and the
+// two middle rows of LOCKS_BY_DEFCON were never reached by a real feed.
 const E13 = [
   feedLine(5, "PLAYING", "idle"),
+  feedLine(4, "PLAYING", "running"),
+  feedLine(3, "PLAYING", "running"),
   feedLine(2, "PLAYING", "running"),
   feedLine(1, "PLAYING", "running"),
   feedLine(1, "NO-WIN", "no-win"),
@@ -67,8 +72,10 @@ test("standby: nothing observed reads DEFCON 5, nothing locked, no abort", () =>
 });
 
 test("E13: the reveal runs lamps -> lock-in -> abort, in that order", () => {
-  const [idle, running2, running1, noWin, held] = walk(E13);
+  const [idle, running4, running3, running2, running1, noWin, held] = walk(E13);
   assert.deepEqual(idle, { defcon: 5, aborted: false, locked: 0 });
+  assert.deepEqual(running4, { defcon: 4, aborted: false, locked: 2 });
+  assert.deepEqual(running3, { defcon: 3, aborted: false, locked: 5 });
   assert.deepEqual(running2, { defcon: 2, aborted: false, locked: 8 });
   // At DEFCON 1 the code is complete but the launch is still enabled — the
   // abort is the routine's verdict, not a consequence of the last lock.
@@ -107,7 +114,7 @@ test("CODE_SLOTS is a fixed permutation of the code's non-space positions", () =
   assert.equal(CODE_SLOTS.length, 10);
   assert.notDeepEqual(CODE_SLOTS, expected, "the brute force is not meant to read left to right");
   // Pinned: the readout's reveal order is part of the scene, not incidental.
-  assert.deepEqual(CODE_SLOTS, [6, 4, 11, 9, 1, 7, 0, 2, 5, 10]);
+  assert.deepEqual(CODE_SLOTS, [6, 4, 9, 1, 8, 7, 0, 2, 3, 5]);
 });
 
 test("lamp agitation: faster epochs and more lamps as DEFCON falls, more again at abort", () => {

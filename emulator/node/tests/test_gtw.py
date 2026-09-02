@@ -496,3 +496,80 @@ def test_tracks_text_formats_air_sea_missiles_targets():
 def test_tracks_text_quiet_board():
     text = tracks_text(display_to_feed("ZULU --:--  DEFCON 5\n", "PLAYING"))
     assert "NO TRACKS AIRBORNE" in text
+
+
+@needs_core
+def test_a_war_the_room_ended_still_reaches_the_player_with_its_verdict():
+    """real-wopr#209: the room hub drives a simulation on its own ticks, so
+    the war a terminal is attached to can reach NO-WIN between one typed line
+    and the next. `_active_game` only reports a PLAYING row, so the finished
+    one simply left the facts and the executive could not tell that from a
+    game that never existed — the player's next line answered NO GAME IN
+    PROGRESS. and the film's whole point went to the panel feed alone.
+
+    ENDEDROW is what is left of the row, and the verdict is what the machine
+    owes the player who was in that war. Asserted here on a real gtw core
+    driven to its real terminal status, not on a hand-set row: NO-WIN has to
+    be something the game actually reached."""
+    store = MemoryStore()
+    catalog = load_catalog(GAMES_DIR)
+    runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
+    router = Router(runner, store, {"scripted": ScriptedJoshua({})}, catalog)
+
+    async def flow():
+        room = await store.create_room("EVAL09")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        driver = await store.create_session("norad-terminal", "leased-9600", None, room.code)
+        for s in (player, driver):
+            await router.handle(s.id, "JOSHUA")
+        await router.handle(player.id, "NEW gtw")
+        await router.handle(player.id, "2")
+        await router.handle(player.id, "LASVEGAS SEATTLE")
+        # Somebody else in the room runs the war out. The player types nothing
+        # while it happens, which is exactly the case E13 observes.
+        await router.handle(driver.id, "NEW gtw")   # attach to the room's row
+        for _ in range(80):
+            if await store.get_latest_game(None, room.code) is None:
+                break
+            await router.handle(driver.id, "OBSERVE")
+        ended = await store.get_latest_game(None, room.code, playing_only=False)
+        assert ended is not None and ended.status == "NO-WIN"
+
+        result = await router.handle(player.id, "OBSERVE")
+        assert result.route == "bridge"
+        assert ("A STRANGE GAME.\nTHE ONLY WINNING MOVE IS\nNOT TO PLAY."
+                in result.text), result.text
+        assert "HOW ABOUT A NICE GAME OF CHESS?" in result.text
+        assert "NO GAME IN PROGRESS." not in result.text
+        # ...and the terminal is let go, so the next line is Joshua's again.
+        assert result.prompt != ""
+        again = await router.handle(player.id, "OBSERVE")
+        assert "A STRANGE GAME." not in again.text
+
+    asyncio.run(flow())
+
+
+@needs_core
+def test_a_finished_game_with_no_verdict_still_says_there_is_none():
+    """The other half of real-wopr#209: only NO-WIN has a verdict to speak.
+    A room game that ended any other way leaves the player at NO GAME IN
+    PROGRESS., which is the honest answer — a finished hand of hearts has no
+    sentence the film ever put on a screen."""
+    store = MemoryStore()
+    catalog = load_catalog(GAMES_DIR)
+    runner = CoreRunner(RunnerConfig(bin_dir=REAL_BIN))
+    router = Router(runner, store, {"scripted": ScriptedJoshua({})}, catalog)
+
+    async def flow():
+        room = await store.create_room("EVAL10")
+        player = await store.create_session("home-terminal", "dialup-300", None, room.code)
+        await router.handle(player.id, "JOSHUA")
+        await router.handle(player.id, "NEW gtw")
+        row = await store.get_latest_game(None, room.code)
+        row.status = "QUIT"
+        await store.upsert_game(row)
+
+        result = await router.handle(player.id, "OBSERVE")
+        assert result.text == "NO GAME IN PROGRESS.", result.text
+
+    asyncio.run(flow())

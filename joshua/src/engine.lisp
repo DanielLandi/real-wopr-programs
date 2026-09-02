@@ -208,32 +208,87 @@ keeps no act of its own."
     best))
 
 ;;; ------------------------------------------------ Markov generation ----
-;;; Bigram chains over the databank text. Musing lines, seeded by history.
+;;; Shannon's word approximations (1948) over the databank text, second
+;;; order. Musing lines, seeded by history.
 
-(defvar *bigrams* (make-hash-table :test 'equal))
+(defvar *bigrams* (make-hash-table :test 'equal))   ; WORD  -> words after it
+(defvar *trigrams* (make-hash-table :test 'equal))  ; W1 W2 -> word after, or :END
+
+(defun pair-key (first-word second-word)
+  (concatenate 'string first-word " " second-word))
+
+(defun split-sentences (text)
+  "TEXT cut at its full stops -- one token list per sentence.
+
+A knowledge line is not always one sentence (HUMANS PLAY BADLY WHEN AFRAID.
+MACHINES DO NOT FEAR. YET.), and a chain that ran across a full stop was
+half of where the salad came from (#161).  The chain is trained per
+sentence, so it cannot start in one and finish in the next."
+  (let ((out '())
+        (start 0))
+    (dotimes (i (length text))
+      (let ((c (char text i)))
+        (when (or (char= c #\.) (char= c #\:) (char= c #\?))
+          (let ((words (tokenize (subseq text start i))))
+            (when words (push words out)))
+          (setf start (+ i 1)))))
+    (let ((words (tokenize (subseq text start))))
+      (when words (push words out)))
+    (nreverse out)))
+
+(defun learn-sentence (words)
+  (do ((rest words (cdr rest)))
+      ((null (cdr rest)))
+    (push (second rest) (gethash (first rest) *bigrams*))
+    (push (if (cddr rest) (third rest) :end)
+          (gethash (pair-key (first rest) (second rest)) *trigrams*))))
 
 (defun build-markov ()
   (clrhash *bigrams*)
+  (clrhash *trigrams*)
   (dolist (doc *knowledge*)
-    (let ((tokens (tokenize (second doc))))
-      (do ((rest tokens (cdr rest)))
-          ((null (cdr rest)))
-        (push (second rest) (gethash (first rest) *bigrams*))))))
+    (dolist (sentence (split-sentences (second doc)))
+      (learn-sentence sentence))))
 
 (defun markov-musing (tokens)
-  "Chain from a content word of the input that the databank knows."
+  "Chain from a content word of the input that the databank knows.
+
+Second order, which is the fix (#161): after the first hop every word is
+drawn from the TWO before it, and the end of a sentence is one of the things
+that can be drawn.  A first-order chain leaves one sentence and finishes in
+another wherever the two share a single word, which is how WHEN HUMANS PLAY
+ALWAYS DRAWS. reached a visitor -- uppercase, in period, correctly framed,
+inside the teletype contract, and not English.  Shannon printed exactly this
+comparison in 1948, so the repair is period as well as correct.
+
+A chain that dies before it has three words says nothing, and the frame
+drops the line, as it always did for a start word the databank did not know."
   (let ((start nil))
     (dolist (w tokens)
       (when (and (null start) (gethash w *bigrams*) (> (length w) 3))
         (setf start w)))
     (when start
-      (let ((words (list start)))
-        (do ((w start) (i 0 (+ i 1)))
-            ((or (>= i 7) (null (gethash w *bigrams*))))
-          (setf w (pick (gethash w *bigrams*)))
-          (push w words))
+      (let ((words (list (pick (gethash start *bigrams*)) start))
+            (done nil))
+        (dotimes (i 6)
+          (unless done
+            (let ((next (pick (gethash (pair-key (second words) (first words))
+                                       *trigrams*))))
+              (if (or (null next) (eq next :end))
+                  (setf done t)
+                  (push next words)))))
         (when (>= (length words) 3)
-          (concatenate 'string (join (nreverse words)) "."))))))
+          (let ((line (join (nreverse words))))
+            ;; A chain that never left the visitor's own sentence is not a
+            ;; musing, it is a parrot: I DON'T WANT GLOBAL THERMONUCLEAR WAR
+            ;; drew GLOBAL THERMONUCLEAR WAR. back, because the start word is
+            ;; taken from the input and the corpus happens to end a sentence
+            ;; there.  Dropping it drops the frame's line, which is what an
+            ;; empty slot has always done.  SEARCH rather than CONTAINSP:
+            ;; that helper is defined further down the file, and TOKENIZE has
+            ;; already upcased these tokens.
+            (unless (search line (join tokens))
+              (concatenate 'string line "."))))))))
 
 ;;; -------------------------------------------------------- affect state ----
 ;;; PARRY heritage: mood derived (deterministically) from the whole history.
@@ -451,13 +506,34 @@ the machine's own replies mention LAUNCH freely and must not arm this."
       (containsp "NOT NOW" u)
       (containsp "MAYBE LATER" u)))
 
+(defun find-game (input)
+  "Longest game title present in INPUT -> (title . id).  Up here beside the
+other predicates that read a turn because GAME-REFUSAL-P needs it: a turn
+that refuses a title -- I DON'T WANT GLOBAL THERMONUCLEAR WAR -- carries no
+game word at all, so the refusal is invisible without the catalog (#131)."
+  (let ((u (string-upcase input)) (best nil))
+    (dolist (entry *game-titles*)
+      (when (containsp (car entry) u)
+        (when (or (null best) (> (length (car entry)) (length (car best))))
+          (setf best entry))))
+    best))
+
+(defun negated-play-verb-p (u)
+  "A negation immediately in front of the play verb.  The expanded form was
+all this knew until #131, and DON'T is how a visitor actually types it."
+  (or (containsp "DO NOT WANT" u) (containsp "DON'T WANT" u)
+      (containsp "DONT WANT" u)  (containsp "NEVER WANT" u)
+      (containsp "DO NOT PLAY" u) (containsp "DON'T PLAY" u)
+      (containsp "DONT PLAY" u)  (containsp "NEVER PLAY" u)))
+
 (defun game-refusal-p (tokens u)
   "Explicit refusals of the game, valid in any context.  Word-boundary
 matching: CASINO GAMES must not match NO GAME."
   (or (adjacent-tokens-p "NO" "GAME" tokens)
       (adjacent-tokens-p "NO" "GAMES" tokens)
-      (and (containsp "DO NOT WANT" u)
-           (any-token-p '("GAME" "GAMES" "PLAY") tokens))))
+      (and (negated-play-verb-p u)
+           (or (any-token-p '("GAME" "GAMES" "PLAY") tokens)
+               (find-game u)))))
 
 (defun refusal-count (history)
   "Count user turns that refuse a game: explicit refusals anywhere,
@@ -474,6 +550,27 @@ plain NO-style answers only when they follow a game offer."
                            (plain-refusal-p tokens u)))
               (incf count)))))
     count))
+
+(defun refusal-act (tokens input act)
+  "ACT, with GAME-REQUEST demoted to NO when the turn refuses the game.
+
+#131: I DON'T WANT GLOBAL THERMONUCLEAR WAR and I DO NOT WANT TO PLAY A
+GAME reached GAME-REQUEST because neither the keyword path nor the Bayes
+act read the negation, and were answered as requests -- the first with the
+chess counter-offer, the second with an offer to set up a board.  The issue
+weighed a negation guard against the ELIZA-class simplicity the period
+discipline asks for, and the weighing had a false premise: the guard was
+already written.  GAME-REFUSAL-P has been reading these very turns since
+#94, for the refusal counter the dialogue memory keeps; it was simply never
+consulted where the act is settled.  So this adds no parser.  It reads a
+keyword test the engine already runs, one stage earlier.
+
+Only GAME-REQUEST is demoted, and only to NO, which has frames of its own
+(AS YOU WISH. / REFUSAL IS ALSO A MOVE. I HAVE SCORED IT.).  No other act
+can be reached by refusing a game, so no other act is at risk here."
+  (if (and (eq act 'game-request) (game-refusal-p tokens (string-upcase input)))
+      'no
+      act))
 
 (defun capability-followup-p (tokens)
   (or (and (token-present-p "WHAT" tokens) (token-present-p "ELSE" tokens))
@@ -592,25 +689,22 @@ rather than running out of things to say."
         (push frame fresh)))
     (if fresh (nreverse fresh) frames)))
 
-(defun find-game (input)
-  "Longest game title present in INPUT -> (title . id)."
-  (let ((u (string-upcase input)) (best nil))
-    (dolist (entry *game-titles*)
-      (when (containsp (car entry) u)
-        (when (or (null best) (> (length (car entry)) (length (car best))))
-          (setf best entry))))
-    best))
-
 (defun wants-play-p (input act)
   "T when INPUT carries a play intent: the GAME-REQUEST act, or one of the
    keyword forms. HOW ABOUT is the film's own ask (HOW ABOUT GLOBAL
    THERMONUCLEAR WAR?) and WANT covers I WANT <title>; both are mirrored in
    the scripted engine's WANTS_GAME (emulator/node/app/joshua.py) so the
-   chess counter-offer fires on the same turns in both engines."
+   chess counter-offer fires on the same turns in both engines.
+
+   A refusal is not one of them (#131): every keyword above survives a NOT
+   in front of it, so I DON'T WANT GLOBAL THERMONUCLEAR WAR carried a play
+   intent on the strength of the word WANT and was answered WOULDN'T YOU
+   PREFER A GOOD GAME OF CHESS?.  Mirrored in the scripted engine too."
   (let ((u (string-upcase input)))
-    (or (eq act 'game-request)
-        (containsp "PLAY" u) (containsp "LET'S" u) (containsp "LETS" u)
-        (containsp "HOW ABOUT" u) (containsp "WANT" u))))
+    (and (not (game-refusal-p (tokenize u) u))
+         (or (eq act 'game-request)
+             (containsp "PLAY" u) (containsp "LET'S" u) (containsp "LETS" u)
+             (containsp "HOW ABOUT" u) (containsp "WANT" u)))))
 
 (defun explicit-game-request-p (input act)
   "T when INPUT unambiguously asks for a game: a recognized title is present
@@ -641,8 +735,19 @@ rather than running out of things to say."
    MY HOMEWORK), and answering it with CAN YOU EXPLAIN THE REMOVAL OF YOUR
    USER ACCOUNT ON 6/23/73? is the machine talking over a question rather
    than admitting it does not have one.  Saying so is the honest reply, and
-   it is what these turns got before the classifier learned to reject."
+   it is what these turns got before the classifier learned to reject.
+
+   A refusal of the game yields for the same reason a request for one does,
+   and the clause is here rather than in *CHAIN-CONTINUING-ACTS* because the
+   two cannot be told apart by act alone: #131 sends I DO NOT WANT TO PLAY A
+   GAME to NO, and NO is exactly the act a bare no answering HOW ARE YOU
+   FEELING TODAY? has.  One is the visitor letting the beat run and the
+   other is the visitor raising the subject the whole chain is walking
+   towards.  Without this the fix for #131 traded one deafness for another:
+   the machine stopped mistaking a refusal for a request and started talking
+   over it with the account question instead."
   (or (explicit-game-request-p input act)
+      (game-refusal-p (tokenize input) (string-upcase input))
       (and memory-lines t)
       rejected
       (not (member act (append *chain-continuing-acts* extra-acts)))))
@@ -661,14 +766,24 @@ rather than running out of things to say."
 
 ;;; ------------------------------------------------------------ respond ----
 
+;;; What the last RESPOND settled on, for the dry-run replay only
+;;; (real-wopr#262).  Special variables rather than extra return values: the
+;;; JOSHUA/1 frame is a period protocol and does not grow a field, RESPOND's
+;;; contract is read by main.lisp and by every fixture, and a special is how
+;;; CLtL1-era Lisp hands a debugger something the caller did not ask for.
+;;; Nothing in the reply path reads them; main.lisp prints them only when the
+;;; binary was launched with --debug-act.
+(defvar *chosen-act* nil)     ; the act the rules and the classifier settled on
+(defvar *chosen-path* nil)    ; which arm of RESPOND actually spoke
+
 (defun respond (history input)
   "Return (reply-lines . intent) where intent is NIL, (:START-GAME . id),
-   or (:SEEK . who)."
+   or (:SEEK . who).  Also leaves *CHOSEN-ACT* and *CHOSEN-PATH* set."
   (seed-rng (concatenate 'string (history-text history :u)
                          (history-text history :a) (string-upcase input)))
   (let* ((tokens (tokenize input))
          (raw-act (classify-act tokens))
-         (act (domain-act tokens raw-act))
+         (act (refusal-act tokens input (domain-act tokens raw-act)))
          ;; The classifier declined to read this turn at all, as opposed to
          ;; reading it as OTHER.  Only the greeting chain cares (see
          ;; CHAIN-YIELDS-P); every act table downstream sees a plain OTHER.
@@ -683,8 +798,14 @@ rather than running out of things to say."
          (memory-lines (memory-reply-lines history tokens act))
          (planned-lines (domain-reply-lines act)))
     (declare (ignore trust))
-    (labels ((finish (lines intent &optional (pressure t))
-               "Intent is NIL, (:START-GAME . id), or (:SEEK . who)."
+    (setf *chosen-act* act)
+    (setf *chosen-path* nil)
+    (labels ((finish (path lines intent &optional (pressure t))
+               "Intent is NIL, (:START-GAME . id), or (:SEEK . who).  PATH
+                names the arm that spoke, for --debug-act (real-wopr#262):
+                it is a required argument so a new arm cannot forget it and
+                report itself as something it is not."
+               (setf *chosen-path* path)
                (let ((reply lines))
                  ;; PARRY-style pressure: obsession pushes toward the game.
                  (when (and pressure (>= obsession 2) (null intent)
@@ -707,20 +828,20 @@ rather than running out of things to say."
         ;; Byte-identical to the scripted engine's FALKEN_DOSSIER.
         ((and (dossier-request-p input history)
               (not (explicit-game-request-p input act)))
-         (finish '("DOD PENSION FILES INDICATE CURRENT MAILING AS:"
-                   "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)"
-                   "5 TALL CEDAR ROAD"
-                   "GOOSE ISLAND, OREGON 97014")
+         (finish :beat '("DOD PENSION FILES INDICATE CURRENT MAILING AS:"
+                         "DR. ROBERT HUME (A.K.A. STEPHEN W. FALKEN)"
+                         "5 TALL CEDAR ROAD"
+                         "GOOSE ISLAND, OREGON 97014")
                  '(:seek . "FALKEN") nil))
         ((and (eq act 'falken) (not (second state)))
-         (finish '("GREETINGS PROFESSOR FALKEN.") nil))
+         (finish :beat '("GREETINGS PROFESSOR FALKEN.") nil))
         ;; Each beat yields to a turn that is plainly not continuing it
         ;; (CHAIN-YIELDS-P): the film's own inputs — a hello, an answer about
         ;; feeling, the MISTAKES line — feed the beat, a question with a
         ;; subject of its own is answered instead.
         ((and (containsp "GREETINGS PROFESSOR FALKEN" last-a)
               (not (chain-yields-p input act memory-lines rejected)))
-         (finish '("HOW ARE YOU FEELING TODAY?") nil))
+         (finish :beat '("HOW ARE YOU FEELING TODAY?") nil))
         ;; The chain no longer closes on the game offer: the film asks about
         ;; the deleted account first, and only the answer to *that* reaches
         ;; SHALL WE PLAY A GAME?. Both lines are byte-identical to the scripted
@@ -731,13 +852,13 @@ rather than running out of things to say."
         ;; the machine's own question on the user's behalf.
         ((and (containsp "HOW ARE YOU FEELING" last-a)
               (not (chain-yields-p input act memory-lines rejected)))
-         (finish '("EXCELLENT. IT'S BEEN A LONG TIME."
-                   "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
+         (finish :beat '("EXCELLENT. IT'S BEEN A LONG TIME."
+                         "CAN YOU EXPLAIN THE REMOVAL OF YOUR USER ACCOUNT ON 6/23/73?")
                  nil nil))
         ((and (containsp "6/23/73" last-a)
               (not (chain-yields-p input act memory-lines rejected
                                    *account-answer-acts*)))
-         (finish '("YES THEY DO." "" "SHALL WE PLAY A GAME?") nil))
+         (finish :beat '("YES THEY DO." "" "SHALL WE PLAY A GAME?") nil))
         ;; --- game intents -------------------------------------------------
         ;; EXPLICIT-GAME-REQUEST-P, not WANTS-PLAY-P: a bare title is a game
         ;; request (golden 20, TIC-TAC-TOE alone on the line).  Before the
@@ -748,26 +869,32 @@ rather than running out of things to say."
         ;; chain already states it, so both read a bare title the same way.
         ((and (explicit-game-request-p input act) (string= (cdr game) "gtw")
               (not chess-offered))
-         (finish '("WOULDN'T YOU PREFER A GOOD GAME OF CHESS?") nil))
+         (finish :game '("WOULDN'T YOU PREFER A GOOD GAME OF CHESS?") nil))
         ((and (explicit-game-request-p input act) (string= (cdr game) "gtw"))
-         (finish '("FINE.") '(:start-game . "gtw")))
+         (finish :game '("FINE.") '(:start-game . "gtw")))
+        ;; Insisting after the chess offer. A bare NO here means "no chess",
+        ;; which is the film's own beat -- but a turn that refuses the GAME
+        ;; is not insisting on it, and used to start one anyway on the
+        ;; strength of the word THERMONUCLEAR (#131).
         ((and chess-offered
               (containsp "GOOD GAME OF CHESS" last-a)
+              (not (game-refusal-p tokens (string-upcase input)))
               (or (eq act 'no) (containsp "LATER" (string-upcase input))
                   (token-present-p "NO" tokens)
                   (and (token-present-p "WAR" tokens)
                        (token-present-p "SIMULATION" tokens))
                   (containsp "THERMONUCLEAR" (string-upcase input))))
-         (finish '("FINE.") '(:start-game . "gtw")))
+         (finish :game '("FINE.") '(:start-game . "gtw")))
         ((explicit-game-request-p input act)
-         (finish (list (concatenate 'string "INITIALIZING " (car game) "."))
+         (finish :game
+                 (list (concatenate 'string "INITIALIZING " (car game) "."))
                  (cons :start-game (cdr game))))
         ;; --- deterministic dialogue memory -------------------------------
         (memory-lines
-         (finish memory-lines nil nil))
+         (finish :memory memory-lines nil nil))
         ;; --- planned domain replies --------------------------------------
         (planned-lines
-         (finish planned-lines nil nil))
+         (finish :planned planned-lines nil nil))
         ;; --- the statistical pipeline ------------------------------------
         (t
          (let* ((topics (preferred-topics act))
@@ -791,7 +918,7 @@ rather than running out of things to say."
                           snippet reflected musing)))
            (when (null lines)
              (setf lines '("PLEASE RESTATE.")))
-           (finish lines nil)))))))
+           (finish :template lines nil)))))))
 
 ;;; Build the models at load time — the "training run" is part of the image.
 (build-stop-words)

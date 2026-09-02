@@ -90,6 +90,12 @@ program wopr
    logical           :: fc_haverow
    character(len=LL) :: fc_rowid, fc_rowstat, fc_rowinterp
    integer           :: fc_rowturn
+   ! The room's last game once it is no longer PLAYING.  A row that has
+   ! reached a terminal status is not in GAMEROW at all, so without this
+   ! the executive cannot tell "the war you were in ended" from "there was
+   ! never a game", and answered both NO GAME IN PROGRESS.
+   logical           :: fc_haveended
+   character(len=LL) :: fc_endedid, fc_endedstat
 
    integer           :: n_game
    character(len=LL) :: gm_id(MAXGM), gm_state(MAXGM), gm_flag(MAXGM)
@@ -304,6 +310,9 @@ contains
       fc_rowstat = '-'
       fc_rowinterp = 'core'
       fc_rowturn = 0
+      fc_haveended = .false.
+      fc_endedid = '-'
+      fc_endedstat = '-'
       n_game = 0
       n_interp = 0
       do i = 1, MAXGM
@@ -338,6 +347,10 @@ contains
             fc_rowstat = word(line, 3)
             fc_rowturn = to_int(word(line, 4))
             fc_rowinterp = word(line, 5)
+         case ('ENDEDROW')
+            fc_haveended = .true.
+            fc_endedid = word(line, 2)
+            fc_endedstat = word(line, 3)
          case ('GAME')
             if (n_game >= MAXGM) call protocol_error('CATALOG TOO LARGE')
             n_game = n_game + 1
@@ -579,9 +592,12 @@ contains
 
       if (.not. fc_haverow .or. trim(fc_rowid) /= trim(st_program)) then
          ! The row vanished or changed under us (a hub tick, another
-         ! surface). Detach rather than move a game we are not on.
+         ! surface). Detach rather than move a game we are not on -- but
+         ! first say what became of it, when the facts still say
+         ! (real-wopr#209).  Order matters: detach clears st_program,
+         ! which is what ended_verdict matches the ended row against.
+         if (.not. ended_verdict()) call emit(NO_GAME)
          call detach()
-         call emit(NO_GAME)
          return
       end if
       if (len_trim(up) == 0) then
@@ -593,6 +609,37 @@ contains
       end if
       call ask(trim(st_program), 'MOVE '//trim(up), 'MOVE1', trim(st_program), '-')
    end subroutine game_line
+
+   ! ----------------------------------------------------------------
+   ! The war ended without us.
+   !
+   ! The room hub drives a simulation on its own ticks, so the game a
+   ! terminal is attached to can reach NO-WIN between one line and the
+   ! next.  The row leaves the facts when it stops being PLAYING, and
+   ! ENDEDROW is what is left of it.  The film's verdict belongs to that
+   ! player as much as to the one whose own move ended the war
+   ! (real-wopr#209), so it is spoken here rather than NO GAME IN
+   ! PROGRESS.  Keyed exactly as resume_move keys it: the sentence
+   ! follows NO-WIN whatever the game, the chess coda follows gtw.  The
+   ! sweep is not replayed -- emit_montage is W.O.P.R. showing its work
+   ! at the moment it gives up, and this player was not on the line for
+   ! it.  Any other terminal status is still NO GAME IN PROGRESS.: a
+   ! finished hand of hearts has no verdict to speak.
+   ! ----------------------------------------------------------------
+   logical function ended_verdict() result(spoke)
+      spoke = .false.
+      if (.not. fc_haveended) return
+      if (trim(fc_endedid) /= trim(st_program)) return
+      if (trim(fc_endedstat) /= 'NO-WIN') return
+      call emit(NOWIN_1)
+      call emit(NOWIN_2)
+      call emit(NOWIN_3)
+      if (trim(st_program) == 'gtw') then
+         call blank()
+         call emit(CHESS_CODA)
+      end if
+      spoke = .true.
+   end function ended_verdict
 
    subroutine converse(raw)
       character(len=*), intent(in) :: raw
@@ -859,7 +906,13 @@ contains
 
    subroutine quit_game()
       if (.not. fc_haverow) then
-         call emit(NO_GAME)
+         ! QUIT is the same moment as any other line for a war that has
+         ! already ended: say what happened to it, then let go.
+         if (ended_verdict()) then
+            call detach()
+         else
+            call emit(NO_GAME)
+         end if
          return
       end if
       call ask(trim(fc_rowid), 'QUIT', 'QUIT', trim(fc_rowid), '-')
