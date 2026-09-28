@@ -123,7 +123,7 @@ export default function HomeTerminal() {
   }, []);
 
   /** Append a complete, newline-terminated chunk to the scrollback, starting
-   *  it on a fresh line. Used for command echoes, the handshake FSM, and the
+   *  it on a fresh line. Used for local command output, the handshake FSM, and the
    *  scan/war-dial montage — never for raw streamed link output. */
   const appendText = useCallback(
     (s: string) => write((m) => m.sinks.appendText(s)),
@@ -183,8 +183,9 @@ export default function HomeTerminal() {
       // timeout, or the caller gave up. Nothing is printed — a phone that
       // stops ringing announces nothing, the RING lines are already in the
       // scrollback as the record that it rang, and a decliner's own `> N`
-      // echo is the record of what they did. The phase is all that changes,
-      // and it goes to `idle` rather than `no-carrier`: nothing carried.
+      // (recorded by the terminal on Enter) is the record of what they did.
+      // The phase is all that changes, and it goes to `idle` rather than
+      // `no-carrier`: nothing carried.
       // Guarded on `ringing` because a decline has already set `idle` here,
       // and because this must never disturb a dialled call.
       if (phaseRef.current === "ringing") setPhase("idle");
@@ -305,6 +306,10 @@ export default function HomeTerminal() {
       return;
     }
     setPhase("dialing");
+    // No input line while the call goes through: the handshake streams, and
+    // the far end's first prompt (or the line going quiet after a greeting
+    // that sends none, like the W.O.P.R.'s LOGON:) gives it back.
+    write((m) => m.hold());
     // A fresh dial clears any pending carrier-loss notice from a prior line,
     // and any prompt or handshake fragment stranded by a drop between a
     // message's first and last chunk on the old line — otherwise it
@@ -404,7 +409,7 @@ export default function HomeTerminal() {
       detach.current = link.current.onEvent(onLinkEvent);
       link.current.connect();
     })();
-  }, [onLinkEvent, exchanges, appendText, mintSession]);
+  }, [onLinkEvent, exchanges, appendText, mintSession, write]);
 
   // The war-dialer: probe each registered exchange in order, connect to the
   // first carrier. Output here is local to the "modem", not link-shaped.
@@ -414,6 +419,7 @@ export default function HomeTerminal() {
       return;
     }
     setPhase("scanning");
+    write((m) => m.hold());
     appendText("\nSCANNING FOR CARRIERS...\n\n");
     void (async () => {
       for (const e of exchanges) {
@@ -428,8 +434,9 @@ export default function HomeTerminal() {
       }
       appendText("\nSCAN COMPLETE. NO CARRIERS AVAILABLE.\n");
       setPhase("no-carrier");
+      write((m) => m.release());
     })();
-  }, [exchanges, dial, appendText]);
+  }, [exchanges, dial, appendText, write]);
 
   // The war-dial montage: replay David's auto-dialer sweep at period cadence,
   // then leave a reviewable numbered hit list (DIAL <n> connects to one).
@@ -437,6 +444,7 @@ export default function HomeTerminal() {
     const sweep = buildSweep(DIAL_SYSTEMS);
     setHits(null);
     setPhase("scanning");
+    write((m) => m.hold());
     appendText("\nWAR-DIALING SUNNYVALE PREFIX...\n\n");
     let i = 0;
     const step = () => {
@@ -445,6 +453,7 @@ export default function HomeTerminal() {
         appendText(hitListText(carriers));
         setHits(carriers);
         setPhase("idle");
+        write((m) => m.release());
         sweepTimer.current = null;
         return;
       }
@@ -454,7 +463,7 @@ export default function HomeTerminal() {
       sweepTimer.current = setTimeout(step, 450);
     };
     sweepTimer.current = setTimeout(step, 450);
-  }, [appendText]);
+  }, [appendText, write]);
 
   useEffect(() => () => {
     disposed.current = true;
@@ -476,41 +485,36 @@ export default function HomeTerminal() {
     appendText(`VOICE ${on ? "ON" : "OFF"}\n`);
   };
 
+  // The command itself is already in the transcript: the terminal records
+  // every line as it was typed, prompt and all, before handing it over.
   const runLocalCommand = (line: string) => {
-    const trimmed = line.trim();
-    const echo = trimmed === "" ? "" : `> ${trimmed.toUpperCase()}\n`;
     const ctx: ConsoleContext = { exchanges, systems: DIAL_SYSTEMS, hits };
     const action = parse(line, ctx);
     switch (action.kind) {
       case "help":
       case "print":
       case "error":
-        appendText(echo + action.text);
+        appendText(action.text);
         return;
       case "directory":
         // A fresh DIRECTORY clears any pending war-dial hit list, so DIAL <n>
         // resolves against the book again.
         setHits(null);
-        appendText(echo + action.text);
+        appendText(action.text);
         return;
       case "dial":
-        appendText(echo);
         dial(action.target);
         return;
       case "scan":
-        appendText(echo);
         doScan();
         return;
       case "wardial":
-        appendText(echo);
         warDial();
         return;
       case "redial":
-        appendText(echo);
         dial(active.current);
         return;
       case "voice":
-        appendText(echo);
         applyVoice(action.on);
         return;
     }
@@ -523,11 +527,9 @@ export default function HomeTerminal() {
     if (phase === "ringing") {
       const cmd = line.trim().toUpperCase();
       if (cmd === "Y") {
-        appendText(`> ${cmd}\n`);
         seat.current?.answer();
         setPhase("connected");
       } else if (cmd === "N") {
-        appendText(`> ${cmd}\n`);
         seat.current?.reject();
         setPhase("idle");
       }
@@ -548,9 +550,9 @@ export default function HomeTerminal() {
     // dialled even once. Which is everyone: Joshua only rings back a visitor he
     // has already spoken to.
     if (phase === "connected" && link.current?.isOpen()) {
-      const cmd = line.toUpperCase();
-      appendText(`> ${cmd}`);
-      link.current.sendInput(cmd);
+      link.current.sendInput(line.toUpperCase());
+      // The input line comes back when the far end asks for the next one.
+      write((m) => m.hold());
       return;
     }
     // The other way "connected" happens: a ring was answered rather than
@@ -561,9 +563,8 @@ export default function HomeTerminal() {
     // its own seat (which the hub then refuses to ring, busy), so this can
     // never coincide with a dialled call in progress.
     if (phase === "connected" && seat.current) {
-      const cmd = line.toUpperCase();
-      appendText(`> ${cmd}`);
-      seat.current.send(cmd);
+      seat.current.send(line.toUpperCase());
+      write((m) => m.hold());
       return;
     }
     runLocalCommand(line);

@@ -16,7 +16,7 @@ import assert from "node:assert/strict";
 import xterm from "@xterm/headless";
 const { Terminal } = xterm;
 type Terminal = InstanceType<typeof Terminal>;
-import { mountXterm, type TerminalLike } from "../src/render-xterm.ts";
+import { isSecretPrompt, mountXterm, type TerminalLike, type Timers } from "../src/render-xterm.ts";
 
 function term(cols = 40, rows = 12): Terminal {
   return new Terminal({ cols, rows, allowProposedApi: true });
@@ -40,6 +40,21 @@ function cursorRow(t: Terminal): number {
 /** Type at the terminal the way a person does; xterm routes it to onData. */
 function type(t: Terminal, s: string): void {
   t.input(s);
+}
+
+/** Hand-cranked timers: a test decides when the fallback fires. */
+function fakeTimers() {
+  let next = 1;
+  const armed = new Map<number, { fn: () => void; ms: number }>();
+  const timers: Timers = {
+    set: (fn, ms) => { const id = next++; armed.set(id, { fn, ms }); return id; },
+    clear: (id) => { armed.delete(id as number); },
+  };
+  /** Fire every armed timer of this length. */
+  const fire = (ms: number) => {
+    for (const [id, a] of [...armed]) if (a.ms === ms) { armed.delete(id); a.fn(); }
+  };
+  return { timers, fire, armed };
 }
 
 test("streamed chunks continue one transcript line under the input line", async () => {
@@ -88,29 +103,37 @@ test("typing echoes, Backspace edits, Enter delivers the line and clears it", as
   type(t, "\r");
   await flush(t);
   assert.deepEqual(lines, ["HELP"]);
-  assert.equal(row(t, 0), "> ", "the input line is cleared for the next command");
+  assert.equal(row(t, 0), "> HELP", "the line as typed stays in the transcript");
+  assert.equal(row(t, 1), "> ", "a fresh input line under it");
   void m;
 });
 
-test("the page's echo lands after the input line is cleared, not through it", async () => {
-  // Both surfaces echo the submitted command into the transcript themselves.
-  // If Enter delivered the line before clearing, that echo would paint into a
-  // row still holding the typed text.
+test("Enter records the prompt the line answered, not a stock one", async () => {
+  // The transcript is what was on the screen. A system that asked SELECT: must
+  // leave "SELECT: LIST" behind, not "> LIST" with the question gone.
   const t = term();
-  const seen: string[] = [];
-  const m = mountXterm({
-    term: t as TerminalLike,
-    onLine: (l) => {
-      seen.push(l);
-      m.sinks.appendText(`> ${l}\n`);
-    },
-  });
+  const seen: Array<[string, string]> = [];
+  const m = mountXterm({ term: t as TerminalLike, onLine: (l, echo) => seen.push([l, echo]) });
+  m.setPrompt("SELECT:");
+  type(t, "LIST\r");
   await flush(t);
+  assert.deepEqual(seen, [["LIST", "SELECT: LIST"]]);
+  assert.equal(row(t, 0), "SELECT: LIST");
+
+  // The far end's reply starts with a newline; it must not open a blank row
+  // under the echo.
+  m.sinks.appendRaw("\n0001 ADAMS\n");
+  await flush(t);
+  assert.equal(row(t, 0), "SELECT: LIST");
+  assert.equal(row(t, 1), "0001 ADAMS");
+  assert.equal(row(t, 2), "SELECT: ");
+
+  // A page answering locally starts its text on a fresh line as well.
   type(t, "HELP\r");
+  m.sinks.appendText("NO HELP HERE\n");
   await flush(t);
-  assert.deepEqual(seen, ["HELP"]);
-  assert.equal(row(t, 0), "> HELP");
-  assert.equal(row(t, 1), "> ");
+  assert.equal(row(t, 2), "SELECT: HELP");
+  assert.equal(row(t, 3), "NO HELP HERE");
 });
 
 test("appendText opens a fresh line only when the transcript is mid-line", async () => {
@@ -191,6 +214,129 @@ test("masked input echoes nothing readable but delivers the line intact", async 
   type(t, "\r");
   await flush(t);
   assert.deepEqual(lines, ["CPE1704TKS"]);
+  assert.equal(row(t, 0), "> **********", "and the transcript keeps only the stars");
+});
+
+test("a password prompt masks by itself, in the input line and the transcript", async () => {
+  // The school's logon (systems/school-mon): nobody calls setMask — the
+  // prompt alone says the line is secret.
+  const t = term(60);
+  const seen: Array<[string, string]> = [];
+  const m = mountXterm({
+    term: t as TerminalLike, uppercase: true, onLine: (l, echo) => seen.push([l, echo]),
+  });
+  m.setPrompt("PLEASE LOGON WITH USER PASSWORD:");
+  type(t, "pencil");
+  await flush(t);
+  assert.equal(row(t, 0), "PLEASE LOGON WITH USER PASSWORD: ******");
+  type(t, "\r");
+  await flush(t);
+  assert.deepEqual(seen, [["PENCIL", "PLEASE LOGON WITH USER PASSWORD: ******"]]);
+  assert.equal(row(t, 0), "PLEASE LOGON WITH USER PASSWORD: ******");
+
+  // The next question is not secret, and the mask goes with the prompt.
+  m.setPrompt("SELECT:");
+  type(t, "list");
+  await flush(t);
+  assert.equal(row(t, 1), "SELECT: LIST");
+});
+
+test("isSecretPrompt: passwords and access codes, never a user name", () => {
+  assert.equal(isSecretPrompt("PLEASE LOGON WITH USER PASSWORD:"), true);
+  assert.equal(isSecretPrompt("PASSWORD"), true);
+  assert.equal(isSecretPrompt("ACCESS CODE:"), true);
+  assert.equal(isSecretPrompt("LOGON:"), false, "the film shows JOSHUA typed in the clear");
+  assert.equal(isSecretPrompt("SELECT:"), false);
+  assert.equal(isSecretPrompt(">"), false);
+});
+
+test("while the far end is answering there is no input line, only the cursor after the text", async () => {
+  // At 300 baud a reply takes seconds. The old screen kept the previous
+  // question on an input line under it the whole time and swapped it only when
+  // the last byte landed; a terminal shows the cursor where the text stopped.
+  const t = term();
+  const { timers } = fakeTimers();
+  const m = mountXterm({
+    term: t as TerminalLike, timers, uppercase: true, onLine: () => m.hold(),
+  });
+  m.setPrompt("SELECT:");
+  const writes: string[] = [];
+  const spy = t.write.bind(t);
+  (t as { write: (d: string, cb?: () => void) => void }).write = (d, cb) => {
+    writes.push(d);
+    spy(d, cb);
+  };
+  type(t, "list\r");
+  await flush(t);
+  assert.equal(row(t, 0), "SELECT: LIST");
+  assert.equal(row(t, 1), "", "no input line while held");
+  assert.ok(
+    !writes.some((w) => w.includes("\r\nSELECT: ") || w.endsWith("SELECT: ")),
+    "and none was drawn in between: the answered question never flashes back",
+  );
+  assert.equal(cursorRow(t), 0);
+
+  m.sinks.appendRaw("\n0001 AD");
+  await flush(t);
+  assert.equal(row(t, 1), "0001 AD");
+  assert.equal(row(t, 2), "");
+  assert.equal(cursorRow(t), 1, "the cursor rides the end of the streaming text");
+
+  // Typing ahead is kept but not shown until the machine asks again.
+  type(t, "m");
+  m.sinks.appendRaw("AMS\n");
+  await flush(t);
+  assert.equal(row(t, 2), "");
+
+  m.sinks.setPrompt("MORE - TYPE M");
+  await flush(t);
+  assert.equal(row(t, 1), "0001 ADAMS");
+  assert.equal(row(t, 2), "MORE - TYPE M M");
+});
+
+test("a line entered while held waits for the next prompt, then answers it", async () => {
+  const t = term();
+  const { timers } = fakeTimers();
+  const seen: Array<[string, string]> = [];
+  const m = mountXterm({
+    term: t as TerminalLike, timers,
+    onLine: (l, echo) => { seen.push([l, echo]); m.hold(); },
+  });
+  type(t, "A\r");
+  type(t, "B\r");
+  await flush(t);
+  assert.deepEqual(seen, [["A", "> A"]], "B is typed ahead, not sent into a reply");
+
+  m.sinks.appendRaw("\nOK\n");
+  m.setPrompt("NEXT:");
+  await flush(t);
+  assert.deepEqual(seen, [["A", "> A"], ["B", "NEXT: B"]]);
+  assert.equal(row(t, 1), "OK");
+  assert.equal(row(t, 2), "NEXT: B");
+});
+
+test("a reply that never sends a prompt still gives the line back", async () => {
+  // Not every turn ends with a prompt frame: *** BREAK ***, OBSERVE GTW, and
+  // a SYSTEM/1 program's PROMPT is optional. Output going quiet ends the hold,
+  // and so does a reply that never comes at all.
+  const t = term();
+  const { timers, fire, armed } = fakeTimers();
+  const m = mountXterm({ term: t as TerminalLike, timers, onLine: () => m.hold() });
+  type(t, "BREAK\r");
+  m.sinks.appendRaw("\n*** BREAK ***\n");
+  await flush(t);
+  assert.equal(row(t, 2), "");
+  fire(1500);
+  await flush(t);
+  assert.equal(row(t, 2), "> ", "the resting prompt comes back once the line goes quiet");
+  assert.equal(armed.size, 0, "and the ceiling timer is cancelled with it");
+
+  type(t, "HELLO\r");
+  await flush(t);
+  fire(30000);
+  await flush(t);
+  assert.equal(row(t, 2), "> HELLO");
+  assert.equal(row(t, 3), "> ", "no reply at all: the ceiling releases it");
 });
 
 test("caps-only terminals uppercase what is typed and what is delivered", async () => {

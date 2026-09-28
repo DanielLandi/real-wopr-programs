@@ -228,18 +228,22 @@ export default function NoradTerminal() {
 
   const masked = awaitingAccessCode(text);
 
-  const submit = (line: string) => {
+  const submit = (line: string, echo: string) => {
     const cmd = line.toUpperCase();
+    // The terminal has already put the line on screen — an access code as
+    // stars, never its characters. The mirror gets the same text, so what the
+    // console reads back (the access-code and clearance checks) matches it.
+    setText((t) => onFreshLine(t, echo));
     if (!masked && cmd === "WALL") {
       const base =
         process.env.NEXT_PUBLIC_WALL_URL ?? `${window.location.origin}/warroom/`;
       const url = wallUrl(base, roomCodeFromLocation().code);
-      appendLine(`WOPR> WALL\nSCREEN WALL: ${url}\n`);
+      appendLine(`SCREEN WALL: ${url}\n`);
       return;
     }
-    // Never echo an access code — the prompt line stays bare.
-    appendLine(`WOPR> ${masked ? "" : cmd}\n`);
     link.current?.sendInput(cmd);
+    // The input line comes back when the machine asks for the next one.
+    write((m) => m.hold());
   };
 
   // The terminal keeps its keystroke handler for the life of the page, so it
@@ -261,7 +265,7 @@ export default function NoradTerminal() {
       // render one only when connected, and this is the same rule.
       enabled={phase === "connected"}
       mask={masked}
-      onLine={(line) => submitRef.current(line)}
+      onLine={(line, echo) => submitRef.current(line, echo)}
       onBreak={() => link.current?.sendControl("BREAK")}
       onMount={onScreen}
     >
