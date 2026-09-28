@@ -16,7 +16,7 @@ export function lastNonEmptyLine(text: string): string {
 }
 
 /** True while the machine is waiting for the operator's access code — the
- *  page masks the CommandLine and suppresses the local echo. */
+ *  page masks the input line, and the terminal records the code as stars. */
 export function awaitingAccessCode(text: string): boolean {
   return lastNonEmptyLine(text) === ACCESS_CODE_PROMPT;
 }

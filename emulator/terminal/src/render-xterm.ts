@@ -18,6 +18,13 @@
 // transcript line or a long command doesn't strand a copy of the input line in
 // the middle of the screen.
 //
+// A line typed at a prompt is recorded as it looked: Enter leaves the prompt and
+// the text in the transcript ("SELECT: LIST"), with a secret prompt's answer
+// as stars, so the pages never write an echo of their own. And once a line has
+// gone to the far end, the input line is held off the screen until the reply
+// is over — the cursor rides the end of the streaming text, as on a terminal,
+// instead of an input line under it still showing the previous question.
+//
 // There is no import of @xterm/xterm here. The terminal arrives as a
 // structural TerminalLike, which keeps this file loadable under bare
 // `node --test` and lets the tests drive the real emulator core through
@@ -42,16 +49,26 @@ export interface RendererSinks {
   setPrompt(p: string): void;
 }
 
+/** setTimeout/clearTimeout, injectable so a test decides when they fire. */
+export interface Timers {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
+}
+
 export interface XtermMountOpts {
   term: TerminalLike;
-  /** A completed input line (Enter). The input line is already cleared when
-   *  this runs, so a page is free to echo the command into the transcript. */
-  onLine: (line: string) => void;
+  /** A completed input line (Enter). The renderer has already recorded it in
+   *  the transcript as `echo` — the prompt and the line, starred if the prompt
+   *  was secret — so a page writes no echo of its own. `echo` is handed over
+   *  for pages that keep a text mirror of the screen. */
+  onLine: (line: string, echo: string) => void;
   /** Ctrl+C — the period BREAK interrupt (docs/surfaces.md). */
   onBreak?: () => void;
   prompt?: string;
   /** Caps-only period terminal: echo and deliver every line uppercased. */
   uppercase?: boolean;
+  /** Defaults to the global setTimeout/clearTimeout. */
+  timers?: Timers;
 }
 
 export interface XtermMount {
@@ -63,8 +80,32 @@ export interface XtermMount {
   /** While false there is no input line on screen and keystrokes are
    *  discarded — the NORAD console before its leased line comes up. */
   setEnabled(on: boolean): void;
+  /** The far end is answering: take the input line off the screen until it
+   *  asks again. A prompt ends the hold; so does output going quiet for
+   *  QUIET_MS, and so does nothing arriving at all for CEILING_MS — a turn
+   *  is not obliged to send a prompt. Keys typed meanwhile are kept, and a
+   *  line entered meanwhile answers the next prompt. */
+  hold(): void;
+  /** End a hold the page started for work of its own (a scan, a dial). */
+  release(): void;
   dispose(): void;
 }
+
+/** A prompt that asks for a secret: its answer is shown as stars, on the
+ *  input line and in the transcript. The school's PLEASE LOGON WITH USER
+ *  PASSWORD: and the W.O.P.R.'s ACCESS CODE: (docs/api-contract.md §4.6) —
+ *  never LOGON:, which asks for a name the film shows typed in the clear. */
+export function isSecretPrompt(prompt: string): boolean {
+  return /(?:PASSWORD|ACCESS CODE):?$/i.test(prompt.trim());
+}
+
+/** How long output may pause before a hold is given up on. A paced line
+ *  delivers a quantum every few tens of milliseconds while a reply streams,
+ *  and a turn's prompt follows its text directly, so this is far past both. */
+const QUIET_MS = 1500;
+/** How long a hold may wait for the first byte of a reply. Past the dialogue
+ *  processor's own timeout (JOSHUA_TIMEOUT_S, 15s). */
+const CEILING_MS = 30000;
 
 // Escape sequences a modern keyboard emits for keys a 1983 line editor does
 // not have: arrows, function keys, Home/End. Dropped rather than typed.
@@ -84,6 +125,21 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
   let mask = false;
   let enabled = true;
   let disposed = false;
+  // Waiting on the far end: no input line, and Enter queues rather than sends.
+  let held = false;
+  const queued: string[] = [];
+  const timers: Timers = opts.timers ?? {
+    set: (fn, ms) => setTimeout(fn, ms),
+    clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  };
+  let quiet: unknown = null;
+  let ceiling: unknown = null;
+  const stopTimers = () => {
+    if (quiet !== null) timers.clear(quiet);
+    if (ceiling !== null) timers.clear(ceiling);
+    quiet = ceiling = null;
+  };
+  const secret = () => mask || isSecretPrompt(prompt);
 
   const rowsFor = (s: string) => {
     const cols = term.cols > 0 ? term.cols : 80;
@@ -92,7 +148,7 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
 
   /** Erase the rows painted last time and write them again, optionally
    *  committing finished transcript lines into the scrollback on the way. */
-  const paint = (committed: string[] = []) => {
+  const paint = (committed: string[] = [], withInput = true) => {
     let out = "\r";
     if (above > 0) out += `\x1b[${above}A`;
     out += "\x1b[J"; // erase from here to the end of the screen
@@ -102,9 +158,9 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
       out += tail;
       rows += rowsFor(tail);
     }
-    if (enabled) {
+    if (enabled && !held && withInput) {
       if (tail !== "") out += "\r\n";
-      const input = `${prompt} ${mask ? "*".repeat(buf.length) : buf}`;
+      const input = `${prompt} ${secret() ? "*".repeat(buf.length) : buf}`;
       out += input;
       rows += rowsFor(input);
     }
@@ -118,6 +174,11 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
     const lines = (tail + s.replace(/\r\n/g, "\n").replace(/\r/g, "")).split("\n");
     tail = lines.pop() ?? "";
     paint(lines);
+    if (held) {
+      // Output is still arriving; the hold lasts until it goes quiet.
+      if (quiet !== null) timers.clear(quiet);
+      quiet = timers.set(release, QUIET_MS);
+    }
   };
 
   // Exactly the rule the DOM renderer used: the newline is added only when the
@@ -125,9 +186,34 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
   // open a blank row above itself.
   const appendText = (s: string) => appendRaw(tail === "" ? s : `\n${s}`);
 
+  /** Record the line in the transcript as it stood on the input line, then
+   *  deliver it. The echo becomes the transcript's open last line, so the
+   *  reply's leading newline ends it rather than opening a blank row. */
+  const submit = (line: string) => {
+    const echo = `${prompt} ${secret() ? "*".repeat(line.length) : line}`;
+    const committed = tail !== "" ? [tail] : [];
+    tail = echo;
+    // No input line yet: the page may hold it for the reply, and drawing one
+    // first would flash the question just answered under its own answer.
+    paint(committed, false);
+    opts.onLine(line, echo);
+    if (!held) paint();
+  };
+
+  function release() {
+    stopTimers();
+    if (!held) return;
+    held = false;
+    paint();
+    // Typed ahead during the reply: it answers the question just asked.
+    const next = queued.shift();
+    if (next !== undefined && enabled) submit(next);
+  }
+
   const setPrompt = (p: string) => {
     prompt = p;
-    paint();
+    if (held) release();
+    else paint();
   };
 
   const data = term.onData((d: string) => {
@@ -138,8 +224,8 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
       } else if (ch === "\r" || ch === "\n") {
         const line = buf;
         buf = "";
-        paint(); // clear the input line first, so the page's echo lands under it
-        opts.onLine(line);
+        if (held) queued.push(line);
+        else submit(line);
       } else if (ch === "\x7f" || ch === "\b") {
         if (buf !== "") {
           buf = buf.slice(0, -1);
@@ -164,11 +250,25 @@ export function mountXterm(opts: XtermMountOpts): XtermMount {
     setEnabled: (on: boolean) => {
       if (on === enabled) return;
       enabled = on;
-      if (!on) buf = "";
+      if (!on) {
+        // A line that went down takes its unanswered turn with it.
+        buf = "";
+        held = false;
+        queued.length = 0;
+        stopTimers();
+      }
       paint();
     },
+    hold: () => {
+      if (held || disposed) return;
+      held = true;
+      ceiling = timers.set(release, CEILING_MS);
+      paint();
+    },
+    release,
     dispose: () => {
       disposed = true;
+      stopTimers();
       data.dispose();
     },
   };

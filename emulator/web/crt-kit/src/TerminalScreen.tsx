@@ -55,7 +55,8 @@ export interface TerminalScreenProps {
   prompt?: string;
   /** Caps-only period terminal: echo and deliver every line uppercased. */
   uppercase?: boolean;
-  onLine: (line: string) => void;
+  /** A completed line, and the echo the terminal already recorded for it. */
+  onLine: (line: string, echo: string) => void;
   /** Ctrl+C — the period BREAK interrupt. */
   onBreak?: () => void;
   /**
@@ -144,7 +145,7 @@ export function TerminalScreen(props: TerminalScreenProps) {
         term: term as unknown as TerminalLike,
         prompt: latest.current.prompt,
         uppercase: latest.current.uppercase,
-        onLine: (line) => latest.current.onLine(line),
+        onLine: (line, echo) => latest.current.onLine(line, echo),
         onBreak: () => latest.current.onBreak?.(),
       });
       mountRef.current = mount;

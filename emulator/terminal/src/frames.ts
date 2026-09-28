@@ -36,7 +36,7 @@ export type Phase = "idle" | "scanning" | "dialing" | "connected" | "no-carrier"
 /** The dial-up FSM states as displayed teletype lines (docs/comms-protocol.md
  *  §4). Surface-local copy of the labels the crt-kit HandshakeView renders —
  *  here the sequence is folded into the single scrollback so it interleaves
- *  correctly with command echoes and session output. */
+ *  correctly with the recorded command lines and session output. */
 export const HANDSHAKE_LABELS: Record<string, string> = {
   DIALING: "DIALING...",
   RINGING: "RINGING",
