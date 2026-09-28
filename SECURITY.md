@@ -3,7 +3,9 @@
 ## Reporting a vulnerability
 
 **Please do not open a public issue.** Use GitHub's private vulnerability
-reporting instead: the **Security** tab → **Report a vulnerability**.
+reporting instead: the **Security** tab → **Report a vulnerability**. If you
+cannot use that, email [contact@realwopr.ai](mailto:contact@realwopr.ai) with
+"SECURITY" in the subject.
 
 That matters more here than the boilerplate suggests. This repository runs
 programs written in early-1980s languages as subprocesses, under a modern

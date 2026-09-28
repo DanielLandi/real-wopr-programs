@@ -86,6 +86,14 @@ The programs are distributed as a **pack** — a single `real-wopr-programs.wopr
 to build and host the programs. The format is open, so anyone can publish their own pack of
 period-language programs and have it hosted the same way. See [PACK.md](./PACK.md).
 
+## Contact
+
+Questions, ideas, or want to run an exchange of your own? Write to
+**[contact@realwopr.ai](mailto:contact@realwopr.ai)**. Bugs and proposed changes are best as
+[issues](https://github.com/DanielLandi/real-wopr-programs/issues) and pull requests — see
+[CONTRIBUTING.md](./CONTRIBUTING.md). Security problems go through [SECURITY.md](./SECURITY.md),
+not a public issue.
+
 ## Credit
 
 *WarGames* is © MGM/UA. This is a fan reconstruction: it contains no film assets, audio, or
