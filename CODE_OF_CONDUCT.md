@@ -60,8 +60,8 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the maintainer, [@DanielLandi](https://github.com/DanielLandi), by
-opening a private report through GitHub's **Report content** flow or by direct
-message. All complaints will be reviewed and investigated promptly and fairly.
+opening a private report through GitHub's **Report content** flow or by email to
+[contact@realwopr.ai](mailto:contact@realwopr.ai). All complaints will be reviewed and investigated promptly and fairly.
 
 This is a small project maintained by one person; there is no response-time
 commitment beyond a good-faith effort to act quickly.

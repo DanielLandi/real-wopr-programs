@@ -26,7 +26,8 @@ is GitHub's default for new contributors, not a problem with your PR.
 
 Participation is covered by the [Code of Conduct](./CODE_OF_CONDUCT.md). Found a security
 problem rather than a bug? Do not open an issue — [SECURITY.md](./SECURITY.md) has the private
-reporting path.
+reporting path. Anything that is not a bug or a change — a question, an idea to talk through
+before writing code — can go to [contact@realwopr.ai](mailto:contact@realwopr.ai).
 
 ## Which half are you changing?
 
