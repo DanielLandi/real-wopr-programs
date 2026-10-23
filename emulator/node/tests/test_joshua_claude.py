@@ -28,7 +28,8 @@ def test_missing_key_still_sends_an_auth_header(monkeypatch):
     client = _engine()._client
 
     assert client.api_key == ""
-    assert "X-Api-Key" in client.auth_headers
+    # SDK 1.x sends the key as X-Api-Key, 2.x as Authorization: Bearer.
+    assert client.auth_headers.keys() & {"X-Api-Key", "Authorization"}
 
 
 def test_configured_key_is_used(monkeypatch):
