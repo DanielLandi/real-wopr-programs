@@ -45,13 +45,10 @@ service dependency is added, removed, or re-keyed.
 `rm -rf`** — edit the source here, then re-pin or use `WOPR_PACK_DIR=../real-wopr-programs` to
 import from a sibling checkout.
 
-**That sibling import always corresponds to a ref (real-wopr#244).** It `git archive`s the
-checkout's `HEAD`, so uncommitted *and gitignored* files stay out of `build/pack/`, and a **dirty
-checkout is refused** — naming the offending files — unless you pass `WOPR_PACK_DIRTY=1`. That
-still imports the working tree (testing uncommitted pack changes is what `WOPR_PACK_DIR` is for),
-but it prints a banner and records `matches_pin: false` in `build/pack/.pack-provenance.json`.
-So: commit here first, or say `WOPR_PACK_DIRTY=1` and never assert on numbers measured from that
-tree — a golden-fixture count taken from a dirty import once came out 437 against a pin of 434.
+That sibling import `git archive`s the checkout's `HEAD` and **refuses a dirty checkout** unless
+you pass `WOPR_PACK_DIRTY=1`, which imports the working tree but records `matches_pin: false` in
+`build/pack/.pack-provenance.json`. Commit here first, or never assert on numbers measured from a
+dirty import.
 
 Film-fidelity docs (`docs/games.md`, `docs/feasibility.md`) and
 the film evals live in that repo, not this one.
