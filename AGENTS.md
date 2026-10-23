@@ -57,3 +57,7 @@ Film-fidelity docs (`docs/games.md`, `docs/feasibility.md`) and
 the film evals live in that repo, not this one.
 
 CI here gates the programs and the harness; the engine repo gates the evals.
+
+## Claude Code
+
+Repo workflows live as skills in `.claude/skills/` (`fortran-game`, `joshua-corpus`).
